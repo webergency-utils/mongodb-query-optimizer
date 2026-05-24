@@ -1,0 +1,42 @@
+{
+  "name": "@webergency-utils/mongodb-query-optimizer",
+  "version": "0.0.1",
+  "description": "",
+  "author": "radixxko",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "exports": {
+    ".": "./dist/src/index.js"
+  },
+  "files": [
+    "dist",
+    "USAGE.md",
+    "README.md"
+  ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "scripts": {
+    "clean": "rm -rf ./dist/* node_modules package-lock.json && npm i",
+    "commit": "node -e \"const version = require('./package.json').version.trim(); require('child_process').execSync('git add . && git commit -m \\\"Version ' + version + '\\\"');\"",
+    "build": "npm run clean && tsc",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "version": "npm run build && npm publish && npm run commit && git push"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/webergency-utils/mongodb-query-optimizer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/webergency-utils/mongodb-query-optimizer/issues"
+  },
+  "homepage": "https://github.com/webergency-utils/mongodb-query-optimizer#readme",
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "@vitest/coverage-v8": "^4.1.6",
+    "tsx": "^4.0.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
+  }
+}
