@@ -191,7 +191,8 @@ export function runMockPipeline(
         const groups: Record<string, any[]> = {};
         for (const doc of docs)
         {
-          const groupKey = JSON.stringify(evalExpr(doc, idExpression));
+          const idVal = evalExpr(doc, idExpression) ?? null;
+          const groupKey = JSON.stringify(idVal);
           if (!groups[groupKey])
           {
             groups[groupKey] = [];
@@ -556,13 +557,33 @@ function matchSingleValue(value: any, queryValue: any): boolean
   {
     for (const [operator, operand] of Object.entries(queryValue))
     {
-      if (operator === "$eq" && value !== operand)
+      if (operator === "$eq")
       {
-        return false;
+        if (operand === null)
+        {
+          if (value !== null && value !== undefined)
+          {
+            return false;
+          }
+        }
+        else if (value !== operand)
+        {
+          return false;
+        }
       }
-      if (operator === "$ne" && value === operand)
+      if (operator === "$ne")
       {
-        return false;
+        if (operand === null)
+        {
+          if (value === null || value === undefined)
+          {
+            return false;
+          }
+        }
+        else if (value === operand)
+        {
+          return false;
+        }
       }
       if (operator === "$gt" && !(value > operand!))
       {
@@ -617,6 +638,11 @@ function matchSingleValue(value: any, queryValue: any): boolean
       }
     }
     return true;
+  }
+
+  if (queryValue === null)
+  {
+    return value === null || value === undefined;
   }
 
   return value === queryValue;

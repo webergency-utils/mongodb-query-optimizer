@@ -537,6 +537,48 @@ function proveAddFieldsDependencies(
   return true;
 }
 
+function conditionHasExists(condition: unknown): boolean
+{
+  if (!isPlainObject(condition))
+  {
+    return false;
+  }
+  return "$exists" in condition;
+}
+
+function filterHasExistsOnPath(
+  filter: Record<string, unknown>,
+  targetPath: string,
+): boolean
+{
+  for (const [key, value] of Object.entries(filter))
+  {
+    if (key === "$and" || key === "$or")
+    {
+      if (
+        Array.isArray(value)
+        && value.some(
+          (branch) => isPlainObject(branch) && filterHasExistsOnPath(branch, targetPath),
+        )
+      )
+      {
+        return true;
+      }
+      continue;
+    }
+
+    if (key === targetPath || key.startsWith(`${targetPath}.`))
+    {
+      if (conditionHasExists(value))
+      {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 function isSafeSortStage(stage: StageSemantics): boolean
 {
   if (
@@ -611,6 +653,20 @@ export function proveMatchPushdownAcrossStage(
   }
 
   const aliases = extractDirectAliases(preceding);
+  if (
+    aliases.size > 0
+    && (preceding.operator === "$addFields" || preceding.operator === "$set")
+  )
+  {
+    for (const target of aliases.keys())
+    {
+      if (filterHasExistsOnPath(matchStage.$match, target))
+      {
+        return null;
+      }
+    }
+  }
+
   const dependenciesProven = preceding.operator === "$project"
     ? proveProjectDependencies(preceding, match, aliases)
     : proveAddFieldsDependencies(preceding, match, aliases);

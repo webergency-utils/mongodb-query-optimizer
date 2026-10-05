@@ -15,6 +15,26 @@ function isPlainObject(value: unknown): value is Record<string, any>
   return proto === Object.prototype || proto === null;
 }
 
+function conditionRejectsNull(condition: unknown): boolean
+{
+  if (typeof condition === "string")
+  {
+    return condition.length > 0;
+  }
+
+  if (typeof condition === "number" || typeof condition === "boolean")
+  {
+    return true;
+  }
+
+  if (isPlainObject(condition) && "$ne" in condition)
+  {
+    return condition.$ne === null;
+  }
+
+  return false;
+}
+
 export function proveGroupFilterPushdown(
   groupStage: unknown,
   matchStage: unknown,
@@ -168,6 +188,14 @@ export function proveGroupFilterPushdown(
         )
         {
           const sourceField = opArg.slice(1);
+          if (
+            matchSpec._id === undefined
+            || !conditionRejectsNull(matchSpec._id)
+          )
+          {
+            return null;
+          }
+
           prefilter[sourceField] = { $exists: true, $ne: null };
           hasIdCondition = true;
           isOneToOne = false;
