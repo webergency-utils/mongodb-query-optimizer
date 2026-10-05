@@ -2,6 +2,35 @@ import { PipelinePass } from "./types.js";
 import { proveUnwindPrefilter } from "./unwind-proofs.js";
 import { structuralFingerprint } from "../utils.js";
 
+function hasPrefilter(
+  matchSpec: any,
+  arrayPath: string,
+  expectedCondition: any,
+): boolean
+{
+  if (!matchSpec || typeof matchSpec !== "object")
+  {
+    return false;
+  }
+
+  if (matchSpec[arrayPath] !== undefined)
+  {
+    return (
+      structuralFingerprint(matchSpec[arrayPath])
+      === structuralFingerprint(expectedCondition)
+    );
+  }
+
+  if (Array.isArray(matchSpec.$and))
+  {
+    return matchSpec.$and.some((clause: any) =>
+      hasPrefilter(clause, arrayPath, expectedCondition),
+    );
+  }
+
+  return false;
+}
+
 export class UnwindPrefilterPass implements PipelinePass
 {
   name = "unwind-prefilter";
@@ -19,11 +48,14 @@ export class UnwindPrefilterPass implements PipelinePass
         const proof = proveUnwindPrefilter(currentStage, nextStage);
         if (proof)
         {
-          const alreadyPresent = (
-            result.length > 0
-            && result[result.length - 1]?.$match !== undefined
-            && structuralFingerprint(result[result.length - 1].$match)
-              === structuralFingerprint(proof.prefilterStage.$match)
+          const prevMatch = result.length > 0
+            ? result[result.length - 1]?.$match
+            : undefined;
+
+          const alreadyPresent = prevMatch !== undefined && hasPrefilter(
+            prevMatch,
+            proof.arrayPath,
+            proof.prefilterStage.$match[proof.arrayPath],
           );
 
           if (!alreadyPresent)

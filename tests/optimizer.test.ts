@@ -1,391 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { optimizeFilter, optimizePipeline } from '../src/index.js';
+import { optimizeFilterWithCandidateProfile as optimizeFilter } from '../src/filter-optimizer.js';
+import { optimizePipelineWithCandidateProfile as optimizePipeline } from '../src/passes/registry.js';
+import { runMockPipeline } from './helpers/mock-engine.js';
 
-// --- In-Memory Mock MongoDB Execution Engine ---
-
-function runMockPipeline(data: any[], pipeline: any[], db: { [coll: string]: any[] } = {}): any[] {
-  let docs = JSON.parse(JSON.stringify(data));
-
-  for (const stage of pipeline) {
-    const op = Object.keys(stage)[0];
-    const val = stage[op];
-
-    switch (op) {
-      case '$match': {
-        docs = docs.filter((doc: any) => matchDoc(doc, val));
-        break;
-      }
-      case '$project': {
-        docs = docs.map((doc: any) => {
-          const newDoc: any = {};
-          
-          let hasInclusions = false;
-          for (const [k, v] of Object.entries(val)) {
-            if (k === '_id') continue;
-            if (v === 1 || v === true || typeof v === 'object' || (typeof v === 'string' && v.startsWith('$'))) {
-              hasInclusions = true;
-            }
-          }
-
-          if (hasInclusions) {
-            if (val._id !== 0 && '_id' in doc) {
-              newDoc._id = doc._id;
-            }
-            for (const [k, v] of Object.entries(val)) {
-              if (k === '_id') continue;
-              if (v === 1 || v === true) {
-                setNestedVal(newDoc, k, getNestedVal(doc, k));
-              } else {
-                setNestedVal(newDoc, k, evalExpr(doc, v));
-              }
-            }
-          } else {
-            Object.assign(newDoc, doc);
-            for (const [k, v] of Object.entries(val)) {
-              if (v === 0) {
-                delete newDoc[k];
-              }
-            }
-          }
-          return newDoc;
-        });
-        break;
-      }
-      case '$addFields':
-      case '$set': {
-        docs = docs.map((doc: any) => {
-          const newDoc = { ...doc };
-          for (const [k, v] of Object.entries(val)) {
-            setNestedVal(newDoc, k, evalExpr(doc, v));
-          }
-          return newDoc;
-        });
-        break;
-      }
-      case '$unset': {
-        const fields = Array.isArray(val) ? val : [val];
-        docs = docs.map((doc: any) => {
-          const newDoc = { ...doc };
-          for (const f of fields) {
-            deleteNestedVal(newDoc, f);
-          }
-          return newDoc;
-        });
-        break;
-      }
-      case '$unwind': {
-        const path = typeof val === 'string' ? val : val.path;
-        const cleanPath = path.startsWith('$') ? path.slice(1) : path;
-        const indexField = (val && typeof val === 'object') ? val.includeArrayIndex : undefined;
-        const unwound: any[] = [];
-
-        for (const doc of docs) {
-          const arr = getNestedVal(doc, cleanPath);
-          if (Array.isArray(arr)) {
-            if (arr.length === 0 && val.preserveNullAndEmptyArrays) {
-              const newDoc = { ...doc };
-              setNestedVal(newDoc, cleanPath, null);
-              if (indexField) {
-                newDoc[indexField] = null;
-              }
-              unwound.push(newDoc);
-            } else {
-              for (let idx = 0; idx < arr.length; idx++) {
-                const item = arr[idx];
-                const newDoc = { ...doc };
-                setNestedVal(newDoc, cleanPath, item);
-                if (indexField) {
-                  newDoc[indexField] = idx;
-                }
-                unwound.push(newDoc);
-              }
-            }
-          } else if ((arr === null || arr === undefined) && val.preserveNullAndEmptyArrays) {
-            const newDoc = { ...doc };
-            setNestedVal(newDoc, cleanPath, null);
-            if (indexField) {
-              newDoc[indexField] = null;
-            }
-            unwound.push(newDoc);
-          } else if (arr !== null && arr !== undefined) {
-            const newDoc = { ...doc };
-            if (indexField) {
-              newDoc[indexField] = 0;
-            }
-            unwound.push(newDoc);
-          }
-        }
-        docs = unwound;
-        break;
-      }
-      case '$sort': {
-        docs.sort((a: any, b: any) => {
-          for (const [k, direction] of Object.entries(val)) {
-            const valA = getNestedVal(a, k);
-            const valB = getNestedVal(b, k);
-            if (valA < valB) return (direction as number) === -1 ? 1 : -1;
-            if (valA > valB) return (direction as number) === -1 ? -1 : 1;
-          }
-          return 0;
-        });
-        break;
-      }
-      case '$limit': {
-        docs = docs.slice(0, val);
-        break;
-      }
-      case '$skip': {
-        docs = docs.slice(val);
-        break;
-      }
-      case '$lookup': {
-        const from = val.from;
-        const local = val.localField;
-        const foreign = val.foreignField;
-        const asField = val.as;
-        const foreignDocs = db[from] || [];
-
-        docs = docs.map((doc: any) => {
-          const newDoc = { ...doc };
-          const localVal = getNestedVal(doc, local);
-          const matches = foreignDocs.filter((fDoc: any) => {
-            const fVal = getNestedVal(fDoc, foreign);
-            return JSON.stringify(localVal) === JSON.stringify(fVal);
-          });
-          newDoc[asField] = matches;
-          return newDoc;
-        });
-        break;
-      }
-      case '$group': {
-        const idExpr = val._id;
-        const accumulators = { ...val };
-        delete accumulators._id;
-
-        const groups: { [key: string]: any[] } = {};
-        for (const doc of docs) {
-          const groupKey = JSON.stringify(evalExpr(doc, idExpr));
-          if (!groups[groupKey]) {
-            groups[groupKey] = [];
-          }
-          groups[groupKey].push(doc);
-        }
-
-        const groupedDocs: any[] = [];
-        for (const [key, groupDocs] of Object.entries(groups)) {
-          const groupKeyVal = JSON.parse(key);
-          const groupedDoc: any = { _id: groupKeyVal };
-
-          for (const [field, accExpr] of Object.entries(accumulators)) {
-            const accOp = Object.keys(accExpr as any)[0];
-            const accVal = (accExpr as any)[accOp];
-
-            if (accOp === '$sum') {
-              let sum = 0;
-              for (const doc of groupDocs) {
-                const evalVal = evalExpr(doc, accVal);
-                sum += typeof evalVal === 'number' ? evalVal : 0;
-              }
-              groupedDoc[field] = sum;
-            }
-          }
-          groupedDocs.push(groupedDoc);
-        }
-        docs = groupedDocs;
-        break;
-      }
-      case '$count': {
-        docs = [ { [val]: docs.length } ];
-        break;
-      }
-      case '$replaceRoot': {
-        docs = docs.map((doc: any) => {
-          const rootVal = evalExpr(doc, val.newRoot);
-          return typeof rootVal === 'object' ? rootVal : {};
-        });
-        break;
-      }
-      case '$replaceWith': {
-        docs = docs.map((doc: any) => {
-          const rootVal = evalExpr(doc, val);
-          return typeof rootVal === 'object' ? rootVal : {};
-        });
-        break;
-      }
-      default:
-        throw new Error(`Mock pipeline runner does not support stage: ${op}`);
-    }
-  }
-
-  return docs;
-}
-
-function getNestedVal(obj: any, path: string): any {
-  if (obj === null || obj === undefined) return undefined;
-  const parts = path.split('.');
-  
-  let current: any = obj;
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i];
-    if (Array.isArray(current)) {
-      const remainingPath = parts.slice(i).join('.');
-      return current.map(item => getNestedVal(item, remainingPath));
-    }
-    if (current && typeof current === 'object' && part in current) {
-      current = current[part];
-    } else {
-      return undefined;
-    }
-  }
-  return current;
-}
-
-function setNestedVal(obj: any, path: string, val: any): void {
-  const parts = path.split('.');
-  let curr = obj;
-  for (let i = 0; i < parts.length - 1; i++) {
-    if (!curr[parts[i]]) curr[parts[i]] = {};
-    curr = curr[parts[i]];
-  }
-  curr[parts[parts.length - 1]] = val;
-}
-
-function deleteNestedVal(obj: any, path: string): void {
-  const parts = path.split('.');
-  let curr = obj;
-  for (let i = 0; i < parts.length - 1; i++) {
-    if (curr && typeof curr === 'object' && parts[i] in curr) {
-      curr = curr[parts[i]];
-    } else {
-      return;
-    }
-  }
-  if (curr && typeof curr === 'object') {
-    delete curr[parts[parts.length - 1]];
-  }
-}
-
-function evalExpr(doc: any, expr: any): any {
-  if (typeof expr === 'string') {
-    if (expr.startsWith('$') && !expr.startsWith('$$')) {
-      return getNestedVal(doc, expr.slice(1));
-    }
-    return expr;
-  }
-  if (!expr || typeof expr !== 'object') {
-    return expr;
-  }
-  if (Array.isArray(expr)) {
-    return expr.map(e => evalExpr(doc, e));
-  }
-  
-  const op = Object.keys(expr)[0];
-  if (op.startsWith('$')) {
-    const val = expr[op];
-    if (op === '$sum') {
-      const arr = Array.isArray(val) ? val.map(e => evalExpr(doc, e)) : [evalExpr(doc, val)];
-      return arr.reduce((acc, v) => acc + (typeof v === 'number' ? v : 0), 0);
-    }
-    if (op === '$add') {
-      const arr = Array.isArray(val) ? val.map(e => evalExpr(doc, e)) : [evalExpr(doc, val)];
-      return arr.reduce((acc, v) => acc + (typeof v === 'number' ? v : 0), 0);
-    }
-    if (op === '$gte') {
-      const arr = val.map((e: any) => evalExpr(doc, e));
-      return arr[0] >= arr[1];
-    }
-    if (op === '$eq') {
-      const arr = val.map((e: any) => evalExpr(doc, e));
-      return arr[0] === arr[1];
-    }
-    if (op === '$ne') {
-      const arr = val.map((e: any) => evalExpr(doc, e));
-      return arr[0] !== arr[1];
-    }
-    if (op === '$not') {
-      const arr = Array.isArray(val) ? val.map(e => evalExpr(doc, e)) : [evalExpr(doc, val)];
-      return !arr[0];
-    }
-    if (op === '$and') {
-      const arr = val.map((e: any) => evalExpr(doc, e));
-      return arr.every(Boolean);
-    }
-    if (op === '$or') {
-      const arr = val.map((e: any) => evalExpr(doc, e));
-      return arr.some(Boolean);
-    }
-    if (op === '$function') {
-      const { body, args } = val;
-      const evaluatedArgs = Array.isArray(args) ? args.map(arg => evalExpr(doc, arg)) : [];
-      const fn = typeof body === 'function' ? body : eval(`(${body})`);
-      return fn(...evaluatedArgs);
-    }
-  }
-  
-  const result: any = {};
-  for (const [k, v] of Object.entries(expr)) {
-    result[k] = evalExpr(doc, v);
-  }
-  return result;
-}
-
-function matchSingleValue(val: any, queryVal: any): boolean {
-  if (queryVal instanceof RegExp) {
-    return typeof val === 'string' && queryVal.test(val);
-  }
-  if (queryVal && typeof queryVal === 'object' && !Array.isArray(queryVal) && !(queryVal instanceof Date)) {
-    for (const [op, opVal] of Object.entries(queryVal)) {
-      if (op === '$eq' && val !== opVal) return false;
-      if (op === '$ne' && val === opVal) return false;
-      if (op === '$gt' && !(val > opVal)) return false;
-      if (op === '$lt' && !(val < opVal)) return false;
-      if (op === '$gte' && !(val >= opVal)) return false;
-      if (op === '$lte' && !(val <= opVal)) return false;
-      if (op === '$in' && Array.isArray(opVal) && !opVal.includes(val)) return false;
-      if (op === '$not') {
-        if (opVal instanceof RegExp) {
-          if (typeof val === 'string' && opVal.test(val)) return false;
-        } else if (matchSingleValue(val, opVal)) {
-          return false;
-        }
-      }
-      if (op === '$regex') {
-        const regex = opVal instanceof RegExp ? opVal : new RegExp(String(opVal));
-        if (typeof val !== 'string' || !regex.test(val)) return false;
-      }
-    }
-    return true;
-  } else {
-    return val === queryVal;
-  }
-}
-
-function matchValueOrArray(docVal: any, queryVal: any): boolean {
-  if (matchSingleValue(docVal, queryVal)) {
-    return true;
-  }
-  if (Array.isArray(docVal)) {
-    return docVal.some(item => matchValueOrArray(item, queryVal));
-  }
-  return false;
-}
-
-function matchDoc(doc: any, filter: any): boolean {
-  if (!filter || typeof filter !== 'object') return true;
-  for (const [key, val] of Object.entries(filter)) {
-    if (key === '$and' && Array.isArray(val)) {
-      if (!val.every(cond => matchDoc(doc, cond))) return false;
-    } else if (key === '$or' && Array.isArray(val)) {
-      if (!val.some(cond => matchDoc(doc, cond))) return false;
-    } else {
-      const docVal = getNestedVal(doc, key);
-      if (!matchValueOrArray(docVal, val)) return false;
-    }
-  }
-  return true;
-}
-
-// Helper to verify structural equivalence and identical mock results
+// Fast structural supplement only; the MongoDB differential oracle is authoritative.
 function verifyPipelineEquivalence(data: any[], pipeline: any[], expectedStructure: any[], db: { [coll: string]: any[] } = {}) {
   const optimized = optimizePipeline(pipeline);
   expect(optimized).toEqual(expectedStructure);
@@ -443,7 +61,7 @@ describe('optimizeFilter', () => {
     });
   });
 
-  it('should merge conditions on the same field', () => {
+  it('should preserve same-field conditions under $and', () => {
     const input = {
       $and: [
         { a: { $gt: 5 } },
@@ -452,8 +70,11 @@ describe('optimizeFilter', () => {
       ]
     };
     expect(optimizeFilter(input)).toEqual({
-      a: { $gt: 5, $lt: 10 },
-      b: 3
+      a: { $gt: 5 },
+      b: 3,
+      $and: [
+        { a: { $lt: 10 } }
+      ]
     });
   });
 
@@ -473,14 +94,17 @@ describe('optimizeFilter', () => {
       ]
     });
 
-    const mergeableInput = {
+    const repeatedFieldInput = {
       $and: [
         { a: { $gt: 5 } },
         { a: { $gt: 10 } }
       ]
     };
-    expect(optimizeFilter(mergeableInput)).toEqual({
-      a: { $gt: 10 }
+    expect(optimizeFilter(repeatedFieldInput)).toEqual({
+      a: { $gt: 5 },
+      $and: [
+        { a: { $gt: 10 } }
+      ]
     });
   });
 });
@@ -550,7 +174,7 @@ describe('optimizePipeline', () => {
     verifyPipelineEquivalence(data, pipeline, pipeline);
   });
 
-  it('should push $match before $lookup when safe', () => {
+  it('should delay $lookup past an alias-independent $match', () => {
     const data = [
       { _id: 1, email: 'user@example.com' },
       { _id: 2, email: 'other@example.com' }
@@ -574,18 +198,11 @@ describe('optimizePipeline', () => {
     ];
     verifyPipelineEquivalence(data, pipeline, [
       { $match: { email: 'user@example.com' } },
-      {
-        $lookup: {
-          from: 'orders',
-          localField: '_id',
-          foreignField: 'userId',
-          as: 'orders'
-        }
-      }
+      pipeline[0]
     ], db);
   });
 
-  it('should push a copy of match before $unwind if it is a simple match condition', () => {
+  it('should optimize a simple match after $unwind with an early elemMatch prefilter', () => {
     const data = [
       { _id: 1, items: [{ status: 'active' }, { status: 'inactive' }] },
       { _id: 2, items: [{ status: 'inactive' }] }
@@ -595,13 +212,13 @@ describe('optimizePipeline', () => {
       { $match: { 'items.status': 'active' } }
     ];
     verifyPipelineEquivalence(data, pipeline, [
-      { $match: { 'items.status': 'active' } },
+      { $match: { items: { $elemMatch: { status: 'active' } } } },
       { $unwind: '$items' },
       { $match: { 'items.status': 'active' } }
     ]);
   });
 
-  it('should completely move match before $unwind if field does not intersect', () => {
+  it('should keep disjoint matches after $unwind without a dedicated proof', () => {
     const data = [
       { _id: 1, category: 'electronics', items: [1, 2] },
       { _id: 2, category: 'clothing', items: [3] }
@@ -610,13 +227,10 @@ describe('optimizePipeline', () => {
       { $unwind: '$items' },
       { $match: { category: 'electronics' } }
     ];
-    verifyPipelineEquivalence(data, pipeline, [
-      { $match: { category: 'electronics' } },
-      { $unwind: '$items' }
-    ]);
+    verifyPipelineEquivalence(data, pipeline, pipeline);
   });
 
-  it('should remove redundant $lookup and its subsequent $unwind if alias is never used', () => {
+  it('should retain $lookup and preserving $unwind without uniqueness metadata', () => {
     const data = [
       { _id: 1, email: 'test@example.com' },
       { _id: 2, email: 'other@example.com' }
@@ -638,9 +252,7 @@ describe('optimizePipeline', () => {
       { $unwind: { path: '$orders', preserveNullAndEmptyArrays: true } },
       { $project: { email: 1 } }
     ];
-    verifyPipelineEquivalence(data, pipeline, [
-      { $project: { email: 1 } }
-    ], db);
+    verifyPipelineEquivalence(data, pipeline, pipeline, db);
   });
 
   it('should NOT remove redundant $lookup and its subsequent $unwind if preserveNullAndEmptyArrays is not true', () => {
@@ -668,7 +280,7 @@ describe('optimizePipeline', () => {
     verifyPipelineEquivalence(data, pipeline, pipeline, db);
   });
 
-  it('should remove passive stages if downstream only consists of $count', () => {
+  it('should retain passive stages without an exact immediate kill proof', () => {
     const data = [
       { name: 'John', age: 25 },
       { name: 'Jane', age: 15 }
@@ -678,12 +290,10 @@ describe('optimizePipeline', () => {
       { $addFields: { countPlusOne: { $sum: ['$age', 1] } } },
       { $count: 'total' }
     ];
-    verifyPipelineEquivalence(data, pipeline, [
-      { $count: 'total' }
-    ]);
+    verifyPipelineEquivalence(data, pipeline, pipeline);
   });
 
-  it('should delay $lookup by pushing it past $limit and $skip', () => {
+  it('should delay $lookup past $limit when the alias is unused', () => {
     const data = [
       { _id: 1, val: 'a' },
       { _id: 2, val: 'b' }
@@ -704,14 +314,7 @@ describe('optimizePipeline', () => {
     ];
     verifyPipelineEquivalence(data, pipeline, [
       { $limit: 1 },
-      {
-        $lookup: {
-          from: 'orders',
-          localField: '_id',
-          foreignField: 'userId',
-          as: 'orders'
-        }
-      }
+      pipeline[0]
     ], db);
   });
 
@@ -730,7 +333,7 @@ describe('optimizePipeline', () => {
     expect(optimized).toEqual(pipeline);
   });
 
-  it('should prune unused fields from $project and $addFields', () => {
+  it('should not prune inclusion project entries through later inclusion projections', () => {
     const data = [
       { name: 'John', age: 25, unusedField: 'delete' },
       { name: 'Jane', age: 15, unusedField: 'delete' }
@@ -741,7 +344,7 @@ describe('optimizePipeline', () => {
       { $project: { name: 1, extra: 1 } }
     ];
     verifyPipelineEquivalence(data, pipeline, [
-      { $project: { name: 1 } },
+      { $project: { name: 1, unusedField: 1, age: 1 } },
       { $addFields: { extra: 1 } },
       { $project: { name: 1, extra: 1 } }
     ]);
@@ -791,7 +394,7 @@ describe('optimizePipeline', () => {
     ]);
   });
 
-  it('should delay lookup past sort and limit', () => {
+  it('should delay $lookup past alias-independent sort and limit', () => {
     const data = [
       { userId: 1, date: 2 },
       { userId: 2, date: 1 }
@@ -817,18 +420,11 @@ describe('optimizePipeline', () => {
     verifyPipelineEquivalence(data, pipeline, [
       { $sort: { date: -1 } },
       { $limit: 1 },
-      {
-        $lookup: {
-          from: 'users',
-          localField: 'userId',
-          foreignField: '_id',
-          as: 'user'
-        }
-      }
+      pipeline[0]
     ], db);
   });
 
-  it('should defer complex projections past sort and limit stages', () => {
+  it('should keep complex project evaluation before sort and limit', () => {
     const data = [
       { name: 'John', age: 25 },
       { name: 'Jane', age: 15 }
@@ -838,12 +434,7 @@ describe('optimizePipeline', () => {
       { $sort: { age: 1 } },
       { $limit: 1 }
     ];
-    verifyPipelineEquivalence(data, pipeline, [
-      { $project: { name: 1, age: 1 } },
-      { $sort: { age: 1 } },
-      { $limit: 1 },
-      { $addFields: { complex: { $sum: [1, 2] } } }
-    ]);
+    verifyPipelineEquivalence(data, pipeline, pipeline);
   });
 
   it('should not push match before replaceRoot or replaceWith stages', () => {
@@ -970,7 +561,7 @@ describe('optimizePipeline', () => {
     expect(optimizePipeline(pipelineDensify)).toEqual(pipelineDensify);
   });
 
-  it('should optimize match pushdown around $graphLookup stage', () => {
+  it('should not delay $graphLookup through an unrelated match', () => {
     const pipeline = [
       {
         $graphLookup: {
@@ -985,9 +576,7 @@ describe('optimizePipeline', () => {
       },
       { $match: { status: "active" } }
     ];
-    const optimized = optimizePipeline(pipeline);
-    expect(optimized[0]).toEqual({ $match: { status: "active" } });
-    expect(optimized[1].$graphLookup).toBeDefined();
+    expect(optimizePipeline(pipeline)).toEqual(pipeline);
   });
 
   it('should NOT push match before $graphLookup if it references looked-up array or depthField', () => {
@@ -1066,7 +655,7 @@ describe('optimizePipeline', () => {
     expect(optimizedResult).toEqual(originalResult);
   });
 
-  it('should correctly optimize and execute pipelines using $function operator', () => {
+  it('should keep matches after volatile and potentially erroring $function projections', () => {
     const data = [
       { name: 'John', score: 85 },
       { name: 'Jane', score: 95 }
@@ -1088,8 +677,7 @@ describe('optimizePipeline', () => {
     ];
 
     const optimized = optimizePipeline(pipeline);
-    expect(optimized[0]).toEqual({ $match: { name: 'Jane' } });
-    expect(optimized[1].$project).toBeDefined();
+    expect(optimized).toEqual(pipeline);
 
     const originalResult = runMockPipeline(data, pipeline);
     const optimizedResult = runMockPipeline(data, optimized);
@@ -1099,7 +687,7 @@ describe('optimizePipeline', () => {
     ]);
   });
 
-  it('should remove redundant $lookup if downstream is a $group that does not use the alias', () => {
+  it('should retain $lookup before a group without error-free namespace metadata', () => {
     const data = [
       { _id: 1, category: 'A' },
       { _id: 2, category: 'B' }
@@ -1125,14 +713,7 @@ describe('optimizePipeline', () => {
         }
       }
     ];
-    verifyPipelineEquivalence(data, pipeline, [
-      {
-        $group: {
-          _id: '$category',
-          count: { $sum: 1 }
-        }
-      }
-    ], db);
+    verifyPipelineEquivalence(data, pipeline, pipeline, db);
   });
 
   it('should correctly handle nested dependencies in projection deferral', () => {
@@ -1223,7 +804,7 @@ describe('optimizePipeline', () => {
     verifyPipelineEquivalence(data, pipeline, pipeline);
   });
 
-  it('should push a copy of match before $unwind if it is a RegExp condition', () => {
+  it('should keep a RegExp match after $unwind without an early duplicate', () => {
     const data = [
       { _id: 1, items: [{ status: 'active' }, { status: 'inactive' }] },
       { _id: 2, items: [{ status: 'pending' }] }
@@ -1232,12 +813,7 @@ describe('optimizePipeline', () => {
       { $unwind: '$items' },
       { $match: { 'items.status': /active/ } }
     ];
-    const expected = [
-      { $match: { 'items.status': /active/ } },
-      { $unwind: '$items' },
-      { $match: { 'items.status': /active/ } }
-    ];
-    verifyPipelineEquivalence(data, pipeline, expected);
+    verifyPipelineEquivalence(data, pipeline, pipeline);
   });
 
   it('should rewrite match fields and push match before $project when renaming matches', () => {
@@ -1272,7 +848,7 @@ describe('optimizePipeline', () => {
     verifyPipelineEquivalence(data, pipeline, expected);
   });
 
-  it('should merge consecutive matches on comparison operators by keeping the most restrictive limit', () => {
+  it('should merge consecutive matches while preserving repeated comparison predicates', () => {
     const data = [
       { _id: 1, b: 150 },
       { _id: 2, b: 50 },
@@ -1285,12 +861,21 @@ describe('optimizePipeline', () => {
       { $match: { b: { $lt: 300 } } }
     ];
     const expected = [
-      { $match: { b: { $gt: 100, $lt: 200 } } }
+      {
+        $match: {
+          b: { $gt: 100 },
+          $and: [
+            { b: { $gt: 10 } },
+            { b: { $lt: 200 } },
+            { b: { $lt: 300 } }
+          ]
+        }
+      }
     ];
     verifyPipelineEquivalence(data, pipeline, expected);
   });
 
-  it('should merge and intersect different $in and equality constraints on the same field', () => {
+  it('should preserve different $in and equality constraints on the same field', () => {
     const data = [
       { _id: 1, tag: 'apple' },
       { _id: 2, tag: 'banana' },
@@ -1301,7 +886,14 @@ describe('optimizePipeline', () => {
       { $match: { tag: 'apple' } }
     ];
     const expected = [
-      { $match: { tag: 'apple' } }
+      {
+        $match: {
+          tag: { $in: ['apple', 'banana'] },
+          $and: [
+            { tag: 'apple' }
+          ]
+        }
+      }
     ];
     verifyPipelineEquivalence(data, pipeline, expected);
 
@@ -1310,12 +902,19 @@ describe('optimizePipeline', () => {
       { $match: { tag: { $in: ['banana', 'cherry'] } } }
     ];
     const expectedIn = [
-      { $match: { tag: 'banana' } }
+      {
+        $match: {
+          tag: { $in: ['apple', 'banana'] },
+          $and: [
+            { tag: { $in: ['banana', 'cherry'] } }
+          ]
+        }
+      }
     ];
     verifyPipelineEquivalence(data, pipelineIn, expectedIn);
   });
 
-  it('should delay $lookup + $unwind pair together past $sort and $addFields', () => {
+  it('should never delay a $lookup and $unwind pair as a composite', () => {
     const data = [
       { _id: 1, category: 'A', supplierId: 10, price: 3 },
       { _id: 2, category: 'B', supplierId: 20, price: 1 }
@@ -1341,19 +940,14 @@ describe('optimizePipeline', () => {
       { $project: { category: 1, price: 1, doubled: 1, supplierName: '$supplier.name' } }
     ];
     const optimized = optimizePipeline(pipeline);
-    // $sort and $addFields should be before $lookup+$unwind
-    const lookupIdx = optimized.findIndex((s: any) => '$lookup' in s);
-    const sortIdx = optimized.findIndex((s: any) => '$sort' in s);
-    const addFieldsIdx = optimized.findIndex((s: any) => '$addFields' in s);
-    expect(sortIdx).toBeLessThan(lookupIdx);
-    expect(addFieldsIdx).toBeLessThan(lookupIdx);
+    expect(optimized).toEqual(pipeline);
 
     const originalResult = runMockPipeline(data, pipeline, db);
     const optimizedResult = runMockPipeline(data, optimized, db);
     expect(optimizedResult).toEqual(originalResult);
   });
 
-  it('should advance $limit past $project and delay $lookup after it', () => {
+  it('should advance $limit past $project and delay the preceding $lookup', () => {
     const data = [
       { _id: 1, userId: 10, score: 80 },
       { _id: 2, userId: 20, score: 90 },
@@ -1380,13 +974,446 @@ describe('optimizePipeline', () => {
       { $limit: 2 }
     ];
     const optimized = optimizePipeline(pipeline);
-    // $limit should come before $lookup
-    const lookupIdx = optimized.findIndex((s: any) => '$lookup' in s);
-    const limitIdx = optimized.findIndex((s: any) => '$limit' in s);
-    expect(limitIdx).toBeLessThan(lookupIdx);
+    expect(optimized).toEqual([
+      pipeline[0],
+      pipeline[3],
+      pipeline[1],
+      pipeline[2],
+    ]);
 
     const originalResult = runMockPipeline(data, pipeline, db);
     const optimizedResult = runMockPipeline(data, optimized, db);
     expect(optimizedResult).toEqual(originalResult);
   });
+
+  it('should NOT remove $unset if a downstream stage reads the unset fields (bugfix)', () => {
+    const data = [
+      { _id: 1, name: 'Alice', age: 20 },
+      { _id: 2, name: 'Bob', age: 25 }
+    ];
+    const pipeline = [
+      { $unset: 'age' },
+      { $match: { age: 20 } },
+      { $project: { name: 1 } }
+    ];
+    verifyPipelineEquivalence(data, pipeline, [
+      { $unset: 'age' },
+      { $match: { age: 20 } },
+      { $project: { name: 1 } }
+    ]);
+  });
+
+  it('should retain $unset without a dedicated elimination proof', () => {
+    const data = [
+      { _id: 1, name: 'Alice', age: 20 },
+      { _id: 2, name: 'Bob', age: 25 }
+    ];
+    const pipeline = [
+      { $unset: 'age' },
+      { $project: { name: 1 } }
+    ];
+    verifyPipelineEquivalence(data, pipeline, pipeline);
+  });
+
+  it('should retain $graphLookup when its alias is not used', () => {
+    const pipeline = [
+      {
+        $graphLookup: {
+          from: 'users',
+          startWith: '$reportsTo',
+          connectFromField: 'reportsTo',
+          connectToField: 'name',
+          as: 'hierarchy'
+        }
+      },
+      { $project: { name: 1 } }
+    ];
+    expect(optimizePipeline(pipeline)).toEqual(pipeline);
+  });
+
+  it('should commute sort and project when every sort key stays visible', () => {
+    const data = [
+      { name: 'Charlie', age: 30 },
+      { name: 'Alice', age: 20 },
+      { name: 'Bob', age: 25 }
+    ];
+    const pipeline = [
+      { $sort: { age: 1 } },
+      { $project: { name: 1, age: 1 } }
+    ];
+    verifyPipelineEquivalence(data, pipeline, [
+      { $project: { name: 1, age: 1 } },
+      { $sort: { age: 1 } }
+    ]);
+  });
+
+  it('should keep sort before a project that drops the sort key', () => {
+    const data = [
+      { name: 'Charlie', age: 30 },
+      { name: 'Alice', age: 20 },
+      { name: 'Bob', age: 25 }
+    ];
+    const pipeline = [
+      { $sort: { age: 1 } },
+      { $project: { name: 1 } }
+    ];
+    verifyPipelineEquivalence(data, pipeline, pipeline);
+  });
+
+  it('should preserve fields referenced within $expr in downstream $match', () => {
+    const data = [
+      { name: 'Alice', age: 20 },
+      { name: 'Bob', age: 25 }
+    ];
+    const pipeline = [
+      { $project: { name: 1, age: 1 } },
+      { $match: { $expr: { $eq: ['$age', 20] } } },
+      { $project: { age: 1 } }
+    ];
+    // 'name' is not used downstream and eventually discarded by the final $project,
+    // so it should be pruned. 'age' is referenced by $expr inside $match, so it must be preserved.
+    verifyPipelineEquivalence(data, pipeline, [
+      { $match: { age: 20 } },
+      { $project: { age: 1 } }
+    ]);
+  });
+
+  it('should preserve fields referenced within $mergeObjects', () => {
+    const data = [
+      { name: 'Alice', details: { age: 20 } }
+    ];
+    const pipeline = [
+      { $project: { name: 1, details: 1 } },
+      { $addFields: { merged: { $mergeObjects: ['$details', { extra: '$name' }] } } },
+      { $project: { merged: 1 } }
+    ];
+    // 'name' and 'details' are both used in the $addFields stage via $mergeObjects.
+    // 'merged' is kept by the final $project. Both 'name' and 'details' must be preserved in the first $project.
+    verifyPipelineEquivalence(data, pipeline, [
+      { $project: { name: 1, details: 1 } },
+      { $addFields: { merged: { $mergeObjects: ['$details', { extra: '$name' }] } } },
+      { $project: { merged: 1 } }
+    ]);
+  });
+
+  it('should not delay pipeline-form $lookup through $addFields', () => {
+    const data = [
+      { _id: 1, val: 'a' }
+    ];
+    const db = {
+      orders: [{ userId: 1, status: 'shipped' }]
+    };
+    const pipeline = [
+      {
+        $lookup: {
+          from: 'orders',
+          localField: '_id',
+          foreignField: 'userId',
+          pipeline: [
+            { $match: { status: 'shipped' } }
+          ],
+          as: 'userOrders'
+        }
+      },
+      { $addFields: { status: 'active' } }
+    ];
+    expect(optimizePipeline(pipeline)).toEqual(pipeline);
+  });
+
+  it('should merge adjacent projects using true/false boolean specifications', () => {
+    const data = [
+      { name: 'John', age: 25 }
+    ];
+    const pipeline = [
+      { $project: { name: true, age: true, _id: false } },
+      { $project: { name: true, _id: false } }
+    ];
+    verifyPipelineEquivalence(data, pipeline, [
+      { $project: { name: true, _id: false } }
+    ]);
+  });
+
+  it('should not defer boolean inclusion projects across sort or limit', () => {
+    const data = [
+      { name: 'John', age: 25 }
+    ];
+    const pipeline = [
+      { $project: { name: true, age: true, complex: { $sum: [1, 2] } } },
+      { $sort: { age: 1 } },
+      { $limit: 1 }
+    ];
+    verifyPipelineEquivalence(data, pipeline, pipeline);
+  });
+
+  it('should NOT push match before project when sub-field of the match target is modified', () => {
+    const data = [
+      { user: { name: 'John', age: 25 } }
+    ];
+    const pipeline = [
+      { $project: { 'user.name': 'Jane', 'user.age': 1 } },
+      { $match: { user: { name: 'Jane', age: 25 } } }
+    ];
+    verifyPipelineEquivalence(data, pipeline, pipeline);
+  });
+
+  it('should NOT push match on unrelated fields before destructive project that has renaming', () => {
+    const data = [
+      { name: 'John', tempAge: 25, otherField: 10 }
+    ];
+    const pipeline = [
+      { $project: { name: 1, age: '$tempAge' } },
+      { $match: { otherField: 10 } }
+    ];
+    // In original, otherField is discarded, so match results in empty array.
+    // Pushing otherField before the project would incorrectly match the document and output { name: 'John', age: 25 }
+    verifyPipelineEquivalence(data, pipeline, pipeline);
+  });
 });
+
+describe('correctness regressions', () => {
+  it('should not invent fields when merging non-subset consecutive $projects', () => {
+    const data = [
+      { a: 1, b: 2, c: 3 }
+    ];
+    const pipeline = [
+      { $project: { a: 1, b: 1 } },
+      { $project: { c: 1 } }
+    ];
+
+    // Arrange / Act / Assert — first project drops c; second cannot resurrect it
+    verifyPipelineEquivalence(data, pipeline, pipeline);
+  });
+
+  it('should preserve _id:0 when merging exclusion project into inclusion project', () => {
+    const data = [
+      { _id: 1, name: 'Alice', secret: 'x' }
+    ];
+    const pipeline = [
+      { $project: { _id: 0, secret: 0 } },
+      { $project: { name: 1 } }
+    ];
+    const optimized = optimizePipeline(pipeline);
+
+    // Assert
+    expect(JSON.stringify(optimized).includes('"_id":0')).toBe(true);
+
+    const originalResult = runMockPipeline(data, pipeline);
+    const optimizedResult = runMockPipeline(data, optimized);
+    expect(optimizedResult).toEqual(originalResult);
+    expect(optimizedResult[0]._id).toBeUndefined();
+  });
+
+  it('should not delete a shielding inclusion $project when deferring its only computed field', () => {
+    const data = [
+      { _id: 1, name: 'Alice', extra: 'keep-me-out' }
+    ];
+    const pipeline = [
+      { $project: { complex: { $sum: [1, 2] } } },
+      { $sort: { _id: 1 } }
+    ];
+    const optimized = optimizePipeline(pipeline);
+
+    // Assert — must keep a $project so extra is not leaked
+    expect(optimized.some((s: any) => s.$project)).toBe(true);
+
+    const originalResult = runMockPipeline(data, pipeline);
+    const optimizedResult = runMockPipeline(data, optimized);
+    expect(optimizedResult).toEqual(originalResult);
+    expect(optimizedResult[0].extra).toBeUndefined();
+  });
+
+  it('should not remove $graphLookup when only depthField is used downstream', () => {
+    const pipeline = [
+      {
+        $graphLookup: {
+          from: 'users',
+          startWith: '$reportsTo',
+          connectFromField: 'reportsTo',
+          connectToField: 'name',
+          as: 'hierarchy',
+          depthField: 'level'
+        }
+      },
+      { $project: { level: 1 } }
+    ];
+
+    // Act
+    const optimized = optimizePipeline(pipeline);
+
+    // Assert
+    expect(optimized.some((s: any) => s.$graphLookup)).toBe(true);
+    expect(optimized).toEqual(pipeline);
+  });
+
+  it('should preserve empty $or as match-nothing instead of match-all', () => {
+    // Act
+    const got = optimizeFilter({ $or: [] });
+
+    // Assert
+    expect(got).toEqual({ $or: [] });
+  });
+
+  it('should still collapse $or of empty match-all branches to {}', () => {
+    expect(optimizeFilter({ $or: [{}] })).toEqual({});
+    expect(optimizeFilter({ $or: [{}, {}] })).toEqual({});
+  });
+
+  it('should preserve string and numeric $skip values for MongoDB validation', () => {
+    const pipeline = [
+      { $skip: '2' },
+      { $skip: 3 }
+    ];
+
+    // Act
+    const optimized = optimizePipeline(pipeline);
+
+    // MongoDB, not JavaScript slice coercion in the supplemental mock, is authoritative.
+    expect(optimized).toEqual(pipeline);
+  });
+
+  it('should not coalesce non-numeric $skip values via string concatenation', () => {
+    const pipeline = [
+      { $skip: 'abc' },
+      { $skip: 3 }
+    ];
+
+    // Act
+    const optimized = optimizePipeline(pipeline);
+
+    // Assert — leave stages alone rather than producing "abc3"
+    expect(optimized).toEqual(pipeline);
+  });
+
+  it('should preserve BSON-like exotic objects across optimizePipeline cloning', () => {
+    class FakeObjectId {
+      _bsontype = 'ObjectId';
+      constructor(public id: string) {}
+      equals(other: any) {
+        return other && other.id === this.id;
+      }
+      valueOf() {
+        return this.id;
+      }
+      toString() {
+        return this.id;
+      }
+    }
+
+    const oid = new FakeObjectId('abc123');
+    const pipeline = [
+      { $match: { _id: oid } }
+    ];
+
+    // Act
+    const optimized = optimizePipeline(pipeline);
+
+    // Assert
+    expect(optimized[0].$match._id).toBeInstanceOf(FakeObjectId);
+    expect(optimized[0].$match._id.id).toBe('abc123');
+  });
+
+  it('should treat $text matches as document-scoped and not push past projections', () => {
+    const pipeline = [
+      { $project: { name: 1, bio: 1 } },
+      { $match: { $text: { $search: 'hello' } } }
+    ];
+
+    // Act
+    const optimized = optimizePipeline(pipeline);
+
+    // Assert — $text must not move before the projection
+    expect(optimized[0].$project).toBeDefined();
+    expect(optimized[1].$match.$text).toBeDefined();
+  });
+
+  it('should record $elemMatch nested paths under the parent field', () => {
+    const data = [
+      { items: [{ status: 'active' }], other: 1 },
+      { items: [{ status: 'inactive' }], other: 2 }
+    ];
+    const pipeline = [
+      { $project: { items: 1 } },
+      { $match: { items: { $elemMatch: { status: 'active' } } } }
+    ];
+
+    // Act — should be able to push match before project since only items is used
+    const optimized = optimizePipeline(pipeline);
+
+    // Assert
+    expect(optimized[0]).toEqual({ $match: { items: { $elemMatch: { status: 'active' } } } });
+    expect(optimized[1]).toEqual({ $project: { items: 1 } });
+
+    const originalResult = runMockPipeline(data, pipeline);
+    const optimizedResult = runMockPipeline(data, optimized);
+    expect(optimizedResult).toEqual(originalResult);
+  });
+
+  it('should recursively optimize $lookup sub-pipelines', () => {
+    const pipeline = [
+      {
+        $lookup: {
+          from: 'orders',
+          localField: '_id',
+          foreignField: 'userId',
+          pipeline: [
+            { $match: { status: 'shipped' } },
+            { $match: { price: { $gt: 10 } } }
+          ],
+          as: 'orders'
+        }
+      }
+    ];
+
+    // Act
+    const optimized = optimizePipeline(pipeline);
+
+    // Assert
+    expect(optimized[0].$lookup.pipeline).toEqual([
+      { $match: { status: 'shipped', price: { $gt: 10 } } }
+    ]);
+  });
+
+  it('should recursively optimize $facet sub-pipelines', () => {
+    const pipeline = [
+      {
+        $facet: {
+          byStatus: [
+            { $match: { a: 1 } },
+            { $match: { b: 2 } }
+          ],
+          limited: [
+            { $limit: 10 },
+            { $limit: 5 }
+          ]
+        }
+      }
+    ];
+
+    // Act
+    const optimized = optimizePipeline(pipeline);
+
+    // Assert
+    expect(optimized[0].$facet.byStatus).toEqual([
+      { $match: { a: 1, b: 2 } }
+    ]);
+    expect(optimized[0].$facet.limited).toEqual([{ $limit: 5 }]);
+  });
+
+  it('should keep RegExp values stable across fixed-point optimization', () => {
+    const pipeline = [
+      { $match: { name: /alice/i } },
+      { $match: { status: 'active' } }
+    ];
+
+    // Act
+    const optimized = optimizePipeline(pipeline);
+
+    // Assert
+    expect(optimized).toHaveLength(1);
+    expect(optimized[0].$match.name).toBeInstanceOf(RegExp);
+    expect(optimized[0].$match.name.source).toBe('alice');
+    expect(optimized[0].$match.name.flags).toBe('i');
+    expect(optimized[0].$match.status).toBe('active');
+  });
+});
+

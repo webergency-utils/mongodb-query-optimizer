@@ -16,6 +16,22 @@ function isPlainObject(value: unknown): value is Record<string, any>
   return proto === Object.prototype || proto === null;
 }
 
+function isUnsupportedPrefilterValue(val: unknown): boolean
+{
+  if (val instanceof RegExp)
+  {
+    return true;
+  }
+  if (isPlainObject(val))
+  {
+    if ("$ne" in val || "$not" in val || "$nin" in val)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function proveUnwindPrefilter(
   unwindStage: unknown,
   matchStage: unknown,
@@ -109,6 +125,10 @@ export function proveUnwindPrefilter(
   {
     if (key.startsWith(prefix))
     {
+      if (isUnsupportedPrefilterValue(val))
+      {
+        return null;
+      }
       const subKey = key.slice(prefix.length);
       elemMatchFilter[subKey] = deepClone(val);
       matchingFieldCount++;

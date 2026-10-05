@@ -183,6 +183,15 @@ describe("proveUnwindPrefilter", () =>
     expect(proveUnwindPrefilter({ $unwind: "$a" }, { notMatch: {} })).toBeNull();
     expect(proveUnwindPrefilter({ $unwind: "$a" }, { $match: {}, extra: 1 })).toBeNull();
   });
+
+  it("rejects when downstream match has RegExp or negative operators", () =>
+  {
+    const unwind = { $unwind: "$items" };
+    expect(proveUnwindPrefilter(unwind, { $match: { "items.name": /abc/ } })).toBeNull();
+    expect(proveUnwindPrefilter(unwind, { $match: { "items.name": { $ne: "abc" } } })).toBeNull();
+    expect(proveUnwindPrefilter(unwind, { $match: { "items.name": { $not: { $eq: "abc" } } } })).toBeNull();
+    expect(proveUnwindPrefilter(unwind, { $match: { "items.name": { $nin: ["abc"] } } })).toBeNull();
+  });
 });
 
 describe("UnwindPrefilterPass", () =>
@@ -209,6 +218,16 @@ describe("UnwindPrefilterPass", () =>
       { $unwind: "$items" },
       { $match: { "items.available": true } },
     ]);
+
+    const firstStageUnwindPipeline = [
+      { $unwind: "$items" },
+      { $match: { "items.available": true } },
+    ];
+    expect(pass.execute(firstStageUnwindPipeline)).toEqual([
+      { $match: { items: { $elemMatch: { available: true } } } },
+      { $unwind: "$items" },
+      { $match: { "items.available": true } },
+    ]);
   });
 
   it("is idempotent and does not duplicate prefilter if already present", () =>
@@ -222,6 +241,42 @@ describe("UnwindPrefilterPass", () =>
 
     const result = pass.execute(pipeline);
     expect(result).toEqual(pipeline);
+
+    const mergedPipeline = [
+      {
+        $match: {
+          $and: [
+            { orgId: "123" },
+            { items: { $elemMatch: { available: true } } },
+          ],
+        },
+      },
+      { $unwind: "$items" },
+      { $match: { "items.available": true } },
+    ];
+    expect(pass.execute(mergedPipeline)).toEqual(mergedPipeline);
+
+    const nonMatchingAndPipeline = [
+      {
+        $match: {
+          $and: [
+            { orgId: "123" },
+            { items: { $elemMatch: { available: false } } },
+          ],
+        },
+      },
+      { $unwind: "$items" },
+      { $match: { "items.available": true } },
+    ];
+    const nonMatchingResult = pass.execute(nonMatchingAndPipeline);
+    expect(nonMatchingResult.length).toBe(4);
+
+    const nonObjectMatchPipeline = [
+      { $match: null as any },
+      { $unwind: "$items" },
+      { $match: { "items.available": true } },
+    ];
+    expect(pass.execute(nonObjectMatchPipeline).length).toBe(4);
   });
 
   it("leaves pipelines without applicable unwind unchanged", () =>
