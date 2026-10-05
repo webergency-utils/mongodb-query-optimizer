@@ -945,4 +945,155 @@ describe( 'End-to-End Complex Query Suite', () =>
             );
         });
     });
+
+    // -------------------------------------------------------------------------
+    // 13. Customer Age Demographic Bucketing & Range Allocation (Bucket Pushdown)
+    // -------------------------------------------------------------------------
+    describe( 'Customer Age Demographic Bucketing & Range Allocation', () =>
+    {
+        const customerDataset =
+        [
+            { _id: 1, name: 'Emma', age: 16, spend: 50 },
+            { _id: 2, name: 'Liam', age: 24, spend: 320 },
+            { _id: 3, name: 'Olivia', age: 29, spend: 410 },
+            { _id: 4, name: 'Noah', age: 45, spend: 600 },
+            { _id: 5, name: 'Ava', age: 72, spend: 150 }
+        ];
+
+        it( 'pushes age range prefilter before $bucket allocation and verifies mock parity', () =>
+        {
+            const pipeline =
+            [
+                {
+                    $bucket: {
+                        groupBy: '$age',
+                        boundaries: [ 0, 18, 35, 65, 100 ],
+                        default: 'other',
+                        output: {
+                            count: { $sum: 1 },
+                            totalSpend: { $sum: '$spend' }
+                        }
+                    }
+                },
+                { $match: { _id: 18 } }
+            ];
+
+            const optimized = optimizePipeline( pipeline );
+
+            // Verifies prefilter was pushed down
+            expect( optimized[0].$match.age ).toEqual({ $gte: 18, $lt: 35 });
+
+            const rawResult = runMockPipeline( customerDataset, pipeline );
+            const optimizedResult = runMockPipeline( customerDataset, optimized );
+
+            expect( rawResult ).toEqual( optimizedResult );
+            expect( optimizedResult ).toEqual(
+            [
+                {
+                    _id: 18,
+                    count: 2,
+                    totalSpend: 730
+                }
+            ]);
+        });
+    });
+
+    // -------------------------------------------------------------------------
+    // 14. Content Publishing Tag Analytics (SortByCount Simplification)
+    // -------------------------------------------------------------------------
+    describe( 'Content Publishing Tag Analytics', () =>
+    {
+        const articleDataset =
+        [
+            { _id: 1, title: 'AI Revolution', topic: 'technology', views: 1200 },
+            { _id: 2, title: 'Stock Market Surge', topic: 'finance', views: 800 },
+            { _id: 3, title: 'Quantum Breakthrough', topic: 'technology', views: 2400 },
+            { _id: 4, title: 'Global Inflation Update', topic: 'finance', views: 1500 },
+            { _id: 5, title: 'Tech Giants Earnings', topic: 'technology', views: 3000 },
+            { _id: 6, title: 'Champions League Final', topic: 'sports', views: 4000 }
+        ];
+
+        it( 'folds grouping and descending count sort into native $sortByCount', () =>
+        {
+            const pipeline =
+            [
+                { $match: { views: { $gte: 1000 } } },
+                { $group: { _id: '$topic', count: { $sum: 1 } } },
+                { $sort: { count: -1 } }
+            ];
+
+            const optimized = optimizePipeline( pipeline );
+
+            // Verifies $sortByCount folding
+            expect( optimized[1].$sortByCount ).toBe( '$topic' );
+
+            const rawResult = runMockPipeline( articleDataset, pipeline );
+            const optimizedResult = runMockPipeline( articleDataset, optimized );
+
+            expect( rawResult ).toEqual( optimizedResult );
+            expect( optimizedResult ).toEqual(
+            [
+                { _id: 'technology', count: 3 },
+                { _id: 'finance', count: 1 },
+                { _id: 'sports', count: 1 }
+            ]);
+        });
+    });
+
+    // -------------------------------------------------------------------------
+    // 15. Financial Audit Log Event Sorting (Redundant Sort Elimination)
+    // -------------------------------------------------------------------------
+    describe( 'Financial Audit Log Event Sorting', () =>
+    {
+        const auditDataset =
+        [
+            { _id: 'log-1', accountId: 'ACC-A', action: 'DEPOSIT', amount: 500, timestamp: 100 },
+            { _id: 'log-2', accountId: 'ACC-B', action: 'TRANSFER', amount: 200, timestamp: 200 },
+            { _id: 'log-3', accountId: 'ACC-A', action: 'WITHDRAW', amount: 150, timestamp: 300 },
+            { _id: 'log-4', accountId: 'ACC-B', action: 'DEPOSIT', amount: 700, timestamp: 400 }
+        ];
+
+        it( 'eliminates adjacent sort overwrites and pre-group dead sorts', () =>
+        {
+            const pipeline =
+            [
+                // Dead adjacent sort: overwritten immediately by timestamp sort
+                { $sort: { amount: 1 } },
+                // Dead pre-group sort: overwritten because group has only commutative $sum
+                { $sort: { timestamp: -1 } },
+                {
+                    $group: {
+                        _id: '$accountId',
+                        totalAmount: { $sum: '$amount' }
+                    }
+                },
+                // Retained post-group sort
+                { $sort: { _id: 1 } }
+            ];
+
+            const optimized = optimizePipeline( pipeline );
+
+            // The two leading sorts are eliminated
+            expect( optimized ).toEqual(
+            [
+                {
+                    $group: {
+                        _id: '$accountId',
+                        totalAmount: { $sum: '$amount' }
+                    }
+                },
+                { $sort: { _id: 1 } }
+            ]);
+
+            const rawResult = runMockPipeline( auditDataset, pipeline );
+            const optimizedResult = runMockPipeline( auditDataset, optimized );
+
+            expect( rawResult ).toEqual( optimizedResult );
+            expect( optimizedResult ).toEqual(
+            [
+                { _id: 'ACC-A', totalAmount: 650 },
+                { _id: 'ACC-B', totalAmount: 900 }
+            ]);
+        });
+    });
 });

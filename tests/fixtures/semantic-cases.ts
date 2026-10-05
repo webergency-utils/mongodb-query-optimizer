@@ -2759,6 +2759,305 @@ export const productionSemanticCases: readonly SemanticCase[] = [
         affectedTransformationIds: ['facet-prefix-hoisting'],
         expectedEquivalent: true,
     },
+    {
+        id: 'feat-bucket-filter-pushdown-focused',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, year: 1995, score: 80 },
+                    { _id: 2, year: 2005, score: 90 },
+                    { _id: 3, year: 2015, score: 70 },
+                ],
+            },
+        },
+        pipeline: [
+            {
+                $bucket: {
+                    groupBy: '$year',
+                    boundaries: [1990, 2000, 2010, 2020],
+                    default: 'other',
+                    output: { count: { $sum: 1 } },
+                },
+            },
+            { $match: { _id: 1990 } },
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: ['bucket-filter-pushdown'],
+        expectedEquivalent: true,
+    },
+    {
+        id: 'feat-bucket-filter-pushdown-interaction',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, year: 1995, score: 80 },
+                    { _id: 2, year: 1998, score: 60 },
+                    { _id: 3, year: 2005, score: 90 },
+                ],
+            },
+        },
+        pipeline: [
+            {
+                $bucket: {
+                    groupBy: '$year',
+                    boundaries: [1990, 2000, 2010, 2020],
+                    default: 'other',
+                    output: { count: { $sum: 1 } },
+                },
+            },
+            { $match: { _id: 1990, count: { $gte: 2 } } },
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: ['bucket-filter-pushdown'],
+        expectedEquivalent: true,
+    },
+    {
+        id: 'feat-bucket-filter-pushdown-nested',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, year: 1995 },
+                    { _id: 2, year: 2005 },
+                ],
+            },
+        },
+        pipeline: [
+            {
+                $facet: {
+                    nineties: [
+                        {
+                            $bucket: {
+                                groupBy: '$year',
+                                boundaries: [1990, 2000, 2010],
+                                default: 'other',
+                                output: { count: { $sum: 1 } },
+                            },
+                        },
+                        { $match: { _id: 1990 } },
+                    ],
+                },
+            },
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: ['bucket-filter-pushdown'],
+        expectedEquivalent: true,
+    },
+    {
+        id: 'feat-bucket-filter-pushdown-oracle',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, year: 1995, score: 80 },
+                    { _id: 2, year: 2005, score: 90 },
+                    { _id: 3, year: 2015, score: 70 },
+                ],
+            },
+        },
+        pipeline: [
+            {
+                $bucket: {
+                    groupBy: '$year',
+                    boundaries: [1990, 2000, 2010, 2020],
+                    default: 'other',
+                    output: { count: { $sum: 1 } },
+                },
+            },
+            { $match: { _id: 1990 } },
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: ['bucket-filter-pushdown'],
+        expectedEquivalent: true,
+    },
+    {
+        id: 'feat-redundant-sort-elimination-focused',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, a: 10, b: 2 },
+                    { _id: 2, a: 5, b: 1 },
+                    { _id: 3, a: 20, b: 3 },
+                ],
+            },
+        },
+        pipeline: [
+            { $sort: { a: 1 } },
+            { $sort: { b: -1 } },
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: ['redundant-sort-elimination'],
+        expectedEquivalent: true,
+    },
+    {
+        id: 'feat-redundant-sort-elimination-interaction',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, dept: 'Sales', val: 10 },
+                    { _id: 2, dept: 'Sales', val: 20 },
+                    { _id: 3, dept: 'Eng', val: 30 },
+                ],
+            },
+        },
+        pipeline: [
+            { $sort: { val: -1 } },
+            { $group: { _id: '$dept', total: { $sum: '$val' } } },
+            { $sort: { _id: 1 } },
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: ['redundant-sort-elimination'],
+        expectedEquivalent: true,
+    },
+    {
+        id: 'feat-redundant-sort-elimination-nested',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, a: 1, b: 2 },
+                    { _id: 2, a: 2, b: 1 },
+                ],
+            },
+        },
+        pipeline: [
+            {
+                $facet: {
+                    sorted: [
+                        { $sort: { a: 1 } },
+                        { $sort: { b: 1 } },
+                    ],
+                },
+            },
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: ['redundant-sort-elimination'],
+        expectedEquivalent: true,
+    },
+    {
+        id: 'feat-redundant-sort-elimination-oracle',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, a: 10, b: 2 },
+                    { _id: 2, a: 5, b: 1 },
+                ],
+            },
+        },
+        pipeline: [
+            { $sort: { a: 1 } },
+            { $sort: { b: -1 } },
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: ['redundant-sort-elimination'],
+        expectedEquivalent: true,
+    },
+    {
+        id: 'feat-sort-by-count-simplification-focused',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, tag: 'tech' },
+                    { _id: 2, tag: 'news' },
+                    { _id: 3, tag: 'tech' },
+                ],
+            },
+        },
+        pipeline: [
+            { $group: { _id: '$tag', count: { $sum: 1 } } },
+            { $sort: { count: -1 } },
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: ['sort-by-count-simplification'],
+        expectedEquivalent: true,
+    },
+    {
+        id: 'feat-sort-by-count-simplification-interaction',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, tag: 'tech', score: 10 },
+                    { _id: 2, tag: 'news', score: 20 },
+                    { _id: 3, tag: 'tech', score: 30 },
+                ],
+            },
+        },
+        pipeline: [
+            { $sort: { score: 1 } },
+            { $group: { _id: '$tag', count: { $sum: 1 } } },
+            { $sort: { count: -1 } },
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: [
+            'redundant-sort-elimination',
+            'sort-by-count-simplification',
+        ],
+        expectedEquivalent: true,
+    },
+    {
+        id: 'feat-sort-by-count-simplification-nested',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, tag: 'tech' },
+                    { _id: 2, tag: 'news' },
+                ],
+            },
+        },
+        pipeline: [
+            {
+                $facet: {
+                    tagCounts: [
+                        { $group: { _id: '$tag', count: { $sum: 1 } } },
+                        { $sort: { count: -1 } },
+                    ],
+                },
+            },
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: ['sort-by-count-simplification'],
+        expectedEquivalent: true,
+    },
+    {
+        id: 'feat-sort-by-count-simplification-oracle',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, tag: 'tech' },
+                    { _id: 2, tag: 'news' },
+                    { _id: 3, tag: 'tech' },
+                ],
+            },
+        },
+        pipeline: [
+            { $group: { _id: '$tag', count: { $sum: 1 } } },
+            { $sort: { count: -1 } },
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: ['sort-by-count-simplification'],
+        expectedEquivalent: true,
+    },
 ];
 
 export const candidateSemanticCases: readonly SemanticCase[] = [

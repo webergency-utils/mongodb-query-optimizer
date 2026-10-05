@@ -3,6 +3,7 @@ import { deepClone, structuralFingerprint } from '../utils';
 import { AdjacentAddFieldMergingPass } from './adjacent-addfield-merging';
 import { AdjacentMatchMergingPass } from './adjacent-match-merging';
 import { AdjacentProjectMergingPass } from './adjacent-project-merging';
+import { BucketFilterPushdownPass } from './bucket-filter-pushdown';
 import { ComplexProjectionDeferralPass } from './complex-projection-deferral';
 import { ExprMatchNormalizationPass } from './expr-match-normalization';
 import { FacetPrefixHoistingPass } from './facet-prefix-hoisting';
@@ -16,6 +17,8 @@ import {
 } from './ordering-stability';
 import { RedundantLookupEliminationPass } from './redundant-lookup-elimination';
 import { RedundantProjectionEliminationPass } from './redundant-projection-elimination';
+import { RedundantSortEliminationPass } from './redundant-sort-elimination';
+import { SortByCountSimplificationPass } from './sort-by-count-simplification';
 import { SortProjectCommutePass } from './sort-project-commute';
 import { StagePriorityReorderPass } from './stage-priority-reorder';
 import { PipelinePass } from './types';
@@ -29,7 +32,10 @@ const registeredPipelineTransformationIds = Object.freeze([
     'filter-optimization',
     'adjacent-match-merging',
     'group-filter-pushdown',
+    'bucket-filter-pushdown',
     'unwind-prefilter',
+    'redundant-sort-elimination',
+    'sort-by-count-simplification',
     'limit-skip-coalescing',
     'match-pushdown',
     'limit-advance',
@@ -53,7 +59,10 @@ const activePipelineTransformationIds: readonly PipelineTransformationId[] = Obj
     'filter-optimization',
     'adjacent-match-merging',
     'group-filter-pushdown',
+    'bucket-filter-pushdown',
     'unwind-prefilter',
+    'redundant-sort-elimination',
+    'sort-by-count-simplification',
     'limit-skip-coalescing',
     'match-pushdown',
     'limit-advance',
@@ -92,7 +101,10 @@ const candidatePipelineTransformationRegistry: Readonly<
     'filter-optimization': () => new FilterOptimizationPass(),
     'adjacent-match-merging': () => new AdjacentMatchMergingPass(),
     'group-filter-pushdown': () => new GroupFilterPushdownPass(),
+    'bucket-filter-pushdown': () => new BucketFilterPushdownPass(),
     'unwind-prefilter': () => new UnwindPrefilterPass(),
+    'redundant-sort-elimination': () => new RedundantSortEliminationPass(),
+    'sort-by-count-simplification': () => new SortByCountSimplificationPass(),
     'limit-skip-coalescing': () => new LimitSkipCoalescingPass(),
     'match-pushdown': () => new MatchPushdownPass(),
     'limit-advance': () => new LimitAdvancePass(),

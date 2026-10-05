@@ -6,7 +6,7 @@ import type {
 import type { SemanticCase } from './semantic-cases.js';
 
 export const GENERATED_INTERACTION_SEED = 0x5eed_2026;
-export const GENERATED_INTERACTION_CASE_COUNT = 40;
+export const GENERATED_INTERACTION_CASE_COUNT = 46;
 
 interface InteractionDescriptor
 {
@@ -72,8 +72,20 @@ const interactionDescriptors: readonly InteractionDescriptor[] = Object.freeze([
         filterId: 'simplify-singleton-in',
     },
     {
+        pipelineId: 'bucket-filter-pushdown',
+        filterId: 'simplify-singleton-in',
+    },
+    {
         pipelineId: 'unwind-prefilter',
         filterId: 'flatten-conjunctions',
+    },
+    {
+        pipelineId: 'redundant-sort-elimination',
+        filterId: 'simplify-equality',
+    },
+    {
+        pipelineId: 'sort-by-count-simplification',
+        filterId: 'merge-conjunctions',
     },
     {
         pipelineId: 'facet-prefix-hoisting',
@@ -380,12 +392,42 @@ function makeInteractionPipeline(
                 { $match: { _id: 'acme' } },
                 { $sort: { _id: 1 } },
             ];
+        case 'bucket-filter-pushdown':
+            return [
+                { $match: filter },
+                {
+                    $bucket: {
+                        groupBy: '$score',
+                        boundaries: [0, 50, 100],
+                        default: 'other',
+                        output: { count: { $sum: 1 } },
+                    },
+                },
+                { $match: { _id: 0 } },
+            ];
         case 'unwind-prefilter':
             return [
                 { $match: filter },
                 { $unwind: '$items' },
                 { $match: { 'items.score': 10 } },
                 { $sort: { _id: 1 } },
+            ];
+        case 'redundant-sort-elimination':
+            return [
+                { $match: filter },
+                { $sort: { score: 1 } },
+                { $sort: { score: -1, _id: 1 } },
+            ];
+        case 'sort-by-count-simplification':
+            return [
+                { $match: filter },
+                {
+                    $group: {
+                        _id: '$tenant',
+                        count: { $sum: 1 },
+                    },
+                },
+                { $sort: { count: -1 } },
             ];
         case 'facet-prefix-hoisting':
             return [

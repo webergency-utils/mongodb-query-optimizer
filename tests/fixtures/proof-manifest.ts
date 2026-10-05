@@ -118,11 +118,32 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'feat-group-filter-pushdown-oracle',
     ),
     evidence(
+        'bucket-filter-pushdown',
+        'feat-bucket-filter-pushdown-focused',
+        'u9-generated-top-level-bucket-filter-pushdown',
+        'u9-generated-nested-bucket-filter-pushdown',
+        'feat-bucket-filter-pushdown-oracle',
+    ),
+    evidence(
         'unwind-prefilter',
         'feat-unwind-prefilter-focused',
         'u9-generated-top-level-unwind-prefilter',
         'u9-generated-nested-unwind-prefilter',
         'feat-unwind-prefilter-oracle',
+    ),
+    evidence(
+        'redundant-sort-elimination',
+        'feat-redundant-sort-elimination-focused',
+        'u9-generated-top-level-redundant-sort-elimination',
+        'u9-generated-nested-redundant-sort-elimination',
+        'feat-redundant-sort-elimination-oracle',
+    ),
+    evidence(
+        'sort-by-count-simplification',
+        'feat-sort-by-count-simplification-focused',
+        'u9-generated-top-level-sort-by-count-simplification',
+        'u9-generated-nested-sort-by-count-simplification',
+        'feat-sort-by-count-simplification-oracle',
     ),
     evidence(
         'limit-skip-coalescing',

@@ -302,6 +302,155 @@ export function runMockPipeline(
                 docs = docs.length === 0 ? [] : [{ [val]: docs.length }];
                 break;
             }
+            case '$sortByCount':
+            {
+                const groups: Record<string, number> = {};
+                const idValues: Record<string, any> = {};
+
+                for( const doc of docs )
+                {
+                    const idVal = evalExpr( doc, val ) ?? null;
+                    const groupKey = JSON.stringify( idVal );
+
+                    groups[groupKey] = ( groups[groupKey] || 0 ) + 1;
+                    idValues[groupKey] = idVal;
+                }
+
+                const resultDocs: any[] = [];
+                for( const [ key, count ] of Object.entries( groups ))
+                {
+                    resultDocs.push({
+                        _id: idValues[key],
+                        count
+                    });
+                }
+
+                resultDocs.sort( ( a, b ) => b.count - a.count );
+                docs = resultDocs;
+                break;
+            }
+            case '$bucket':
+            {
+                const { groupBy, boundaries, default: defaultVal, output } = val;
+                const groups: Record<string, any[]> = {};
+
+                for( const doc of docs )
+                {
+                    const docVal = evalExpr( doc, groupBy );
+                    let matchedBucket: any = undefined;
+
+                    for( let k = 0; k < boundaries.length - 1; k++ )
+                    {
+                        if( docVal >= boundaries[k] && docVal < boundaries[k + 1] )
+                        {
+                            matchedBucket = boundaries[k];
+                            break;
+                        }
+                    }
+
+                    if( matchedBucket === undefined )
+                    {
+                        if( defaultVal !== undefined )
+                        {
+                            matchedBucket = defaultVal;
+                        }
+                        else
+                        {
+                            throw new Error( '$bucket could not find a matching branch for an input, and no default was specified.' );
+                        }
+                    }
+
+                    const keyStr = JSON.stringify( matchedBucket );
+                    if( !groups[keyStr] )
+                    {
+                        groups[keyStr] = [];
+                    }
+                    groups[keyStr].push( doc );
+                }
+
+                const bucketDocs: any[] = [];
+                const effectiveOutput = output || { count: { $sum: 1 } };
+
+                for( const [ keyStr, groupDocs ] of Object.entries( groups ))
+                {
+                    const bucketId = JSON.parse( keyStr );
+                    const bucketDoc: any = { _id: bucketId };
+
+                    for( const [ field, accumulatorExpression ] of Object.entries( effectiveOutput ))
+                    {
+                        const accumulatorOperator = Object.keys( accumulatorExpression as any )[0];
+                        const accumulatorValue = ( accumulatorExpression as any )[accumulatorOperator];
+
+                        if( accumulatorOperator === '$sum' )
+                        {
+                            let sum = 0;
+                            for( const doc of groupDocs )
+                            {
+                                const evaluated = evalExpr( doc, accumulatorValue );
+                                sum += typeof evaluated === 'number' ? evaluated : 0;
+                            }
+                            bucketDoc[field] = sum;
+                        }
+                        else if( accumulatorOperator === '$avg' )
+                        {
+                            let sum = 0;
+                            let count = 0;
+                            for( const doc of groupDocs )
+                            {
+                                const evaluated = evalExpr( doc, accumulatorValue );
+                                if( typeof evaluated === 'number' )
+                                {
+                                    sum += evaluated;
+                                    count++;
+                                }
+                            }
+                            bucketDoc[field] = count > 0 ? sum / count : null;
+                        }
+                        else if( accumulatorOperator === '$min' )
+                        {
+                            let minVal: any = undefined;
+                            for( const doc of groupDocs )
+                            {
+                                const evaluated = evalExpr( doc, accumulatorValue );
+                                if( evaluated !== undefined && evaluated !== null )
+                                {
+                                    if( minVal === undefined || evaluated < minVal )
+                                    {
+                                        minVal = evaluated;
+                                    }
+                                }
+                            }
+                            bucketDoc[field] = minVal === undefined ? null : minVal;
+                        }
+                        else if( accumulatorOperator === '$max' )
+                        {
+                            let maxVal: any = undefined;
+                            for( const doc of groupDocs )
+                            {
+                                const evaluated = evalExpr( doc, accumulatorValue );
+                                if( evaluated !== undefined && evaluated !== null )
+                                {
+                                    if( maxVal === undefined || evaluated > maxVal )
+                                    {
+                                        maxVal = evaluated;
+                                    }
+                                }
+                            }
+                            bucketDoc[field] = maxVal === undefined ? null : maxVal;
+                        }
+                        else if( accumulatorOperator === '$push' )
+                        {
+                            bucketDoc[field] = groupDocs.map( ( doc ) => evalExpr( doc, accumulatorValue ));
+                        }
+                    }
+
+                    bucketDocs.push( bucketDoc );
+                }
+
+                bucketDocs.sort( ( a, b ) => ( a._id < b._id ? -1 : a._id > b._id ? 1 : 0 ));
+                docs = bucketDocs;
+                break;
+            }
             case '$facet':
             {
                 const facetResults: Record<string, any[]> = {};
