@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Type-check
+        run: npm run typecheck
+      - name: Run unit tests
+        run: npm test
+      - name: Run coverage
+        run: npm run test:coverage
+      - name: Build package
+        run: npm run build
+
+  mongodb-8:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      MONGODB_URI: ${{ secrets.MONGODB_QUERY_OPTIMIZER_TEST_URI }}
+      MONGODB_TEST_DATABASE: webergency_mongodb_query_optimizer
+      MONGODB_TEST_RUN_ID: ci_${{ github.run_id }}_${{ github.run_attempt }}
+      MONGODB_TEST_WRITE_ATTESTATION: ALLOW_WEBERGENCY_MONGODB_QUERY_OPTIMIZER_WRITES
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Run the full MongoDB 8 verification path
+        run: npm run test:all
