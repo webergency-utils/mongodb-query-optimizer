@@ -1,7 +1,7 @@
-import { PipelinePass } from "./types";
+import { PipelinePass } from './types';
 import {
-  proveAddFieldDeferralAcrossSort,
-} from "./projection-proofs";
+    proveAddFieldDeferralAcrossSort,
+} from './projection-proofs';
 
 /**
  * Delays a deterministic add/set past an adjacent sort when the sort keys
@@ -9,26 +9,26 @@ import {
  */
 export class ComplexProjectionDeferralPass implements PipelinePass
 {
-  name = "complex-projection-deferral";
+    name = 'complex-projection-deferral';
 
-  execute(pipeline: any[]): any[]
-  {
-    const result = [...pipeline];
-
-    for (let index = 0; index < result.length - 1; index++)
+    execute(pipeline: any[]): any[]
     {
-      if (!proveAddFieldDeferralAcrossSort(result[index], result[index + 1]))
-      {
-        continue;
-      }
+        const result = [...pipeline];
 
-      [result[index], result[index + 1]] = [
-        result[index + 1],
-        result[index],
-      ];
-      return result;
+        for (let index = 0; index < result.length - 1; index++)
+        {
+            if (!proveAddFieldDeferralAcrossSort(result[index], result[index + 1]))
+            {
+                continue;
+            }
+
+            [result[index], result[index + 1]] = [
+                result[index + 1],
+                result[index],
+            ];
+            return result;
+        }
+
+        return result;
     }
-
-    return result;
-  }
 }

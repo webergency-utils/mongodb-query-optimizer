@@ -1,39 +1,39 @@
-import { PipelinePass } from "./types";
+import { PipelinePass } from './types';
 import {
-  proveUnusedFieldPruningThroughSuffix,
-} from "./projection-proofs";
+    proveUnusedFieldPruningThroughSuffix,
+} from './projection-proofs';
 
 export class UnusedFieldPruningPass implements PipelinePass
 {
-  name = "unused-field-pruning";
+    name = 'unused-field-pruning';
 
-  execute(pipeline: any[]): any[]
-  {
-    const result = [...pipeline];
-
-    for (let index = 0; index + 1 < result.length; index++)
+    execute(pipeline: any[]): any[]
     {
-      const proof = proveUnusedFieldPruningThroughSuffix(
-        result[index],
-        result.slice(index + 1),
-      );
-      if (!proof)
-      {
-        continue;
-      }
+        const result = [...pipeline];
 
-      if (proof.replacementStage)
-      {
-        result[index] = proof.replacementStage;
-      }
-      else
-      {
-        result.splice(index, 1);
-      }
+        for (let index = 0; index + 1 < result.length; index++)
+        {
+            const proof = proveUnusedFieldPruningThroughSuffix(
+                result[index],
+                result.slice(index + 1),
+            );
+            if (!proof)
+            {
+                continue;
+            }
 
-      return result;
+            if (proof.replacementStage)
+            {
+                result[index] = proof.replacementStage;
+            }
+            else
+            {
+                result.splice(index, 1);
+            }
+
+            return result;
+        }
+
+        return result;
     }
-
-    return result;
-  }
 }

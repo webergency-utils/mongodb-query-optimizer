@@ -1,31 +1,31 @@
-import { PipelinePass } from "./types";
+import { PipelinePass } from './types';
 import {
-  proveAdjacentProjectMerge,
-} from "./projection-proofs";
+    proveAdjacentProjectMerge,
+} from './projection-proofs';
 
 export class AdjacentProjectMergingPass implements PipelinePass
 {
-  name = "adjacent-project-merging";
+    name = 'adjacent-project-merging';
 
-  execute(pipeline: any[]): any[]
-  {
-    const result = [...pipeline];
-
-    for (let index = 1; index < result.length; index++)
+    execute(pipeline: any[]): any[]
     {
-      const proof = proveAdjacentProjectMerge(
-        result[index - 1],
-        result[index],
-      );
-      if (!proof)
-      {
-        continue;
-      }
+        const result = [...pipeline];
 
-      result.splice(index - 1, 2, proof.mergedStage);
-      return result;
+        for (let index = 1; index < result.length; index++)
+        {
+            const proof = proveAdjacentProjectMerge(
+                result[index - 1],
+                result[index],
+            );
+            if (!proof)
+            {
+                continue;
+            }
+
+            result.splice(index - 1, 2, proof.mergedStage);
+            return result;
+        }
+
+        return result;
     }
-
-    return result;
-  }
 }

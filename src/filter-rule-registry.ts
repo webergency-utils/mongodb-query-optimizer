@@ -1,435 +1,435 @@
-import { isFilterRewriteSafe } from "./analyzer/filters";
-import { structuralFingerprint } from "./utils";
+import { isFilterRewriteSafe } from './analyzer/filters';
+import { structuralFingerprint } from './utils';
 
 type FilterDocument = Record<string, any>;
 
 const registeredFilterRuleIds = Object.freeze([
-  "simplify-equality",
-  "simplify-singleton-in",
-  "flatten-conjunctions",
-  "flatten-disjunctions",
-  "simplify-conjunction-identities",
-  "simplify-disjunction-identities",
-  "deduplicate-conjunctions",
-  "merge-conjunctions",
+    'simplify-equality',
+    'simplify-singleton-in',
+    'flatten-conjunctions',
+    'flatten-disjunctions',
+    'simplify-conjunction-identities',
+    'simplify-disjunction-identities',
+    'deduplicate-conjunctions',
+    'merge-conjunctions',
 ] as const);
 
 export type FilterRuleId = typeof registeredFilterRuleIds[number];
 
 const activeFilterRuleIds: readonly FilterRuleId[] = Object.freeze([
-  "simplify-equality",
-  "simplify-singleton-in",
-  "flatten-conjunctions",
-  "flatten-disjunctions",
-  "simplify-conjunction-identities",
-  "simplify-disjunction-identities",
-  "deduplicate-conjunctions",
-  "merge-conjunctions",
+    'simplify-equality',
+    'simplify-singleton-in',
+    'flatten-conjunctions',
+    'flatten-disjunctions',
+    'simplify-conjunction-identities',
+    'simplify-disjunction-identities',
+    'deduplicate-conjunctions',
+    'merge-conjunctions',
 ]);
 
 const containedFilterRuleIds: readonly FilterRuleId[] = Object.freeze([]);
 
 export interface FilterRuleRegistryStatus
 {
-  readonly registered: readonly FilterRuleId[];
-  readonly active: readonly FilterRuleId[];
-  readonly contained: readonly FilterRuleId[];
+    readonly registered: readonly FilterRuleId[];
+    readonly active: readonly FilterRuleId[];
+    readonly contained: readonly FilterRuleId[];
 }
 
 const filterRuleRegistryStatus: FilterRuleRegistryStatus = Object.freeze({
-  registered: registeredFilterRuleIds,
-  active: activeFilterRuleIds,
-  contained: containedFilterRuleIds,
+    registered: registeredFilterRuleIds,
+    active: activeFilterRuleIds,
+    contained: containedFilterRuleIds,
 });
 
 export interface FilterRule
 {
-  readonly id: FilterRuleId;
-  apply(filter: FilterDocument): any;
+    readonly id: FilterRuleId;
+    apply(filter: FilterDocument): any;
 }
 
 function isPlainObject(value: any): value is FilterDocument
 {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-  {
-    return false;
-  }
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+    {
+        return false;
+    }
 
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
 }
 
 function isOperatorSubdocument(value: any): value is FilterDocument
 {
-  if (!isPlainObject(value))
-  {
-    return false;
-  }
+    if (!isPlainObject(value))
+    {
+        return false;
+    }
 
-  const keys = Object.keys(value);
-  return keys.length > 0 && keys.every((key) => key.startsWith("$"));
+    const keys = Object.keys(value);
+    return keys.length > 0 && keys.every((key) => key.startsWith('$'));
 }
 
 function isEmptyFilter(value: any): boolean
 {
-  return isPlainObject(value) && Object.keys(value).length === 0;
+    return isPlainObject(value) && Object.keys(value).length === 0;
 }
 
 function isSafeImplicitEqualityValue(value: any): boolean
 {
-  return (
-    typeof value === "string"
-    || typeof value === "boolean"
-    || (typeof value === "number" && Number.isFinite(value))
-  );
+    return (
+        typeof value === 'string'
+        || typeof value === 'boolean'
+        || (typeof value === 'number' && Number.isFinite(value))
+    );
 }
 
 function simplifySingleFieldOperator(
-  filter: FilterDocument,
-  operator: "$eq" | "$in",
+    filter: FilterDocument,
+    operator: '$eq' | '$in',
 ): FilterDocument
 {
-  let result = filter;
+    let result = filter;
 
-  for (const [key, value] of Object.entries(filter))
-  {
-    if (
-      key.startsWith("$")
-      || !isOperatorSubdocument(value)
-      || Object.keys(value).length !== 1
-      || !(operator in value)
-    )
+    for (const [key, value] of Object.entries(filter))
     {
-      continue;
-    }
-
-        if( operator === '$in' )
+        if (
+            key.startsWith('$')
+            || !isOperatorSubdocument(value)
+            || Object.keys(value).length !== 1
+            || !(operator in value)
+        )
         {
-            if( !Array.isArray( value.$in )){ continue }
-
-            const seen = new Set<string>();
-            const unique: any[] = [];
-
-            for( const item of value.$in )
-            {
-                const fp = structuralFingerprint( item );
-
-                if( !seen.has( fp ))
-                {
-                    seen.add( fp );
-                    unique.push( item );
-                }
-            }
-
-            if( unique.length === 1 && isSafeImplicitEqualityValue( unique[0] ))
-            {
-                if( result === filter ){ result = { ...filter } }
-
-                result[key] = unique[0];
-                continue;
-            }
-
-            if( unique.length < value.$in.length )
-            {
-                if( result === filter ){ result = { ...filter } }
-
-                result[key] = { ...value, $in: unique };
-                continue;
-            }
-
             continue;
         }
 
-    const operand = value.$eq;
-    if (!isSafeImplicitEqualityValue(operand))
-    {
-      continue;
+                if( operator === '$in' )
+                {
+                        if( !Array.isArray( value.$in )){ continue }
+
+                        const seen = new Set<string>();
+                        const unique: any[] = [];
+
+                        for( const item of value.$in )
+                        {
+                                const fp = structuralFingerprint( item );
+
+                                if( !seen.has( fp ))
+                                {
+                                        seen.add( fp );
+                                        unique.push( item );
+                                }
+                        }
+
+                        if( unique.length === 1 && isSafeImplicitEqualityValue( unique[0] ))
+                        {
+                                if( result === filter ){ result = { ...filter } }
+
+                                result[key] = unique[0];
+                                continue;
+                        }
+
+                        if( unique.length < value.$in.length )
+                        {
+                                if( result === filter ){ result = { ...filter } }
+
+                                result[key] = { ...value, $in: unique };
+                                continue;
+                        }
+
+                        continue;
+                }
+
+        const operand = value.$eq;
+        if (!isSafeImplicitEqualityValue(operand))
+        {
+            continue;
+        }
+
+        if (result === filter)
+        {
+            result = { ...filter };
+        }
+
+        result[key] = operand;
     }
 
-    if (result === filter)
-    {
-      result = { ...filter };
-    }
-
-    result[key] = operand;
-  }
-
-  return result;
+    return result;
 }
 
 const simplifyEqualityRule: FilterRule = {
-  id: "simplify-equality",
-  apply(filter)
-  {
-    return simplifySingleFieldOperator(filter, "$eq");
-  },
+    id: 'simplify-equality',
+    apply(filter)
+    {
+        return simplifySingleFieldOperator(filter, '$eq');
+    },
 };
 
 const simplifySingletonInRule: FilterRule = {
-  id: "simplify-singleton-in",
-  apply(filter)
-  {
-    return simplifySingleFieldOperator(filter, "$in");
-  },
+    id: 'simplify-singleton-in',
+    apply(filter)
+    {
+        return simplifySingleFieldOperator(filter, '$in');
+    },
 };
 
 function flattenLogicalArray(
-  filter: FilterDocument,
-  operator: "$and" | "$or",
+    filter: FilterDocument,
+    operator: '$and' | '$or',
 ): FilterDocument
 {
-  const conditions = filter[operator];
-  if (
-    !Array.isArray(conditions)
-    || conditions.length === 0
-    || !isFilterRewriteSafe(filter)
-  )
-  {
-    return filter;
-  }
-
-  let changed = false;
-  const flattened: any[] = [];
-
-  for (const condition of conditions)
-  {
+    const conditions = filter[operator];
     if (
-      isPlainObject(condition)
-      && Object.keys(condition).length === 1
-      && Array.isArray(condition[operator])
-      && condition[operator].length > 0
+        !Array.isArray(conditions)
+        || conditions.length === 0
+        || !isFilterRewriteSafe(filter)
     )
     {
-      flattened.push(...condition[operator]);
-      changed = true;
+        return filter;
     }
-    else
-    {
-      flattened.push(condition);
-    }
-  }
 
-  return changed
-    ? { ...filter, [operator]: flattened }
-    : filter;
+    let changed = false;
+    const flattened: any[] = [];
+
+    for (const condition of conditions)
+    {
+        if (
+            isPlainObject(condition)
+            && Object.keys(condition).length === 1
+            && Array.isArray(condition[operator])
+            && condition[operator].length > 0
+        )
+        {
+            flattened.push(...condition[operator]);
+            changed = true;
+        }
+        else
+        {
+            flattened.push(condition);
+        }
+    }
+
+    return changed
+        ? { ...filter, [operator]: flattened }
+        : filter;
 }
 
 const flattenConjunctionsRule: FilterRule = {
-  id: "flatten-conjunctions",
-  apply(filter)
-  {
-    return flattenLogicalArray(filter, "$and");
-  },
+    id: 'flatten-conjunctions',
+    apply(filter)
+    {
+        return flattenLogicalArray(filter, '$and');
+    },
 };
 
 const flattenDisjunctionsRule: FilterRule = {
-  id: "flatten-disjunctions",
-  apply(filter)
-  {
-    return flattenLogicalArray(filter, "$or");
-  },
+    id: 'flatten-disjunctions',
+    apply(filter)
+    {
+        return flattenLogicalArray(filter, '$or');
+    },
 };
 
 const simplifyConjunctionIdentitiesRule: FilterRule = {
-  id: "simplify-conjunction-identities",
-  apply(filter)
-  {
-    const conditions = filter.$and;
-    if (
-      !Array.isArray(conditions)
-      || conditions.length === 0
-      || !isFilterRewriteSafe(filter)
-    )
+    id: 'simplify-conjunction-identities',
+    apply(filter)
     {
-      return filter;
-    }
+        const conditions = filter.$and;
+        if (
+            !Array.isArray(conditions)
+            || conditions.length === 0
+            || !isFilterRewriteSafe(filter)
+        )
+        {
+            return filter;
+        }
 
-    const remaining = conditions.filter((condition) => !isEmptyFilter(condition));
-    const isOnlyCondition = Object.keys(filter).length === 1;
+        const remaining = conditions.filter((condition) => !isEmptyFilter(condition));
+        const isOnlyCondition = Object.keys(filter).length === 1;
 
-    if (isOnlyCondition && remaining.length === 0)
-    {
-      return {};
-    }
+        if (isOnlyCondition && remaining.length === 0)
+        {
+            return {};
+        }
 
-    if (isOnlyCondition && remaining.length === 1)
-    {
-      return remaining[0];
-    }
+        if (isOnlyCondition && remaining.length === 1)
+        {
+            return remaining[0];
+        }
 
-    if (remaining.length === 0)
-    {
-      const { $and: _removed, ...rest } = filter;
-      return rest;
-    }
+        if (remaining.length === 0)
+        {
+            const { $and: _removed, ...rest } = filter;
+            return rest;
+        }
 
-    return remaining.length === conditions.length
-      ? filter
-      : { ...filter, $and: remaining };
-  },
+        return remaining.length === conditions.length
+            ? filter
+            : { ...filter, $and: remaining };
+    },
 };
 
 const simplifyDisjunctionIdentitiesRule: FilterRule = {
-  id: "simplify-disjunction-identities",
-  apply(filter)
-  {
-    const conditions = filter.$or;
-    if (
-      !Array.isArray(conditions)
-      || conditions.length === 0
-      || !isFilterRewriteSafe(filter)
-    )
+    id: 'simplify-disjunction-identities',
+    apply(filter)
     {
-      return filter;
-    }
-
-        if( conditions.some(( condition ) => isEmptyFilter( condition )))
+        const conditions = filter.$or;
+        if (
+            !Array.isArray(conditions)
+            || conditions.length === 0
+            || !isFilterRewriteSafe(filter)
+        )
         {
-            const { $or: _removed, ...rest } = filter;
+            return filter;
+        }
 
-            return rest;
+                if( conditions.some(( condition ) => isEmptyFilter( condition )))
+                {
+                        const { $or: _removed, ...rest } = filter;
+
+                        return rest;
+                }
+
+                const seen = new Set<string>();
+                const unique: any[] = [];
+
+                for( const condition of conditions )
+                {
+                        const fingerprint = structuralFingerprint( condition );
+
+                        if( !seen.has( fingerprint ))
+                        {
+                                seen.add( fingerprint );
+                                unique.push( condition );
+                        }
+                }
+
+                const isOnlyCondition = Object.keys( filter ).length === 1;
+
+                if( isOnlyCondition && unique.length === 1 ){ return unique[0] }
+
+                return unique.length === conditions.length
+                        ? filter
+                        : { ...filter, $or: unique };
+    },
+};
+
+const deduplicateConjunctionsRule: FilterRule = {
+    id: 'deduplicate-conjunctions',
+    apply(filter)
+    {
+        const conditions = filter.$and;
+        if (
+            !Array.isArray(conditions)
+            || conditions.length === 0
+            || !isFilterRewriteSafe(filter)
+        )
+        {
+            return filter;
         }
 
         const seen = new Set<string>();
         const unique: any[] = [];
 
-        for( const condition of conditions )
+        for (const condition of conditions)
         {
-            const fingerprint = structuralFingerprint( condition );
-
-            if( !seen.has( fingerprint ))
+            const fingerprint = structuralFingerprint(condition);
+            if (!seen.has(fingerprint))
             {
-                seen.add( fingerprint );
-                unique.push( condition );
+                seen.add(fingerprint);
+                unique.push(condition);
             }
         }
 
-        const isOnlyCondition = Object.keys( filter ).length === 1;
-
-        if( isOnlyCondition && unique.length === 1 ){ return unique[0] }
-
         return unique.length === conditions.length
             ? filter
-            : { ...filter, $or: unique };
-  },
-};
-
-const deduplicateConjunctionsRule: FilterRule = {
-  id: "deduplicate-conjunctions",
-  apply(filter)
-  {
-    const conditions = filter.$and;
-    if (
-      !Array.isArray(conditions)
-      || conditions.length === 0
-      || !isFilterRewriteSafe(filter)
-    )
-    {
-      return filter;
-    }
-
-    const seen = new Set<string>();
-    const unique: any[] = [];
-
-    for (const condition of conditions)
-    {
-      const fingerprint = structuralFingerprint(condition);
-      if (!seen.has(fingerprint))
-      {
-        seen.add(fingerprint);
-        unique.push(condition);
-      }
-    }
-
-    return unique.length === conditions.length
-      ? filter
-      : { ...filter, $and: unique };
-  },
+            : { ...filter, $and: unique };
+    },
 };
 
 function isFieldOnlyFilter(value: any): value is FilterDocument
 {
-  if (!isPlainObject(value))
-  {
-    return false;
-  }
+    if (!isPlainObject(value))
+    {
+        return false;
+    }
 
-  const keys = Object.keys(value);
-  return keys.length > 0 && keys.every((key) => !key.startsWith("$"));
+    const keys = Object.keys(value);
+    return keys.length > 0 && keys.every((key) => !key.startsWith('$'));
 }
 
 const mergeConjunctionsRule: FilterRule = {
-  id: "merge-conjunctions",
-  apply(filter)
-  {
-    const conditions = filter.$and;
-    if (
-      !Array.isArray(conditions)
-      || conditions.length === 0
-      || !isFilterRewriteSafe(filter)
-    )
+    id: 'merge-conjunctions',
+    apply(filter)
     {
-      return filter;
-    }
+        const conditions = filter.$and;
+        if (
+            !Array.isArray(conditions)
+            || conditions.length === 0
+            || !isFilterRewriteSafe(filter)
+        )
+        {
+            return filter;
+        }
 
-    const { $and: _removed, ...rest } = filter;
-    let merged = { ...rest };
-    const occupiedFields = new Set(
-      Object.keys(rest).filter((key) => !key.startsWith("$")),
-    );
-    const remaining: any[] = [];
-    let changed = false;
+        const { $and: _removed, ...rest } = filter;
+        let merged = { ...rest };
+        const occupiedFields = new Set(
+            Object.keys(rest).filter((key) => !key.startsWith('$')),
+        );
+        const remaining: any[] = [];
+        let changed = false;
 
-    for (const condition of conditions)
-    {
-      if (!isFieldOnlyFilter(condition))
-      {
-        remaining.push(condition);
-        continue;
-      }
+        for (const condition of conditions)
+        {
+            if (!isFieldOnlyFilter(condition))
+            {
+                remaining.push(condition);
+                continue;
+            }
 
-      const fields = Object.keys(condition);
-      if (fields.some((field) => occupiedFields.has(field)))
-      {
-        remaining.push(condition);
-        continue;
-      }
+            const fields = Object.keys(condition);
+            if (fields.some((field) => occupiedFields.has(field)))
+            {
+                remaining.push(condition);
+                continue;
+            }
 
-      merged = { ...merged, ...condition };
-      for (const field of fields)
-      {
-        occupiedFields.add(field);
-      }
-      changed = true;
-    }
+            merged = { ...merged, ...condition };
+            for (const field of fields)
+            {
+                occupiedFields.add(field);
+            }
+            changed = true;
+        }
 
-    if (!changed)
-    {
-      return filter;
-    }
+        if (!changed)
+        {
+            return filter;
+        }
 
-    return remaining.length === 0
-      ? merged
-      : { ...merged, $and: remaining };
-  },
+        return remaining.length === 0
+            ? merged
+            : { ...merged, $and: remaining };
+    },
 };
 
 const candidateFilterRuleRegistry: Readonly<Record<FilterRuleId, FilterRule>> = Object.freeze({
-  "simplify-equality": simplifyEqualityRule,
-  "simplify-singleton-in": simplifySingletonInRule,
-  "flatten-conjunctions": flattenConjunctionsRule,
-  "flatten-disjunctions": flattenDisjunctionsRule,
-  "simplify-conjunction-identities": simplifyConjunctionIdentitiesRule,
-  "simplify-disjunction-identities": simplifyDisjunctionIdentitiesRule,
-  "deduplicate-conjunctions": deduplicateConjunctionsRule,
-  "merge-conjunctions": mergeConjunctionsRule,
+    'simplify-equality': simplifyEqualityRule,
+    'simplify-singleton-in': simplifySingletonInRule,
+    'flatten-conjunctions': flattenConjunctionsRule,
+    'flatten-disjunctions': flattenDisjunctionsRule,
+    'simplify-conjunction-identities': simplifyConjunctionIdentitiesRule,
+    'simplify-disjunction-identities': simplifyDisjunctionIdentitiesRule,
+    'deduplicate-conjunctions': deduplicateConjunctionsRule,
+    'merge-conjunctions': mergeConjunctionsRule,
 });
 
 const candidateFilterProfile: readonly FilterRuleId[] =
-  registeredFilterRuleIds;
+    registeredFilterRuleIds;
 
 const productionFilterRuleRegistry: readonly FilterRule[] = Object.freeze(
-  activeFilterRuleIds.map((id) => candidateFilterRuleRegistry[id]),
+    activeFilterRuleIds.map((id) => candidateFilterRuleRegistry[id]),
 );
 
 let injectedFilterRuleRegistry: readonly FilterRule[] | undefined;
@@ -439,47 +439,47 @@ let injectedFilterRuleRegistry: readonly FilterRule[] | undefined;
  */
 export function getFilterRuleRegistryStatus(): FilterRuleRegistryStatus
 {
-  return filterRuleRegistryStatus;
+    return filterRuleRegistryStatus;
 }
 
 export function getActiveFilterRules(): readonly FilterRule[]
 {
-  return injectedFilterRuleRegistry ?? productionFilterRuleRegistry;
+    return injectedFilterRuleRegistry ?? productionFilterRuleRegistry;
 }
 
 function resolveCandidateRules(selectedRuleIds: readonly string[]): readonly FilterRule[]
 {
-  const resolved: FilterRule[] = [];
+    const resolved: FilterRule[] = [];
 
-  for (const id of selectedRuleIds)
-  {
-    const rule = (candidateFilterRuleRegistry as Record<string, FilterRule | undefined>)[id];
-    if (!rule)
+    for (const id of selectedRuleIds)
     {
-      throw new Error(`Filter rule is not registered: ${id}`);
+        const rule = (candidateFilterRuleRegistry as Record<string, FilterRule | undefined>)[id];
+        if (!rule)
+        {
+            throw new Error(`Filter rule is not registered: ${id}`);
+        }
+
+        resolved.push(rule);
     }
 
-    resolved.push(rule);
-  }
-
-  return Object.freeze(resolved);
+    return Object.freeze(resolved);
 }
 
 export function withCandidateFilterRuleProfile<T>(
-  run: () => T,
-  selectedRuleIds: readonly string[] = candidateFilterProfile,
+    run: () => T,
+    selectedRuleIds: readonly string[] = candidateFilterProfile,
 ): T
 {
-  const selectedRules = resolveCandidateRules(selectedRuleIds);
-  const previousRegistry = injectedFilterRuleRegistry;
-  injectedFilterRuleRegistry = selectedRules;
+    const selectedRules = resolveCandidateRules(selectedRuleIds);
+    const previousRegistry = injectedFilterRuleRegistry;
+    injectedFilterRuleRegistry = selectedRules;
 
-  try
-  {
-    return run();
-  }
-  finally
-  {
-    injectedFilterRuleRegistry = previousRegistry;
-  }
+    try
+    {
+        return run();
+    }
+    finally
+    {
+        injectedFilterRuleRegistry = previousRegistry;
+    }
 }

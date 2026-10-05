@@ -1,7 +1,7 @@
-import { PipelinePass } from "./types";
+import { PipelinePass } from './types';
 import {
-  proveRedundantLookupElimination,
-} from "./movement-proofs";
+    proveRedundantLookupElimination,
+} from './movement-proofs';
 
 /**
  * Drops a simple equality lookup when the next stage discards the alias.
@@ -9,23 +9,23 @@ import {
  */
 export class RedundantLookupEliminationPass implements PipelinePass
 {
-  name = "redundant-lookup-elimination";
+    name = 'redundant-lookup-elimination';
 
-  execute(pipeline: any[]): any[]
-  {
-    const result = [...pipeline];
-
-    for (let index = 0; index < result.length - 1; index++)
+    execute(pipeline: any[]): any[]
     {
-      if (!proveRedundantLookupElimination(result[index], result[index + 1]))
-      {
-        continue;
-      }
+        const result = [...pipeline];
 
-      result.splice(index, 1);
-      return result;
+        for (let index = 0; index < result.length - 1; index++)
+        {
+            if (!proveRedundantLookupElimination(result[index], result[index + 1]))
+            {
+                continue;
+            }
+
+            result.splice(index, 1);
+            return result;
+        }
+
+        return result;
     }
-
-    return result;
-  }
 }
