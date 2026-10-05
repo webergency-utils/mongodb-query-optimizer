@@ -854,7 +854,7 @@ export const productionSemanticCases: readonly SemanticCase[] = [
           as: "orders",
         },
       },
-      { $match: { status: "active" } },
+      { $match: { "orders.total": 5 } },
     ],
     observation: "structural-barrier",
     affectedTransformationIds: ["match-pushdown"],
