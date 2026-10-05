@@ -228,6 +228,69 @@ export function runMockPipeline(
               }
               groupedDoc[field] = sum;
             }
+            else if (accumulatorOperator === "$avg")
+            {
+              let sum = 0;
+              let count = 0;
+              for (const doc of groupDocs)
+              {
+                const evaluated = evalExpr(doc, accumulatorValue);
+                if (typeof evaluated === "number")
+                {
+                  sum += evaluated;
+                  count++;
+                }
+              }
+              groupedDoc[field] = count > 0 ? sum / count : null;
+            }
+            else if (accumulatorOperator === "$min")
+            {
+              let minVal: any = undefined;
+              for (const doc of groupDocs)
+              {
+                const evaluated = evalExpr(doc, accumulatorValue);
+                if (evaluated !== undefined && evaluated !== null)
+                {
+                  if (minVal === undefined || evaluated < minVal)
+                  {
+                    minVal = evaluated;
+                  }
+                }
+              }
+              groupedDoc[field] = minVal === undefined ? null : minVal;
+            }
+            else if (accumulatorOperator === "$max")
+            {
+              let maxVal: any = undefined;
+              for (const doc of groupDocs)
+              {
+                const evaluated = evalExpr(doc, accumulatorValue);
+                if (evaluated !== undefined && evaluated !== null)
+                {
+                  if (maxVal === undefined || evaluated > maxVal)
+                  {
+                    maxVal = evaluated;
+                  }
+                }
+              }
+              groupedDoc[field] = maxVal === undefined ? null : maxVal;
+            }
+            else if (accumulatorOperator === "$first")
+            {
+              groupedDoc[field] = groupDocs.length > 0
+                ? evalExpr(groupDocs[0], accumulatorValue)
+                : null;
+            }
+            else if (accumulatorOperator === "$last")
+            {
+              groupedDoc[field] = groupDocs.length > 0
+                ? evalExpr(groupDocs[groupDocs.length - 1], accumulatorValue)
+                : null;
+            }
+            else if (accumulatorOperator === "$push")
+            {
+              groupedDoc[field] = groupDocs.map((doc) => evalExpr(doc, accumulatorValue));
+            }
           }
           groupedDocs.push(groupedDoc);
         }
@@ -237,6 +300,16 @@ export function runMockPipeline(
       case "$count":
       {
         docs = docs.length === 0 ? [] : [{ [val]: docs.length }];
+        break;
+      }
+      case "$facet":
+      {
+        const facetResults: Record<string, any[]> = {};
+        for (const [facetName, facetPipeline] of Object.entries(val))
+        {
+          facetResults[facetName] = runMockPipeline(docs, facetPipeline as any[], db);
+        }
+        docs = [facetResults];
         break;
       }
       case "$replaceRoot":
@@ -491,10 +564,25 @@ function evalExpr(doc: any, expression: any): any
         0,
       );
     }
+    if (operator === "$gt")
+    {
+      const values = value.map((entry: any) => evalExpr(doc, entry));
+      return values[0] > values[1];
+    }
     if (operator === "$gte")
     {
       const values = value.map((entry: any) => evalExpr(doc, entry));
       return values[0] >= values[1];
+    }
+    if (operator === "$lt")
+    {
+      const values = value.map((entry: any) => evalExpr(doc, entry));
+      return values[0] < values[1];
+    }
+    if (operator === "$lte")
+    {
+      const values = value.map((entry: any) => evalExpr(doc, entry));
+      return values[0] <= values[1];
     }
     if (operator === "$eq")
     {
@@ -519,6 +607,55 @@ function evalExpr(doc: any, expression: any): any
       return operator === "$and"
         ? values.every(Boolean)
         : values.some(Boolean);
+    }
+    if (operator === "$multiply")
+    {
+      const values = Array.isArray(value)
+        ? value.map((entry) => evalExpr(doc, entry))
+        : [evalExpr(doc, value)];
+      return values.reduce(
+        (product, entry) => product * (typeof entry === "number" ? entry : 0),
+        1,
+      );
+    }
+    if (operator === "$subtract")
+    {
+      const values = value.map((entry: any) => evalExpr(doc, entry));
+      return (typeof values[0] === "number" ? values[0] : 0) - (typeof values[1] === "number" ? values[1] : 0);
+    }
+    if (operator === "$divide")
+    {
+      const values = value.map((entry: any) => evalExpr(doc, entry));
+      return values[1] !== 0 ? (values[0] / values[1]) : null;
+    }
+    if (operator === "$toUpper")
+    {
+      const v = evalExpr(doc, value);
+      return typeof v === "string" ? v.toUpperCase() : v;
+    }
+    if (operator === "$toLower")
+    {
+      const v = evalExpr(doc, value);
+      return typeof v === "string" ? v.toLowerCase() : v;
+    }
+    if (operator === "$concat")
+    {
+      const values = Array.isArray(value)
+        ? value.map((entry) => evalExpr(doc, entry))
+        : [evalExpr(doc, value)];
+      return values.join("");
+    }
+    if (operator === "$size")
+    {
+      const arrayVal = evalExpr(doc, value);
+      return Array.isArray(arrayVal) ? arrayVal.length : 0;
+    }
+    if (operator === "$ifNull")
+    {
+      const values = Array.isArray(value)
+        ? value.map((entry) => evalExpr(doc, entry))
+        : [evalExpr(doc, value)];
+      return values[0] !== null && values[0] !== undefined ? values[0] : values[1];
     }
     if (operator === "$function")
     {
@@ -636,6 +773,43 @@ function matchSingleValue(value: any, queryValue: any): boolean
           return false;
         }
       }
+      if (operator === "$exists")
+      {
+        const exists = value !== undefined;
+        if (Boolean(operand) !== exists)
+        {
+          return false;
+        }
+      }
+      if (operator === "$elemMatch")
+      {
+        if (!Array.isArray(value))
+        {
+          return false;
+        }
+        if (!value.some((entry) => matchDoc(entry, operand)))
+        {
+          return false;
+        }
+      }
+      if (operator === "$nin")
+      {
+        if (!Array.isArray(operand))
+        {
+          throw new Error("Mock engine rejects MongoDB invalid $nin array");
+        }
+        if (operand.includes(value))
+        {
+          return false;
+        }
+      }
+      if (operator === "$size")
+      {
+        if (!Array.isArray(value) || value.length !== operand)
+        {
+          return false;
+        }
+      }
     }
     return true;
   }
@@ -656,6 +830,14 @@ function matchValueOrArray(value: any, queryValue: any): boolean
   }
   if (Array.isArray(value))
   {
+    if (
+      queryValue
+      && typeof queryValue === "object"
+      && ("$size" in queryValue || "$elemMatch" in queryValue || "$exists" in queryValue)
+    )
+    {
+      return false;
+    }
     return value.some((entry) => matchValueOrArray(entry, queryValue));
   }
   return false;
@@ -681,6 +863,21 @@ function matchDoc(doc: any, filter: any): boolean
 
       const matches = value.map((condition) => matchDoc(doc, condition));
       if (key === "$and" ? !matches.every(Boolean) : !matches.some(Boolean))
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (key === "$nor")
+    {
+      if (!Array.isArray(value) || value.length === 0)
+      {
+        throw new Error("Mock engine rejects MongoDB invalid $nor array");
+      }
+
+      const matches = value.map((condition) => matchDoc(doc, condition));
+      if (matches.some(Boolean))
       {
         return false;
       }

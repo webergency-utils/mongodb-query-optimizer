@@ -5,6 +5,8 @@ import {
 import {
   UnwindPrefilterPass,
 } from "../src/passes/unwind-prefilter.js";
+import { optimizePipeline } from "../src/index.js";
+import { runMockPipeline } from "./helpers/mock-engine.js";
 
 describe("proveUnwindPrefilter", () =>
 {
@@ -288,5 +290,126 @@ describe("UnwindPrefilterPass", () =>
 
     const result = pass.execute(pipeline);
     expect(result).toEqual(pipeline);
+  });
+});
+
+describe("optimizePipeline execution parity for unwind prefilter", () =>
+{
+  const ordersDataset = [
+    {
+      _id: 1,
+      orderId: "ORD-1",
+      customer: "Alice",
+      items: [
+        { sku: "A", price: 60, inStock: true },
+        { sku: "B", price: 20, inStock: false },
+      ],
+    },
+    {
+      _id: 2,
+      orderId: "ORD-2",
+      customer: "Bob",
+      items: [
+        { sku: "C", price: 15, inStock: true },
+      ],
+    },
+    {
+      _id: 3,
+      orderId: "ORD-3",
+      customer: "Charlie",
+      items: [],
+    },
+    {
+      _id: 4,
+      orderId: "ORD-4",
+      customer: "Diana",
+    },
+  ];
+
+  it("synthesizes elemMatch prefilter and preserves execution parity on array unwind", () =>
+  {
+    const pipeline = [
+      { $unwind: "$items" },
+      { $match: { "items.price": { $gt: 50 } } },
+    ];
+
+    const optimized = optimizePipeline(pipeline);
+    expect(optimized[0]).toEqual({
+      $match: {
+        items: {
+          $elemMatch: {
+            price: { $gt: 50 },
+          },
+        },
+      },
+    });
+
+    const originalResults = runMockPipeline(ordersDataset, pipeline);
+    const optimizedResults = runMockPipeline(ordersDataset, optimized);
+
+    expect(optimizedResults).toEqual(originalResults);
+    expect(optimizedResults).toEqual([
+      {
+        _id: 1,
+        orderId: "ORD-1",
+        customer: "Alice",
+        items: { sku: "A", price: 60, inStock: true },
+      },
+    ]);
+  });
+
+  it("synthesizes compound conditions with status and price and preserves execution parity", () =>
+  {
+    const pipeline = [
+      { $unwind: "$items" },
+      {
+        $match: {
+          "items.inStock": true,
+          "items.price": { $gte: 20 },
+        },
+      },
+    ];
+
+    const optimized = optimizePipeline(pipeline);
+    expect(optimized[0]).toEqual({
+      $match: {
+        items: {
+          $elemMatch: {
+            inStock: true,
+            price: { $gte: 20 },
+          },
+        },
+      },
+    });
+
+    const originalResults = runMockPipeline(ordersDataset, pipeline);
+    const optimizedResults = runMockPipeline(ordersDataset, optimized);
+
+    expect(optimizedResults).toEqual(originalResults);
+  });
+
+  it("handles pipeline with preceding match, sort, and project while preserving parity", () =>
+  {
+    const pipeline = [
+      { $match: { customer: { $ne: "Charlie" } } },
+      { $unwind: "$items" },
+      { $match: { "items.price": { $gt: 10 } } },
+      {
+        $project: {
+          orderId: 1,
+          sku: "$items.sku",
+          price: "$items.price",
+        },
+      },
+      { $sort: { price: -1 } },
+    ];
+
+    const optimized = optimizePipeline(pipeline);
+    const originalResults = runMockPipeline(ordersDataset, pipeline);
+    const optimizedResults = runMockPipeline(ordersDataset, optimized);
+
+    expect(optimizedResults).toEqual(originalResults);
+    expect(optimizedResults.length).toBe(3);
+    expect(optimizedResults[0].sku).toBe("A");
   });
 });

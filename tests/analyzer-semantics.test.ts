@@ -714,4 +714,230 @@ describe("public stage adapter", () =>
     expect(info.modifiedFields).toEqual(new Set(["*"]));
     expect(info.removedFields).toEqual(new Set());
   });
+
+  it("analyzes standard and complex stages accurately through getStageInfo", () =>
+  {
+    // $group
+    const groupInfo = getStageInfo({
+      $group: {
+        _id: "$dept",
+        total: { $sum: "$amount" },
+        avgAge: { $avg: "$age" },
+      },
+    }, 0);
+    expect(groupInfo.isDestructive).toBe(true);
+    expect(groupInfo.altersCount).toBe(true);
+    expect(groupInfo.producedFields.has("_id")).toBe(true);
+    expect(groupInfo.producedFields.has("total")).toBe(true);
+    expect(groupInfo.usedFields.has("dept")).toBe(true);
+    expect(groupInfo.usedFields.has("amount")).toBe(true);
+
+    // $lookup
+    const lookupInfo = getStageInfo({
+      $lookup: {
+        from: "orders",
+        localField: "customerId",
+        foreignField: "_id",
+        as: "orders",
+        let: { custId: "$customerId", tier: "$membership.tier" },
+      },
+    }, 1);
+    expect(lookupInfo.producedFields.has("orders")).toBe(true);
+    expect(lookupInfo.usedFields.has("customerId")).toBe(true);
+    expect(lookupInfo.usedFields.has("membership.tier")).toBe(true);
+
+    // $graphLookup
+    const graphLookupInfo = getStageInfo({
+      $graphLookup: {
+        from: "employees",
+        startWith: "$reportsTo",
+        connectFromField: "reportsTo",
+        connectToField: "name",
+        as: "hierarchy",
+        depthField: "level",
+        restrictSearchWithMatch: { active: true, dept: "Eng" },
+      },
+    }, 2);
+    expect(graphLookupInfo.producedFields.has("hierarchy")).toBe(true);
+    expect(graphLookupInfo.producedFields.has("level")).toBe(true);
+    expect(graphLookupInfo.usedFields.has("reportsTo")).toBe(true);
+    expect(graphLookupInfo.usedFields.has("connectFromField")).toBe(false);
+    expect(graphLookupInfo.usedFields.has("active")).toBe(true);
+    expect(graphLookupInfo.usedFields.has("dept")).toBe(true);
+
+    // $project
+    const projectInclusion = getStageInfo({
+      $project: {
+        name: 1,
+        computed: { $concat: ["$first", " ", "$last"] },
+        simpleAlias: "$role",
+      },
+    }, 3);
+    expect(projectInclusion.isDestructive).toBe(true);
+    expect(projectInclusion.producedFields.has("name")).toBe(true);
+    expect(projectInclusion.usedFields.has("first")).toBe(true);
+    expect(projectInclusion.usedFields.has("role")).toBe(true);
+
+    const projectExclusion = getStageInfo({
+      $project: {
+        secret: 0,
+        password: 0,
+      },
+    }, 4);
+    expect(projectExclusion.isDestructive).toBe(false);
+    expect(projectExclusion.removedFields.has("secret")).toBe(true);
+    expect(projectExclusion.removedFields.has("password")).toBe(true);
+
+    // $sort, $limit, $skip, $sample
+    const sortInfo = getStageInfo({ $sort: { score: -1, date: 1 } }, 5);
+    expect(sortInfo.usedFields.has("score")).toBe(true);
+    expect(sortInfo.usedFields.has("date")).toBe(true);
+
+    const limitInfo = getStageInfo({ $limit: 10 }, 6);
+    expect(limitInfo.altersCount).toBe(true);
+
+    const skipInfo = getStageInfo({ $skip: 5 }, 7);
+    expect(skipInfo.altersCount).toBe(true);
+
+    const sampleInfo = getStageInfo({ $sample: { size: 3 } }, 8);
+    expect(sampleInfo.altersCount).toBe(true);
+
+    // $addFields / $set / $unset
+    const addFieldsInfo = getStageInfo({
+      $addFields: {
+        tax: { $multiply: ["$subtotal", 0.1] },
+        sameField: "$sameField",
+      },
+    }, 9);
+    expect(addFieldsInfo.producedFields.has("tax")).toBe(true);
+    expect(addFieldsInfo.modifiedFields.has("tax")).toBe(true);
+    expect(addFieldsInfo.modifiedFields.has("sameField")).toBe(false);
+
+    const unsetInfo = getStageInfo({ $unset: ["temp", "cache"] }, 10);
+    expect(unsetInfo.removedFields.has("temp")).toBe(true);
+    expect(unsetInfo.removedFields.has("cache")).toBe(true);
+
+    const unsetSingle = getStageInfo({ $unset: "tempOne" }, 11);
+    expect(unsetSingle.removedFields.has("tempOne")).toBe(true);
+
+    // $unwind
+    const unwindStr = getStageInfo({ $unwind: "$tags" }, 12);
+    expect(unwindStr.altersCount).toBe(true);
+    expect(unwindStr.usedFields.has("tags")).toBe(true);
+
+    const unwindObj = getStageInfo({
+      $unwind: { path: "$items", includeArrayIndex: "itemIndex" },
+    }, 13);
+    expect(unwindObj.producedFields.has("items")).toBe(true);
+    expect(unwindObj.producedFields.has("itemIndex")).toBe(true);
+
+    // $count, $sortByCount
+    const countInfo = getStageInfo({ $count: "totalDocs" }, 14);
+    expect(countInfo.isDestructive).toBe(true);
+    expect(countInfo.producedFields.has("totalDocs")).toBe(true);
+
+    const sortByCountInfo = getStageInfo({ $sortByCount: "$department" }, 15);
+    expect(sortByCountInfo.isDestructive).toBe(true);
+    expect(sortByCountInfo.usedFields.has("department")).toBe(true);
+    expect(sortByCountInfo.producedFields.has("_id")).toBe(true);
+    expect(sortByCountInfo.producedFields.has("count")).toBe(true);
+
+    // $replaceRoot, $replaceWith
+    const replaceRootInfo = getStageInfo({ $replaceRoot: { newRoot: "$nested" } }, 16);
+    expect(replaceRootInfo.isDestructive).toBe(true);
+    expect(replaceRootInfo.usedFields.has("nested")).toBe(true);
+
+    const replaceWithInfo = getStageInfo({ $replaceWith: "$subdoc" }, 17);
+    expect(replaceWithInfo.isDestructive).toBe(true);
+    expect(replaceWithInfo.usedFields.has("subdoc")).toBe(true);
+
+    // $facet
+    const facetInfo = getStageInfo({
+      $facet: {
+        priceStats: [{ $group: { _id: null, avgPrice: { $avg: "$price" } } }],
+        topItems: [{ $sort: { score: -1 } }, { $limit: 5 }],
+      },
+    }, 18);
+    expect(facetInfo.producedFields.has("priceStats")).toBe(true);
+    expect(facetInfo.producedFields.has("topItems")).toBe(true);
+    expect(facetInfo.usedFields.has("price")).toBe(true);
+    expect(facetInfo.usedFields.has("score")).toBe(true);
+
+    // Remaining standard stages: $bucket, $bucketAuto, $setWindowFields, $densify, $fill, $documents, $unionWith
+    const bucketInfo = getStageInfo({
+      $bucket: {
+        groupBy: "$price",
+        boundaries: [0, 50, 100],
+        output: { count: { $sum: 1 } },
+      },
+    }, 19);
+    expect(bucketInfo.isDestructive).toBe(true);
+    expect(bucketInfo.usedFields.has("price")).toBe(true);
+
+    const bucketAutoInfo = getStageInfo({
+      $bucketAuto: {
+        groupBy: "$score",
+        buckets: 5,
+        output: { count: { $sum: 1 } },
+      },
+    }, 20);
+    expect(bucketAutoInfo.isDestructive).toBe(true);
+    expect(bucketAutoInfo.usedFields.has("score")).toBe(true);
+
+    const setWindowFieldsInfo = getStageInfo({
+      $setWindowFields: {
+        partitionBy: "$state",
+        sortBy: { date: 1 },
+        output: {
+          cumulativeRevenue: {
+            $sum: "$revenue",
+            window: { documents: ["unbounded", "current"] },
+          },
+        },
+      },
+    }, 21);
+    expect(setWindowFieldsInfo.producedFields.has("cumulativeRevenue")).toBe(true);
+    expect(setWindowFieldsInfo.usedFields.has("state")).toBe(true);
+    expect(setWindowFieldsInfo.usedFields.has("date")).toBe(true);
+
+    const densifyInfo = getStageInfo({
+      $densify: {
+        field: "timestamp",
+        partitionByFields: ["sensorId"],
+        range: { step: 1, unit: "hour", bounds: "full" },
+      },
+    }, 22);
+    expect(densifyInfo.altersCount).toBe(true);
+    expect(densifyInfo.usedFields.has("timestamp")).toBe(true);
+    expect(densifyInfo.usedFields.has("sensorId")).toBe(true);
+
+    const fillInfo = getStageInfo({
+      $fill: {
+        partitionBy: { state: "$state" },
+        sortBy: { date: 1 },
+        output: {
+          score: { method: "linear" },
+          points: { value: 0 },
+        },
+      },
+    }, 23);
+    expect(fillInfo.usedFields.has("state")).toBe(true);
+    expect(fillInfo.usedFields.has("date")).toBe(true);
+    expect(fillInfo.producedFields.has("score")).toBe(true);
+    expect(fillInfo.producedFields.has("points")).toBe(true);
+
+    const documentsInfo = getStageInfo({
+      $documents: [{ x: 1 }, { x: 2 }],
+    }, 24);
+    expect(documentsInfo.isDestructive).toBe(true);
+    expect(documentsInfo.altersCount).toBe(true);
+
+    const unionWithInfo = getStageInfo({
+      $unionWith: {
+        coll: "archive",
+        pipeline: [{ $match: { archived: true } }],
+      },
+    }, 25);
+    expect(unionWithInfo.altersCount).toBe(true);
+  });
 });

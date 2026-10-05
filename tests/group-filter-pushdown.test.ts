@@ -5,6 +5,8 @@ import {
 import {
   GroupFilterPushdownPass,
 } from "../src/passes/group-filter-pushdown.js";
+import { optimizePipeline } from "../src/index.js";
+import { runMockPipeline } from "./helpers/mock-engine.js";
 
 describe("proveGroupFilterPushdown", () =>
 {
@@ -314,5 +316,150 @@ describe("GroupFilterPushdownPass", () =>
 
     const result = pass.execute(pipeline);
     expect(result).toEqual(pipeline);
+  });
+});
+
+describe("optimizePipeline execution parity for group filter pushdown", () =>
+{
+  const employeeDataset = [
+    { _id: 1, userId: "user-1", department: "Sales", role: "Manager", salary: 120, active: true },
+    { _id: 2, userId: "user-1", department: "Sales", role: "Rep", salary: 80, active: true },
+    { _id: 3, userId: "user-2", department: "Engineering", role: "Lead", salary: 150, active: true },
+    { _id: 4, userId: "user-2", department: "Engineering", role: "Dev", salary: 110, active: false },
+    { _id: 5, userId: "user-3", department: "Sales", role: "Rep", salary: 90, active: true },
+    { _id: 6, userId: "user-4", department: "HR", role: "Lead", salary: 95, active: true },
+  ];
+
+  it("optimizes 1-to-1 string _id group match and preserves execution parity", () =>
+  {
+    const pipeline = [
+      {
+        $group: {
+          _id: "$userId",
+          count: { $sum: 1 },
+          totalSalary: { $sum: "$salary" },
+        },
+      },
+      {
+        $match: {
+          _id: "user-1",
+        },
+      },
+    ];
+
+    const optimized = optimizePipeline(pipeline);
+    expect(optimized[0]).toEqual({
+      $match: {
+        userId: "user-1",
+      },
+    });
+
+    const originalResults = runMockPipeline(employeeDataset, pipeline);
+    const optimizedResults = runMockPipeline(employeeDataset, optimized);
+
+    expect(optimizedResults).toEqual(originalResults);
+    expect(optimizedResults).toEqual([
+      { _id: "user-1", count: 2, totalSalary: 200 },
+    ]);
+  });
+
+  it("optimizes subdocument _id group match with nested paths and preserves execution parity", () =>
+  {
+    const pipeline = [
+      {
+        $group: {
+          _id: {
+            dept: "$department",
+            role: "$role",
+          },
+          totalSalary: { $sum: "$salary" },
+        },
+      },
+      {
+        $match: {
+          "_id.dept": "Sales",
+        },
+      },
+      {
+        $sort: { totalSalary: -1 },
+      },
+    ];
+
+    const optimized = optimizePipeline(pipeline);
+    expect(optimized[0]).toEqual({
+      $match: {
+        department: "Sales",
+      },
+    });
+
+    const originalResults = runMockPipeline(employeeDataset, pipeline);
+    const optimizedResults = runMockPipeline(employeeDataset, optimized);
+
+    expect(optimizedResults).toEqual(originalResults);
+    expect(optimizedResults.length).toBeGreaterThan(0);
+  });
+
+  it("optimizes mixed _id and accumulator conditions and preserves execution parity", () =>
+  {
+    const pipeline = [
+      {
+        $group: {
+          _id: "$userId",
+          totalSalary: { $sum: "$salary" },
+        },
+      },
+      {
+        $match: {
+          _id: "user-1",
+          totalSalary: { $gt: 150 },
+        },
+      },
+    ];
+
+    const optimized = optimizePipeline(pipeline);
+    expect(optimized[0]).toEqual({
+      $match: {
+        userId: "user-1",
+      },
+    });
+    expect(optimized[optimized.length - 1]).toEqual({
+      $match: {
+        totalSalary: { $gt: 150 },
+      },
+    });
+
+    const originalResults = runMockPipeline(employeeDataset, pipeline);
+    const optimizedResults = runMockPipeline(employeeDataset, optimized);
+
+    expect(optimizedResults).toEqual(originalResults);
+    expect(optimizedResults).toEqual([
+      { _id: "user-1", totalSalary: 200 },
+    ]);
+  });
+
+  it("optimizes multi-stage pipeline with preceding match and post-sort/limit", () =>
+  {
+    const pipeline = [
+      { $match: { active: true } },
+      {
+        $group: {
+          _id: "$department",
+          headcount: { $sum: 1 },
+          payroll: { $sum: "$salary" },
+        },
+      },
+      { $match: { _id: "Sales" } },
+      { $sort: { payroll: -1 } },
+      { $limit: 10 },
+    ];
+
+    const optimized = optimizePipeline(pipeline);
+    const originalResults = runMockPipeline(employeeDataset, pipeline);
+    const optimizedResults = runMockPipeline(employeeDataset, optimized);
+
+    expect(optimizedResults).toEqual(originalResults);
+    expect(optimizedResults).toEqual([
+      { _id: "Sales", headcount: 3, payroll: 290 },
+    ]);
   });
 });

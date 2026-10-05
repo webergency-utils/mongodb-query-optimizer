@@ -5,6 +5,8 @@ import {
 import {
   FacetPrefixHoistingPass,
 } from "../src/passes/facet-prefix-hoisting.js";
+import { optimizePipeline } from "../src/index.js";
+import { runMockPipeline } from "./helpers/mock-engine.js";
 
 describe("proveFacetPrefixHoisting", () =>
 {
@@ -275,5 +277,49 @@ describe("FacetPrefixHoistingPass", () =>
 
     const result = pass.execute(pipeline);
     expect(result).toEqual(pipeline);
+  });
+});
+
+describe("optimizePipeline execution parity for facet prefix hoisting", () =>
+{
+  const tenantDataset = [
+    { _id: 1, orgId: "org-1", status: "active", revenue: 100 },
+    { _id: 2, orgId: "org-1", status: "pending", revenue: 50 },
+    { _id: 3, orgId: "org-1", status: "active", revenue: 200 },
+    { _id: 4, orgId: "org-2", status: "active", revenue: 500 },
+    { _id: 5, orgId: "org-1", status: "active", revenue: 300 },
+  ];
+
+  it("hoists common $match out of $facet and preserves execution parity", () =>
+  {
+    const pipeline = [
+      {
+        $facet: {
+          activeCount: [
+            { $match: { orgId: "org-1" } },
+            { $count: "count" },
+          ],
+          totalRevenue: [
+            { $match: { orgId: "org-1" } },
+            { $group: { _id: null, sum: { $sum: "$revenue" } } },
+          ],
+        },
+      },
+    ];
+
+    const optimized = optimizePipeline(pipeline);
+    // Common match should be hoisted before $facet
+    expect(optimized[0]).toEqual({
+      $match: {
+        orgId: "org-1",
+      },
+    });
+
+    const originalResults = runMockPipeline(tenantDataset, pipeline);
+    const optimizedResults = runMockPipeline(tenantDataset, optimized);
+
+    expect(optimizedResults).toEqual(originalResults);
+    expect(optimizedResults[0].activeCount).toEqual([{ count: 4 }]);
+    expect(optimizedResults[0].totalRevenue).toEqual([{ _id: null, sum: 650 }]);
   });
 });

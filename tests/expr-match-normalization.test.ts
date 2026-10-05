@@ -5,6 +5,8 @@ import {
 import {
   ExprMatchNormalizationPass,
 } from "../src/passes/expr-match-normalization.js";
+import { optimizePipeline } from "../src/index.js";
+import { runMockPipeline } from "./helpers/mock-engine.js";
 
 describe("proveExprToNativeMatch", () =>
 {
@@ -253,6 +255,114 @@ describe("ExprMatchNormalizationPass", () =>
       new CustomStage(),
       { $match: { a: 1 } },
       { $match: { $expr: { $eq: ["$a", 1] } }, extra: 1 },
+    ]);
+  });
+});
+
+describe("optimizePipeline execution parity for expr match normalization", () =>
+{
+  const productDataset = [
+    { _id: 1, sku: "PROD-1", category: "audio", price: 150, rating: 4.8 },
+    { _id: 2, sku: "PROD-2", category: "video", price: 300, rating: 4.2 },
+    { _id: 3, sku: "PROD-3", category: "audio", price: 50, rating: 3.9 },
+    { _id: 4, sku: "PROD-4", category: "computing", price: 800, rating: 4.9 },
+    { _id: 5, sku: "PROD-5", category: "video", price: 120, rating: 4.0 },
+  ];
+
+  it("normalizes $expr equality into native match and preserves execution parity", () =>
+  {
+    const pipeline = [
+      {
+        $match: {
+          $expr: {
+            $eq: ["$category", "audio"],
+          },
+        },
+      },
+    ];
+
+    const optimized = optimizePipeline(pipeline);
+    expect(optimized).toEqual([
+      {
+        $match: {
+          category: "audio",
+        },
+      },
+    ]);
+
+    const originalResults = runMockPipeline(productDataset, pipeline);
+    const optimizedResults = runMockPipeline(productDataset, optimized);
+
+    expect(optimizedResults).toEqual(originalResults);
+    expect(optimizedResults).toHaveLength(2);
+  });
+
+  it("normalizes inverted range $expr and preserves execution parity", () =>
+  {
+    // 200 < price <=> price > 200
+    const pipeline = [
+      {
+        $match: {
+          $expr: {
+            $lt: [200, "$price"],
+          },
+        },
+      },
+    ];
+
+    const optimized = optimizePipeline(pipeline);
+    expect(optimized).toEqual([
+      {
+        $match: {
+          price: { $gt: 200 },
+        },
+      },
+    ]);
+
+    const originalResults = runMockPipeline(productDataset, pipeline);
+    const optimizedResults = runMockPipeline(productDataset, optimized);
+
+    expect(optimizedResults).toEqual(originalResults);
+    expect(optimizedResults.map((p) => p.sku)).toEqual(["PROD-2", "PROD-4"]);
+  });
+
+  it("normalizes compound $expr and downstream group/sort with parity", () =>
+  {
+    const pipeline = [
+      {
+        $match: {
+          $expr: {
+            $gte: ["$price", 100],
+          },
+        },
+      },
+      {
+        $group: {
+          _id: "$category",
+          totalRevenue: { $sum: "$price" },
+          itemCount: { $sum: 1 },
+        },
+      },
+      {
+        $sort: { totalRevenue: -1 },
+      },
+    ];
+
+    const optimized = optimizePipeline(pipeline);
+    expect(optimized[0]).toEqual({
+      $match: {
+        price: { $gte: 100 },
+      },
+    });
+
+    const originalResults = runMockPipeline(productDataset, pipeline);
+    const optimizedResults = runMockPipeline(productDataset, optimized);
+
+    expect(optimizedResults).toEqual(originalResults);
+    expect(optimizedResults).toEqual([
+      { _id: "computing", totalRevenue: 800, itemCount: 1 },
+      { _id: "video", totalRevenue: 420, itemCount: 2 },
+      { _id: "audio", totalRevenue: 150, itemCount: 1 },
     ]);
   });
 });
