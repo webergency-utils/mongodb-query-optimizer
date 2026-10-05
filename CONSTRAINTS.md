@@ -30,3 +30,19 @@ Enabled pair-specific rewrites that preserve successful results:
 - Deterministic `$addFields` / `$set` delayed past `$sort` when the sort keys do not overlap the writes
 
 `$unwind` or `$group` next to `$limit` still cannot move: they change which rows exist. Generic `stage-priority-reorder` stays contained.
+
+## Contained Passes & Scheduler Invariants
+
+The optimizer registry distinguishes active (proven sound across all BSON types and multikey arrays) from contained transformations:
+
+1. **`stage-priority-reorder` (Contained)**:
+   - Stages in a MongoDB aggregation pipeline do not form a total-order lattice.
+   - A priority bubble sort (`STAGE_ORDER`) assumes stages can be commuted toward a global canonical order.
+   - In practice, pairwise swaps without domain-specific path and cardinality proofs cause silent document divergence (e.g. leaking temporary fields, altering document count across `$limit`, changing sort stability).
+   - Pipeline reordering must remain pairwise and proof-driven (e.g. `match-pushdown`, `sort-project-commute`, `lookup-delay`).
+
+2. **`redundant-projection-elimination` (Contained)**:
+   - Eliminating an arbitrary `$project` stage across non-adjacent stages requires schema knowledge: in MongoDB, projection is lossy unless every field in the incoming stream is explicitly accounted for.
+   - Empty projections (`{ $project: {} }`) are invalid MongoDB syntax and trigger server errors; removing them would mask developer bugs.
+   - Adjacent identical or subsumable simple projections are already safely coalesced by the active `adjacent-project-merging` pass.
+   - Standalone elimination remains safely contained until schema-aware typing or full-stream path reachability proofs are supplied.
