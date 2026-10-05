@@ -93,6 +93,18 @@ describe.sequential("MongoDB 8 differential oracle", () =>
 
   beforeAll(async () =>
   {
+    try
+    {
+      if (typeof process.loadEnvFile === "function")
+      {
+        process.loadEnvFile();
+      }
+    }
+    catch
+    {
+      // .env is optional when environment variables are supplied directly
+    }
+
     const configuration = validateMongoOracleEnvironment(process.env);
     oracle = new MongoDifferentialOracle(configuration);
     await oracle.connect();
