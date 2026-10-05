@@ -190,9 +190,9 @@ function optimizeFilterWithRules(
   return rootCopy;
 }
 
-export function optimizeFilter(filter: any): any
+export function optimizeFilter<T = any>( filter: any ): T
 {
-  return optimizeFilterWithRules(filter, getActiveFilterRules());
+    return optimizeFilterWithRules( filter, getActiveFilterRules());
 }
 
 /**

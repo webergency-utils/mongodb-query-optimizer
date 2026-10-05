@@ -1,7 +1,8 @@
 {
   "name": "@webergency-utils/mongodb-query-optimizer",
   "version": "0.0.1",
-  "description": "",
+  "description": "Deterministic, zero-dependency MongoDB query and aggregation pipeline optimizer with formal correctness proofs.",
+  "license": "MIT",
   "author": "radixxko",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
