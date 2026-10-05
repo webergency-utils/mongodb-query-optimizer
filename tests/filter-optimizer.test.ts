@@ -311,6 +311,106 @@ describe("atomic filter candidates", () =>
     });
   });
 
+  it("deduplicates $in elements and simplifies to scalar equality when possible", () =>
+  {
+    expect(
+      optimizeFilterWithCandidateProfile({
+        tag: { $in: ["a", "a"] },
+      }, ["simplify-singleton-in"]),
+    ).toEqual({
+      tag: "a",
+    });
+
+    expect(
+      optimizeFilterWithCandidateProfile({
+        tag: { $in: ["a", "b", "a"] },
+      }, ["simplify-singleton-in"]),
+    ).toEqual({
+      tag: { $in: ["a", "b"] },
+    });
+
+    expect(
+      optimizeFilterWithCandidateProfile({
+        tag: { $in: [/abc/i, /abc/i] },
+      }, ["simplify-singleton-in"]),
+    ).toEqual({
+      tag: { $in: [/abc/i] },
+    });
+
+    const uniqueIn = { tag: { $in: ["a", "b"] } };
+    expect(
+      optimizeFilterWithCandidateProfile(uniqueIn, ["simplify-singleton-in"]),
+    ).toEqual(uniqueIn);
+  });
+
+  it("deduplicates $or branches and unwraps single-condition disjunctions", () =>
+  {
+    expect(
+      optimizeFilterWithCandidateProfile({
+        $or: [{ a: 1 }, { a: 1 }],
+      }, ["simplify-disjunction-identities"]),
+    ).toEqual({
+      a: 1,
+    });
+
+    expect(
+      optimizeFilterWithCandidateProfile({
+        $or: [{ status: "active" }],
+      }, ["simplify-disjunction-identities"]),
+    ).toEqual({
+      status: "active",
+    });
+
+    expect(
+      optimizeFilterWithCandidateProfile({
+        $or: [{ a: 1 }, { b: 2 }, { a: 1 }],
+      }, ["simplify-disjunction-identities"]),
+    ).toEqual({
+      $or: [{ a: 1 }, { b: 2 }],
+    });
+
+    expect(
+      optimizeFilterWithCandidateProfile({
+        tenant: "acme",
+        $or: [{ a: 1 }, { a: 1 }],
+      }, ["simplify-disjunction-identities"]),
+    ).toEqual({
+      tenant: "acme",
+      $or: [{ a: 1 }],
+    });
+
+    expect(
+      optimizeFilterWithCandidateProfile({
+        tenant: "acme",
+        $and: [{}],
+      }, ["simplify-conjunction-identities"]),
+    ).toEqual({
+      tenant: "acme",
+    });
+
+    expect(
+      optimizeFilterWithCandidateProfile({
+        $and: [{}],
+      }, ["simplify-conjunction-identities"]),
+    ).toEqual({});
+
+    expect(
+      optimizeFilterWithCandidateProfile({
+        tag: { $in: "invalid" as any },
+      }, ["simplify-singleton-in"]),
+    ).toEqual({
+      tag: { $in: "invalid" },
+    });
+
+    expect(
+      optimizeFilterWithCandidateProfile({
+        $and: ["not-an-object", { a: 1 }],
+      }, ["merge-conjunctions"]),
+    ).toEqual({
+      $and: ["not-an-object", { a: 1 }],
+    });
+  });
+
   it("flattens only valid non-empty arrays of the same logical operator", () =>
   {
     expect(

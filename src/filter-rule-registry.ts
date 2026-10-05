@@ -103,12 +103,44 @@ function simplifySingleFieldOperator(
       continue;
     }
 
-    const operand = operator === "$eq"
-      ? value.$eq
-      : Array.isArray(value.$in) && value.$in.length === 1
-        ? value.$in[0]
-        : undefined;
+        if( operator === '$in' )
+        {
+            if( !Array.isArray( value.$in )){ continue }
 
+            const seen = new Set<string>();
+            const unique: any[] = [];
+
+            for( const item of value.$in )
+            {
+                const fp = structuralFingerprint( item );
+
+                if( !seen.has( fp ))
+                {
+                    seen.add( fp );
+                    unique.push( item );
+                }
+            }
+
+            if( unique.length === 1 && isSafeImplicitEqualityValue( unique[0] ))
+            {
+                if( result === filter ){ result = { ...filter } }
+
+                result[key] = unique[0];
+                continue;
+            }
+
+            if( unique.length < value.$in.length )
+            {
+                if( result === filter ){ result = { ...filter } }
+
+                result[key] = { ...value, $in: unique };
+                continue;
+            }
+
+            continue;
+        }
+
+    const operand = value.$eq;
     if (!isSafeImplicitEqualityValue(operand))
     {
       continue;
@@ -245,15 +277,40 @@ const simplifyDisjunctionIdentitiesRule: FilterRule = {
     if (
       !Array.isArray(conditions)
       || conditions.length === 0
-      || !conditions.some((condition) => isEmptyFilter(condition))
       || !isFilterRewriteSafe(filter)
     )
     {
       return filter;
     }
 
-    const { $or: _removed, ...rest } = filter;
-    return rest;
+        if( conditions.some(( condition ) => isEmptyFilter( condition )))
+        {
+            const { $or: _removed, ...rest } = filter;
+
+            return rest;
+        }
+
+        const seen = new Set<string>();
+        const unique: any[] = [];
+
+        for( const condition of conditions )
+        {
+            const fingerprint = structuralFingerprint( condition );
+
+            if( !seen.has( fingerprint ))
+            {
+                seen.add( fingerprint );
+                unique.push( condition );
+            }
+        }
+
+        const isOnlyCondition = Object.keys( filter ).length === 1;
+
+        if( isOnlyCondition && unique.length === 1 ){ return unique[0] }
+
+        return unique.length === conditions.length
+            ? filter
+            : { ...filter, $or: unique };
   },
 };
 
