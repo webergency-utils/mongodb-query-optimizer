@@ -10,6 +10,9 @@ import {
     AdjacentProjectMergingPass,
 } from '../src/passes/adjacent-project-merging.js';
 import {
+    UnusedFieldPruningPass,
+} from '../src/passes/unused-field-pruning.js';
+import {
     candidateSemanticCases,
     productionSemanticCases,
 } from './fixtures/semantic-cases.js';
@@ -437,6 +440,35 @@ describe('exact dead add-field pruning proofs', () =>
         ], UNUSED_FIELD_PRUNING)).toEqual([
             { $addFields: { kept: 1 } },
             { $project: { secret: 0 } },
+        ]);
+    });
+
+    it('respects strictErrors and leaves error-prone stages intact', () =>
+    {
+        const pass = new UnusedFieldPruningPass();
+        const errorPronePipeline = [
+            { $addFields: { dead: '$val', errorField: { $toInt: '$val' } } },
+            { $project: { _id: 1, errorField: 1 } },
+        ];
+
+        // Default mode prunes dead field
+        expect(pass.execute(errorPronePipeline, { strictFieldOrder: false, strictErrors: false })).toEqual([
+            { $addFields: { errorField: { $toInt: '$val' } } },
+            { $project: { _id: 1, errorField: 1 } },
+        ]);
+
+        // Strict errors mode refuses to touch error-prone stage
+        expect(pass.execute(errorPronePipeline, { strictFieldOrder: false, strictErrors: true })).toEqual(
+            errorPronePipeline,
+        );
+
+        // Proven error-free stage is pruned even in strictErrors mode
+        const safePipeline = [
+            { $addFields: { dead: '$val' } },
+            { $project: { _id: 1 } },
+        ];
+        expect(pass.execute(safePipeline, { strictFieldOrder: false, strictErrors: true })).toEqual([
+            { $project: { _id: 1 } },
         ]);
     });
 

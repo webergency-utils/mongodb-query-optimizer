@@ -345,6 +345,16 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'u9-generated-top-level-unused-field-pruning',
         'u9-generated-nested-unused-field-pruning',
         'u6-nested-facet-safe-rewrites',
+        {
+            status: 'active',
+            proofRecheckNote: 'Proof audited: eliminates overwritten or unobserved added/set fields before projections/unsets; under strictErrors, error-prone stages cannot be removed.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-unused-field-pruning',
+                strictFieldOrder: 'mixed-shape-unused-field-pruning',
+                strictErrors: 'mixed-shape-unused-field-pruning'
+            },
+            strictModeBehavior: 'constrained'
+        }
     ),
     evidence(
         'adjacent-project-merging',

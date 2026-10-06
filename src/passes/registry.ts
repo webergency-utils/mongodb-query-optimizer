@@ -75,6 +75,7 @@ const activePipelineTransformationIds: readonly PipelineTransformationId[] = Obj
     'limit-advance',
     'add-field-pushdown',
     'top-k-pushdown',
+    'unused-field-pruning',
     'lookup-delay'
 ]);
 
