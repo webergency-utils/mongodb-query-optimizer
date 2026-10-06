@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { optimizeFilter, optimizePipeline } from '../src/index.js';
+import { optimizeFilter, optimizePipeline } from './helpers/pre-gate-optimizer.js';
 import { optimizePipelineWithCandidateProfile } from '../src/passes/registry.js';
 import { runMockPipeline } from './helpers/mock-engine.js';
 

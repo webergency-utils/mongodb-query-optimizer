@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BucketFilterPushdownPass } from '../src/passes/bucket-filter-pushdown';
 import { proveBucketFilterPushdown } from '../src/passes/bucket-pushdown-proofs';
-import { optimizePipeline } from '../src/index';
+import { optimizePipeline } from './helpers/pre-gate-optimizer.js';
 import { runMockPipeline } from './helpers/mock-engine';
 
 describe( 'bucket-pushdown-proofs unit and branch analysis', () =>

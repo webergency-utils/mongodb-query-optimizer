@@ -5,7 +5,7 @@ import {
 import {
     FacetPrefixHoistingPass,
 } from '../src/passes/facet-prefix-hoisting.js';
-import { optimizePipeline } from '../src/index.js';
+import { optimizePipeline } from './helpers/pre-gate-optimizer.js';
 import { runMockPipeline } from './helpers/mock-engine.js';
 
 describe('proveFacetPrefixHoisting', () =>

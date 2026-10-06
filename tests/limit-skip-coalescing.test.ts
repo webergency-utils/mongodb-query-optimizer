@@ -5,7 +5,7 @@ import {
     Long,
 } from 'mongodb';
 import { describe, expect, it } from 'vitest';
-import { optimizePipeline } from '../src/index.js';
+import { optimizePipeline } from './helpers/pre-gate-optimizer.js';
 import {
     LimitSkipCoalescingPass,
     proveLimitSkipCoalescing,

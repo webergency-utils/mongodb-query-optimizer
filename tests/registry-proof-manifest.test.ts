@@ -16,10 +16,11 @@ import {
 import {
     filterProofManifest,
     pipelineProofManifest,
+    validateGateRecord,
     type TransformationProofEvidence,
 } from './fixtures/proof-manifest.js';
 
-const EXPECTED_ACTIVE_FILTER_IDS = [
+const REGISTERED_FILTER_IDS = [
     'simplify-equality',
     'simplify-singleton-in',
     'flatten-conjunctions',
@@ -30,7 +31,14 @@ const EXPECTED_ACTIVE_FILTER_IDS = [
     'merge-conjunctions',
 ] as const;
 
-const EXPECTED_ACTIVE_PIPELINE_IDS = [
+const EXPECTED_CONTAINED_PIPELINE_IDS = [
+    'stage-priority-reorder',
+    'redundant-projection-elimination',
+    'covered-projection-synthesis',
+    'dead-assignment-elimination',
+] as const;
+
+const REGISTERED_PIPELINE_IDS = [
     'expr-match-normalization',
     'filter-optimization',
     'adjacent-match-merging',
@@ -52,13 +60,7 @@ const EXPECTED_ACTIVE_PIPELINE_IDS = [
     'sort-project-commute',
     'complex-projection-deferral',
     'facet-prefix-hoisting',
-] as const;
-
-const EXPECTED_CONTAINED_PIPELINE_IDS = [
-    'stage-priority-reorder',
-    'redundant-projection-elimination',
-    'covered-projection-synthesis',
-    'dead-assignment-elimination',
+    ...EXPECTED_CONTAINED_PIPELINE_IDS,
 ] as const;
 
 function expectUnique(values: readonly string[]): void
@@ -92,23 +94,20 @@ describe('explicit immutable transformation registries', () =>
     {
         const status = getFilterRuleRegistryStatus();
 
-        expect(status.active).toEqual(EXPECTED_ACTIVE_FILTER_IDS);
+        expect(status.active).toEqual([]);
         expect(status.contained).toEqual([]);
-        expect(status.registered).toEqual(EXPECTED_ACTIVE_FILTER_IDS);
+        expect(status.registered).toEqual(REGISTERED_FILTER_IDS);
         expectUnique(status.registered);
         expectImmutableStatus(status);
     });
 
-    it('admits only proven U4-U6 and limit-skip pipeline transformations', () =>
+    it('admits only proven and gated pipeline transformations', () =>
     {
         const status = getPipelineTransformationRegistryStatus();
 
-        expect(status.active).toEqual(EXPECTED_ACTIVE_PIPELINE_IDS);
+        expect(status.active).toEqual([]);
         expect(status.contained).toEqual(EXPECTED_CONTAINED_PIPELINE_IDS);
-        expect(status.registered).toEqual([
-            ...EXPECTED_ACTIVE_PIPELINE_IDS,
-            ...EXPECTED_CONTAINED_PIPELINE_IDS,
-        ]);
+        expect(status.registered).toEqual(REGISTERED_PIPELINE_IDS);
         expectUnique(status.registered);
         expect(
             status.active.filter((id) => status.contained.includes(id)),
@@ -139,13 +138,77 @@ describe('active transformation proof manifest', () =>
 
         expectUnique(filterManifestIds);
         expectUnique(pipelineManifestIds);
-        expect(filterManifestIds).toEqual(filterStatus.active);
-        expect(pipelineManifestIds).toEqual(pipelineStatus.active);
+
+        // Every active transformation must have an active gate record in manifest
+        const activeFilterManifestIds = filterProofManifest
+            .filter((entry) => entry.gate?.status === 'active')
+            .map((entry) => entry.transformationId);
+        const activePipelineManifestIds = pipelineProofManifest
+            .filter((entry) => entry.gate?.status === 'active')
+            .map((entry) => entry.transformationId);
+
+        expect(activeFilterManifestIds).toEqual(filterStatus.active);
+        expect(activePipelineManifestIds).toEqual(pipelineStatus.active);
+
+        // Every active pass must have a complete gate record
+        for( const entry of [...filterProofManifest, ...pipelineProofManifest] )
+        {
+            if( entry.gate.status === 'active' )
+            {
+                expect(() => validateGateRecord( entry )).not.toThrow();
+            }
+        }
+
         expect(
             pipelineStatus.contained.filter((id) =>
                 pipelineManifestIds.includes(id),
             ),
         ).toEqual([]);
+    });
+
+    it('validates gate record requirements and rejects incomplete records', () =>
+    {
+        // 1. Missing gate record
+        expect(() => validateGateRecord({ transformationId: 'dummy' } as any)).toThrow(
+            'lacks a gate record'
+        );
+
+        // 2. Active without proofRecheckNote
+        expect(() =>
+            validateGateRecord({
+                transformationId: 'dummy',
+                gate: { status: 'active', proofRecheckNote: '' },
+            } as any)
+        ).toThrow('lacks a proofRecheckNote');
+
+        // 3. Active without complete mixedShapeCaseIds
+        expect(() =>
+            validateGateRecord({
+                transformationId: 'dummy',
+                gate: {
+                    status: 'active',
+                    proofRecheckNote: 'Note',
+                    mixedShapeCaseIds: { default: 'case-def' } as any,
+                },
+            } as any)
+        ).toThrow('lacks complete mixedShapeCaseIds');
+
+        // 4. Active without valid strictModeBehavior
+        expect(() =>
+            validateGateRecord({
+                transformationId: 'dummy',
+                gate: {
+                    status: 'active',
+                    proofRecheckNote: 'Note',
+                    mixedShapeCaseIds: {
+                        default: 'c1',
+                        strictFieldOrder: 'c2',
+                        strictErrors: 'c3',
+                    },
+                    strictModeBehavior: 'invalid' as any,
+                },
+            } as any)
+        ).toThrow('lacks valid strictModeBehavior');
     });
 
     it('maps every active ID to focused, interaction, nested, and server evidence', () =>

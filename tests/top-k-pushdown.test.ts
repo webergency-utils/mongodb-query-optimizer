@@ -9,7 +9,7 @@ import
     proveTopKPushdown,
 }
 from '../src/passes/top-k-proofs.js';
-import { optimizePipeline } from '../src/index.js';
+import { optimizePipeline } from './helpers/pre-gate-optimizer.js';
 import { runMockPipeline } from './helpers/mock-engine.js';
 
 describe( 'top-k-proofs unit and branch analysis', () =>

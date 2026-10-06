@@ -11,7 +11,7 @@ import
     proveRedundantSortElimination 
 } 
 from '../src/passes/sort-proofs';
-import { optimizePipeline } from '../src/index';
+import { optimizePipeline } from './helpers/pre-gate-optimizer.js';
 import { runMockPipeline } from './helpers/mock-engine';
 
 describe( 'sort-proofs unit and branch analysis', () =>

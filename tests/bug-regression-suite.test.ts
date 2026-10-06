@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { optimizePipeline } from '../src/index.js';
+import { optimizePipeline } from './helpers/pre-gate-optimizer.js';
 import { proveGroupFilterPushdown } from '../src/passes/group-pushdown-proofs.js';
 import { proveMatchPushdownAcrossStage } from '../src/passes/movement-proofs.js';
 import { runMockPipeline } from './helpers/mock-engine.js';

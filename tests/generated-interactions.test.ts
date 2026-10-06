@@ -5,7 +5,9 @@ import {
 import {
     optimizeFilter,
     optimizePipeline,
-} from '../src/index.js';
+    PRE_GATE_FILTER_RULE_IDS,
+    PRE_GATE_PIPELINE_TRANSFORMATION_IDS,
+} from './helpers/pre-gate-optimizer.js';
 import {
     getPipelineTransformationRegistryStatus,
 } from '../src/passes/registry.js';
@@ -88,10 +90,10 @@ describe('deterministic generated active-rule interactions', () =>
             testCase.id.startsWith('u9-generated-nested-'),
         );
 
-        expect(topLevelCases).toHaveLength(pipelineStatus.active.length);
-        expect(nestedCases).toHaveLength(pipelineStatus.active.length);
+        expect(topLevelCases).toHaveLength(PRE_GATE_PIPELINE_TRANSFORMATION_IDS.length);
+        expect(nestedCases).toHaveLength(PRE_GATE_PIPELINE_TRANSFORMATION_IDS.length);
 
-        for (const id of filterStatus.active)
+        for (const id of PRE_GATE_FILTER_RULE_IDS)
         {
             expect(
                 topLevelCases.some((testCase) =>
@@ -105,7 +107,7 @@ describe('deterministic generated active-rule interactions', () =>
             ).toBe(true);
         }
 
-        for (const id of pipelineStatus.active)
+        for (const id of PRE_GATE_PIPELINE_TRANSFORMATION_IDS)
         {
             expect(
                 topLevelCases.some((testCase) =>

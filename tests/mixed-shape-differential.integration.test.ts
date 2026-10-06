@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { optimizePipeline, type OptimizerOptions } from '../src/index.js';
+import type { OptimizerOptions } from '../src/index.js';
+import { optimizePipeline } from './helpers/pre-gate-optimizer.js';
 import {
     mixedShapeDifferentialCases,
     type MixedShapeDifferentialCase,

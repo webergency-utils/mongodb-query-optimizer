@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { optimizeFilterWithCandidateProfile as optimizeFilter } from '../src/filter-optimizer.js';
-import { optimizePipelineWithCandidateProfile as optimizePipeline } from '../src/passes/registry.js';
+import { optimizeFilter, optimizePipeline } from './helpers/pre-gate-optimizer.js';
 import { runMockPipeline } from './helpers/mock-engine.js';
 
 // Fast structural supplement only; the MongoDB differential oracle is authoritative.

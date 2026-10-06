@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { analyzeStage } from '../src/analyzer/semantics.js';
-import { optimizePipeline } from '../src/index.js';
+import { optimizePipeline } from './helpers/pre-gate-optimizer.js';
 import {
     proveLookupDelayAcrossStage,
     proveLookupMatchSplit,

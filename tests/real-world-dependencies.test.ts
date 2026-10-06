@@ -1,7 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { optimizePipeline } from '../src/index.js';
+import {
+    optimizePipeline,
+    PRE_GATE_PIPELINE_TRANSFORMATION_IDS,
+} from './helpers/pre-gate-optimizer.js';
 import {
     getPipelineTransformationRegistryStatus,
     optimizePipelineWithCandidateProfile,
@@ -115,12 +118,11 @@ describe( 'Real-world corpus fixtures and dependencies', () =>
         const baseline = optimizePipelineWithCandidateProfile( fixtureTestQuery );
         const baselineFingerprint = structuralFingerprint( baseline );
 
-        const status = getPipelineTransformationRegistryStatus();
         const affectingPasses: PipelineTransformationId[] = [];
 
-        for( const passId of status.active )
+        for( const passId of PRE_GATE_PIPELINE_TRANSFORMATION_IDS )
         {
-            const profileWithoutPass = status.active.filter( ( candidateId ) => candidateId !== passId );
+            const profileWithoutPass = PRE_GATE_PIPELINE_TRANSFORMATION_IDS.filter( ( candidateId ) => candidateId !== passId );
             const variant = optimizePipelineWithCandidateProfile( fixtureTestQuery, profileWithoutPass );
 
             if( structuralFingerprint( variant ) !== baselineFingerprint )
@@ -145,12 +147,11 @@ describe( 'Real-world corpus fixtures and dependencies', () =>
         const baseline = optimizePipelineWithCandidateProfile( fixtureTestFullQuery );
         const baselineFingerprint = structuralFingerprint( baseline );
 
-        const status = getPipelineTransformationRegistryStatus();
         const affectingPasses: PipelineTransformationId[] = [];
 
-        for( const passId of status.active )
+        for( const passId of PRE_GATE_PIPELINE_TRANSFORMATION_IDS )
         {
-            const profileWithoutPass = status.active.filter( ( candidateId ) => candidateId !== passId );
+            const profileWithoutPass = PRE_GATE_PIPELINE_TRANSFORMATION_IDS.filter( ( candidateId ) => candidateId !== passId );
             const variant = optimizePipelineWithCandidateProfile( fixtureTestFullQuery, profileWithoutPass );
 
             if( structuralFingerprint( variant ) !== baselineFingerprint )

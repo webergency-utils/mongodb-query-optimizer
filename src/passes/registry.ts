@@ -64,29 +64,7 @@ const registeredPipelineTransformationIds = Object.freeze([
 export type PipelineTransformationId =
     typeof registeredPipelineTransformationIds[number];
 
-const activePipelineTransformationIds: readonly PipelineTransformationId[] = Object.freeze([
-    'expr-match-normalization',
-    'filter-optimization',
-    'adjacent-match-merging',
-    'group-filter-pushdown',
-    'bucket-filter-pushdown',
-    'unwind-prefilter',
-    'redundant-sort-elimination',
-    'sort-by-count-simplification',
-    'limit-skip-coalescing',
-    'match-pushdown',
-    'limit-advance',
-    'add-field-pushdown',
-    'top-k-pushdown',
-    'unused-field-pruning',
-    'adjacent-project-merging',
-    'adjacent-add-field-merging',
-    'lookup-delay',
-    'redundant-lookup-elimination',
-    'sort-project-commute',
-    'complex-projection-deferral',
-    'facet-prefix-hoisting',
-]);
+const activePipelineTransformationIds: readonly PipelineTransformationId[] = Object.freeze([]);
 
 const containedPipelineTransformationIds: readonly PipelineTransformationId[] = Object.freeze([
     'stage-priority-reorder',

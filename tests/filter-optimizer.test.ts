@@ -13,7 +13,7 @@ import { isFilterContradiction } from '../src/analyzer/filters.js';
 import {
     optimizeFilter,
     optimizePipeline,
-} from '../src/index.js';
+} from './helpers/pre-gate-optimizer.js';
 import { optimizePipelineWithCandidateProfile } from '../src/passes/registry.js';
 
 describe('production filter optimizer', () =>

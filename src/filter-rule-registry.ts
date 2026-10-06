@@ -22,16 +22,7 @@ const registeredFilterRuleIds = Object.freeze([
 
 export type FilterRuleId = typeof registeredFilterRuleIds[number];
 
-const activeFilterRuleIds: readonly FilterRuleId[] = Object.freeze([
-    'simplify-equality',
-    'simplify-singleton-in',
-    'flatten-conjunctions',
-    'flatten-disjunctions',
-    'simplify-conjunction-identities',
-    'simplify-disjunction-identities',
-    'deduplicate-conjunctions',
-    'merge-conjunctions',
-]);
+const activeFilterRuleIds: readonly FilterRuleId[] = Object.freeze([]);
 
 const containedFilterRuleIds: readonly FilterRuleId[] = Object.freeze([]);
 

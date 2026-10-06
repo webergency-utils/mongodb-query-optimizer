@@ -8,7 +8,7 @@ import {
     collectDownstreamDemandedKeys,
     proveAddFieldPushdown,
 } from '../src/passes/add-field-pushdown-proofs.js';
-import { optimizePipeline } from '../src/index.js';
+import { optimizePipeline } from './helpers/pre-gate-optimizer.js';
 
 describe('AddFieldPushdownPass', () =>
 {

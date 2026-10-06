@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { getStageInfo } from '../src/index.js';
 import {
-    getStageInfo,
     optimizeFilter,
     optimizePipeline,
-} from '../src/index.js';
+} from './helpers/pre-gate-optimizer.js';
 import { optimizeFilterWithCandidateProfile } from '../src/filter-optimizer.js';
 import { optimizePipelineWithCandidateProfile } from '../src/passes/registry.js';
 

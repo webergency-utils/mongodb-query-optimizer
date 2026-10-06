@@ -5,7 +5,7 @@ import {
 import {
     UnwindPrefilterPass,
 } from '../src/passes/unwind-prefilter.js';
-import { optimizePipeline } from '../src/index.js';
+import { optimizePipeline } from './helpers/pre-gate-optimizer.js';
 import { runMockPipeline } from './helpers/mock-engine.js';
 
 describe('proveUnwindPrefilter', () =>

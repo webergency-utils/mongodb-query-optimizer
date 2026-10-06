@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { optimizePipeline, type OptimizerOptions } from '../src/index.js';
+import type { OptimizerOptions } from '../src/index.js';
+import { optimizePipeline } from './helpers/pre-gate-optimizer.js';
 import { buildRealWorldDataset } from './fixtures/real-world/data.js';
 import {
     MongoDifferentialOracle,

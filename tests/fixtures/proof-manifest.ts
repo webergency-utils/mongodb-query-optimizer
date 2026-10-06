@@ -3,6 +3,24 @@ import type {
     PipelineTransformationId,
 } from '../../src/passes/registry.js';
 
+export type StrictModeBehavior = 'preserved' | 'constrained' | 'skipped';
+
+export interface GateMixedShapeCaseIds
+{
+    readonly default: string;
+    readonly strictFieldOrder: string;
+    readonly strictErrors: string;
+}
+
+export interface GateRecord
+{
+    readonly status: 'active' | 'inactive';
+    readonly proofRecheckNote?: string;
+    readonly mixedShapeCaseIds?: GateMixedShapeCaseIds;
+    readonly strictModeBehavior?: StrictModeBehavior;
+    readonly reason?: string;
+}
+
 export interface TransformationProofEvidence<Id extends string>
 {
     readonly transformationId: Id;
@@ -10,6 +28,41 @@ export interface TransformationProofEvidence<Id extends string>
     readonly interaction: readonly string[];
     readonly nested: readonly string[];
     readonly mongodbFixtures: readonly string[];
+    readonly gate: GateRecord;
+}
+
+export function validateGateRecord( entry: TransformationProofEvidence<string> ): void
+{
+    if( !entry.gate )
+    {
+        throw new Error( `Transformation ${entry.transformationId} lacks a gate record` );
+    }
+
+    if( entry.gate.status === 'active' )
+    {
+        if( !entry.gate.proofRecheckNote || entry.gate.proofRecheckNote.trim().length === 0 )
+        {
+            throw new Error( `Active transformation ${entry.transformationId} lacks a proofRecheckNote` );
+        }
+
+        if(
+            !entry.gate.mixedShapeCaseIds
+            || !entry.gate.mixedShapeCaseIds.default
+            || !entry.gate.mixedShapeCaseIds.strictFieldOrder
+            || !entry.gate.mixedShapeCaseIds.strictErrors
+        )
+        {
+            throw new Error( `Active transformation ${entry.transformationId} lacks complete mixedShapeCaseIds` );
+        }
+
+        if(
+            !entry.gate.strictModeBehavior
+            || ![ 'preserved', 'constrained', 'skipped' ].includes( entry.gate.strictModeBehavior )
+        )
+        {
+            throw new Error( `Active transformation ${entry.transformationId} lacks valid strictModeBehavior` );
+        }
+    }
 }
 
 function evidence<Id extends string>(
@@ -18,6 +71,7 @@ function evidence<Id extends string>(
     interaction: string,
     nested: string,
     mongodbFixture: string,
+    gate: GateRecord = Object.freeze( { status: 'inactive', reason: 'inactive, pending audit' } ),
 ): TransformationProofEvidence<Id>
 {
     return Object.freeze({
@@ -26,6 +80,7 @@ function evidence<Id extends string>(
         interaction: Object.freeze([interaction]),
         nested: Object.freeze([nested]),
         mongodbFixtures: Object.freeze([mongodbFixture]),
+        gate: Object.freeze(gate),
     });
 }
 
