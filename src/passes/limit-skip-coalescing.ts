@@ -1,4 +1,5 @@
-import { PipelinePass } from './types';
+import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
+import { PipelinePass } from './types.js';
 
 type LimitSkipOperator = '$limit' | '$skip';
 
@@ -122,7 +123,7 @@ export class LimitSkipCoalescingPass implements PipelinePass
     readonly name       = 'limit-skip-coalescing';
     readonly stageTypes = [ '$limit', '$skip' ] as const;
 
-    execute(pipeline: any[]): any[]
+    execute( pipeline: any[], _context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {
         const result = [...pipeline];
 

@@ -260,6 +260,16 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'u9-generated-top-level-limit-skip-coalescing',
         'u9-generated-nested-limit-skip-coalescing',
         'u9-limit-skip-preservation-barriers',
+        {
+            status: 'active',
+            proofRecheckNote: 'Proof audited: merges adjacent strict-integer $limit (min) and $skip (safe sum) stages. No field order, document mutation, or error alterations.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-limit-skip-coalescing',
+                strictFieldOrder: 'mixed-shape-limit-skip-coalescing',
+                strictErrors: 'mixed-shape-limit-skip-coalescing'
+            },
+            strictModeBehavior: 'preserved'
+        }
     ),
     evidence(
         'match-pushdown',

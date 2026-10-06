@@ -413,4 +413,26 @@ export const mixedShapeDifferentialCases: readonly MixedShapeDifferentialCase[] 
         observation: 'multiset',
         expectedOriginalOutcome: 'success',
     },
+
+    // Polymorphic limit-skip coalescing
+    {
+        id: 'mixed-shape-limit-skip-coalescing',
+        description: 'limit-skip-coalescing merges adjacent limits and skips over polymorphic collection',
+        passId: 'limit-skip-coalescing',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: standardMixedShapeDocs,
+            },
+        },
+        pipeline: [
+            { $sort: { _id: 1 } },
+            { $skip: 1 },
+            { $skip: 1 },
+            { $limit: 4 },
+            { $limit: 2 },
+        ],
+        observation: 'ordered-bson',
+        expectedOriginalOutcome: 'success',
+    },
 ];

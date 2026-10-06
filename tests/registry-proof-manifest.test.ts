@@ -111,6 +111,7 @@ describe('explicit immutable transformation registries', () =>
             'unwind-prefilter',
             'redundant-sort-elimination',
             'sort-by-count-simplification',
+            'limit-skip-coalescing',
             'match-pushdown',
             'limit-advance',
             'add-field-pushdown',

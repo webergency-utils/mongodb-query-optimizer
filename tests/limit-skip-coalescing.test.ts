@@ -134,6 +134,15 @@ describe('limit and skip coalescing scheduling', () =>
         ).toEqual([
             { $limit: 5 },
         ]);
+        expect(
+            new LimitSkipCoalescingPass().execute(pipeline, {
+                strictFieldOrder: true,
+                strictErrors: true,
+            }),
+        ).toEqual([
+            { $limit: 7 },
+            { $limit: 5 },
+        ]);
     });
 
     it('preserves every unproved value and the caller input', () =>
