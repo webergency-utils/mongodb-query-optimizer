@@ -789,21 +789,28 @@ export function proveMatchPushdownAcrossStage(
  * Proves one adjacent backward movement of a limit or skip stage.
  */
 export function proveLimitAdvanceAcrossStage(
-    precedingStage: unknown,
-    limitOrSkipStage: unknown,
+    precedingStage   : unknown,
+    limitOrSkipStage : unknown,
+    context?         : GuaranteeContext
 ): boolean
 {
-    const terminal = analyzeStage(limitOrSkipStage);
-    if (
-        (terminal.operator !== "$limit" && terminal.operator !== "$skip")
-        || terminal.cardinality !== "filters"
-        || terminal.order !== "preserves"
-        || terminal.observable.cardinality !== "filters"
-        || terminal.observable.order !== "preserves"
-        || !isDeterministicErrorFree(terminal)
-        || !hasNoChildUncertainty(terminal)
-        || !hasKnownLocalProvenance(terminal)
-        || hasAmbiguousStagePaths(terminal)
+    if( context && !canMoveStageAcrossStage( limitOrSkipStage, precedingStage, 'earlier', context ))
+    {
+        return false;
+    }
+
+    const terminal = analyzeStage( limitOrSkipStage );
+
+    if(
+        ( terminal.operator !== '$limit' && terminal.operator !== '$skip' )
+        || terminal.cardinality !== 'filters'
+        || terminal.order !== 'preserves'
+        || terminal.observable.cardinality !== 'filters'
+        || terminal.observable.order !== 'preserves'
+        || !isDeterministicErrorFree( terminal )
+        || !hasNoChildUncertainty( terminal )
+        || !hasKnownLocalProvenance( terminal )
+        || hasAmbiguousStagePaths( terminal )
     )
     {
         return false;

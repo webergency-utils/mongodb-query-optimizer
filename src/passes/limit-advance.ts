@@ -1,3 +1,4 @@
+import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees';
 import { PipelinePass } from './types';
 import
 {
@@ -10,7 +11,7 @@ export class LimitAdvancePass implements PipelinePass
     readonly name       = 'limit-advance';
     readonly stageTypes = [ '$limit', '$skip' ] as const;
 
-    execute( pipeline: any[] ): any[]
+    execute( pipeline: any[], context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {
         let changed = false;
         const result = [ ...pipeline ];
@@ -23,7 +24,8 @@ export class LimitAdvancePass implements PipelinePass
             {
                 if( !proveLimitAdvanceAcrossStage(
                     result[ currentIndex - 1 ],
-                    result[ currentIndex ]
+                    result[ currentIndex ],
+                    context
                 ))
                 {
                     break;

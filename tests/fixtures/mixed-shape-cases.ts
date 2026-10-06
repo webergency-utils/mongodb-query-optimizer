@@ -338,4 +338,26 @@ export const mixedShapeDifferentialCases: readonly MixedShapeDifferentialCase[] 
         observation: 'ordered-bson',
         expectedOriginalOutcome: 'success',
     },
+
+    // Polymorphic limit advance across error-prone stage
+    {
+        id: 'mixed-shape-limit-advance',
+        description: 'limit-advance across error-prone stage on excluded row',
+        passId: 'limit-advance',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, val: '10' },
+                    { _id: 2, val: 'not-a-number' },
+                ],
+            },
+        },
+        pipeline: [
+            { $addFields: { parsed: { $toInt: '$val' } } },
+            { $limit: 1 },
+        ],
+        observation: 'ordered-bson',
+        expectedOriginalOutcome: 'success',
+    },
 ];

@@ -661,6 +661,16 @@ describe('limit and skip advancement proofs', () =>
         }
     });
 
+    it( 'blocks advancing limits across error-prone stages when strictErrors is enabled', () =>
+    {
+        const pipeline = [
+            { $addFields: { parsed: { $toInt: '$x' } } },
+            { $limit: 1 }
+        ];
+
+        expect( optimizePipelineWithCandidateProfile( pipeline, LIMIT_ADVANCE, [], { strictErrors: true } ) ).toEqual( pipeline );
+    });
+
     it('never advances across active, order, cardinality, child, or provenance stages', () =>
     {
         const precedingStages = [

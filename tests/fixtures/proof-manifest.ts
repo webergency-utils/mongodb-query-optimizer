@@ -244,6 +244,16 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'u9-generated-top-level-limit-advance',
         'u9-generated-nested-limit-advance',
         'u5-limit-nested-lookup-safe',
+        {
+            status: 'active',
+            proofRecheckNote: 'Proof audited: hoists limit and skip stages across passive stages ($project, $addFields, $set, $unset); constrained under strictErrors when crossed stage may error.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-limit-advance',
+                strictFieldOrder: 'mixed-shape-limit-advance',
+                strictErrors: 'mixed-shape-limit-advance'
+            },
+            strictModeBehavior: 'constrained'
+        }
     ),
     evidence(
         'add-field-pushdown',
