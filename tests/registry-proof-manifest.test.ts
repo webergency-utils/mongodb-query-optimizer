@@ -118,6 +118,7 @@ describe('explicit immutable transformation registries', () =>
             'top-k-pushdown',
             'unused-field-pruning',
             'adjacent-project-merging',
+            'adjacent-add-field-merging',
             'lookup-delay'
         ]);
         expect(status.contained).toEqual(EXPECTED_CONTAINED_PIPELINE_IDS);

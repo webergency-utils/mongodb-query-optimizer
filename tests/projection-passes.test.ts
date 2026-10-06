@@ -75,6 +75,20 @@ describe('adjacent add-field merging proofs', () =>
         ]);
     });
 
+    it('accepts guarantee context in execute for adjacent add-field merging', () =>
+    {
+        const pipeline = [
+            { $addFields: { first: 1 } },
+            { $set: { second: 2 } },
+        ];
+        expect(new AdjacentAddFieldMergingPass().execute(pipeline, {
+            strictFieldOrder: true,
+            strictErrors: true,
+        })).toEqual([
+            { $addFields: { first: 1, second: 2 } },
+        ]);
+    });
+
     it('blocks every supported way the second stage can read the first write', () =>
     {
         const secondExpressions = [

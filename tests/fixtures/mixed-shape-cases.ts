@@ -455,4 +455,24 @@ export const mixedShapeDifferentialCases: readonly MixedShapeDifferentialCase[] 
         observation: 'ordered-bson',
         expectedOriginalOutcome: 'success',
     },
+
+    // Polymorphic adjacent add-field merging
+    {
+        id: 'mixed-shape-adjacent-add-field-merging',
+        description: 'adjacent-add-field-merging merges disjoint addFields stages over polymorphic documents',
+        passId: 'adjacent-add-field-merging',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: standardMixedShapeDocs,
+            },
+        },
+        pipeline: [
+            { $sort: { _id: 1 } },
+            { $addFields: { fieldA: 1 } },
+            { $addFields: { fieldB: '$status' } },
+        ],
+        observation: 'ordered-bson',
+        expectedOriginalOutcome: 'success',
+    },
 ];

@@ -379,6 +379,16 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'u9-generated-top-level-adjacent-add-field-merging',
         'u9-generated-nested-adjacent-add-field-merging',
         'u6-add-set-current-getfield-barrier',
+        {
+            status: 'active',
+            proofRecheckNote: 'Proof audited: merges adjacent disjoint addFields/set stages; checks path-disjointness, prevents second stage from reading first writes or colliding hierarchically; preserves field order and error behavior.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-adjacent-add-field-merging',
+                strictFieldOrder: 'mixed-shape-adjacent-add-field-merging',
+                strictErrors: 'mixed-shape-adjacent-add-field-merging'
+            },
+            strictModeBehavior: 'preserved'
+        }
     ),
     evidence(
         'lookup-delay',
