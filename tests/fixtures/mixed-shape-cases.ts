@@ -546,4 +546,34 @@ export const mixedShapeDifferentialCases: readonly MixedShapeDifferentialCase[] 
         observation: 'ordered-bson',
         expectedOriginalOutcome: 'success',
     },
+
+    // Polymorphic facet prefix hoisting
+    {
+        id: 'mixed-shape-facet-prefix-hoisting',
+        description: 'facet-prefix-hoisting hoists common match prefix out of facet over polymorphic documents',
+        passId: 'facet-prefix-hoisting',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: standardMixedShapeDocs,
+            },
+        },
+        pipeline: [
+            { $sort: { _id: 1 } },
+            {
+                $facet: {
+                    activeItems: [
+                        { $match: { status: 'active' } },
+                        { $limit: 2 },
+                    ],
+                    activeCount: [
+                        { $match: { status: 'active' } },
+                        { $count: 'total' },
+                    ],
+                },
+            },
+        ],
+        observation: 'ordered-bson',
+        expectedOriginalOutcome: 'success',
+    },
 ];

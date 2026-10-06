@@ -122,7 +122,8 @@ describe('explicit immutable transformation registries', () =>
             'lookup-delay',
             'redundant-lookup-elimination',
             'sort-project-commute',
-            'complex-projection-deferral'
+            'complex-projection-deferral',
+            'facet-prefix-hoisting'
         ]);
         expect(status.contained).toEqual(EXPECTED_CONTAINED_PIPELINE_IDS);
         expect(status.registered).toEqual(REGISTERED_PIPELINE_IDS);

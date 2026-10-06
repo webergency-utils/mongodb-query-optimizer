@@ -1,4 +1,5 @@
 import { analyzeStage } from '../analyzer/semantics.js';
+import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
 import { deepClone, isPlainObject, structuralFingerprint } from '../utils.js';
 import { getSingleStageEntry, getStageSpec } from './helpers.js';
 
@@ -15,7 +16,7 @@ export interface FacetPrefixHoistingProof {
     simplifiedFacet: any;
 }
 
-function isEligibleHoistStage(stage: unknown): boolean
+function isEligibleHoistStage( stage: unknown, context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): boolean
 {
     const entry = getSingleStageEntry( stage );
     if( !entry )
@@ -37,6 +38,7 @@ function isEligibleHoistStage(stage: unknown): boolean
         || summary.order !== 'preserves'
         || summary.dependencies.unknown
         || summary.dependencies.variables.size > 0
+        || ( context.strictErrors && summary.observable.errors !== 'none-known' )
     )
     {
         return false;
@@ -47,6 +49,7 @@ function isEligibleHoistStage(stage: unknown): boolean
 
 export function proveFacetPrefixHoisting(
     stage: unknown,
+    context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT,
 ): FacetPrefixHoistingProof | null
 {
     const facetSpec = getStageSpec<Record<string, any>>( stage, '$facet' );
@@ -95,7 +98,7 @@ export function proveFacetPrefixHoisting(
         }
 
         const firstBranchLeadingStage = branches[branchNames[0]!]![0];
-        if (!isEligibleHoistStage(firstBranchLeadingStage))
+        if (!isEligibleHoistStage(firstBranchLeadingStage, context))
         {
             break;
         }

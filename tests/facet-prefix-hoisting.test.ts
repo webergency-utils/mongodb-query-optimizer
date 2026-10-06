@@ -278,6 +278,38 @@ describe('FacetPrefixHoistingPass', () =>
         const result = pass.execute(pipeline);
         expect(result).toEqual(pipeline);
     });
+
+    it('blocks hoisting error-prone stages under strictErrors', () =>
+    {
+        const pipeline = [
+            {
+                $facet: {
+                    a: [
+                        { $addFields: { quotient: { $divide: ['$a', '$b'] } } },
+                        { $limit: 10 },
+                    ],
+                    b: [
+                        { $addFields: { quotient: { $divide: ['$a', '$b'] } } },
+                        { $skip: 5 },
+                    ],
+                },
+            },
+        ];
+
+        // Allowed in default mode
+        expect(pass.execute(pipeline, { strictFieldOrder: false, strictErrors: false })).toEqual([
+            { $addFields: { quotient: { $divide: ['$a', '$b'] } } },
+            {
+                $facet: {
+                    a: [{ $limit: 10 }],
+                    b: [{ $skip: 5 }],
+                },
+            },
+        ]);
+
+        // Blocked under strictErrors
+        expect(pass.execute(pipeline, { strictFieldOrder: false, strictErrors: true })).toEqual(pipeline);
+    });
 });
 
 describe('optimizePipeline execution parity for facet prefix hoisting', () =>

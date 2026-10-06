@@ -464,5 +464,15 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'u9-generated-top-level-facet-prefix-hoisting',
         'u9-generated-nested-facet-prefix-hoisting',
         'feat-facet-prefix-hoisting-oracle',
+        {
+            status: 'active',
+            proofRecheckNote: 'Proof audited: hoists identical deterministic prefix stages out of facet branches; preserves cardinality and branch field structure; constrained under strictErrors when candidate stage may error.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-facet-prefix-hoisting',
+                strictFieldOrder: 'mixed-shape-facet-prefix-hoisting',
+                strictErrors: 'mixed-shape-facet-prefix-hoisting',
+            },
+            strictModeBehavior: 'constrained',
+        },
     ),
 ]);
