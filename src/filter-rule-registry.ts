@@ -1,4 +1,5 @@
 import { isFilterContradiction, isFilterRewriteSafe } from './analyzer/filters';
+import { GuaranteeContext } from './guarantees';
 import {
     isEmptyObject,
     isOperatorSubdocument,
@@ -50,7 +51,7 @@ const filterRuleRegistryStatus: FilterRuleRegistryStatus = Object.freeze({
 export interface FilterRule
 {
     readonly id: FilterRuleId;
-    apply(filter: FilterDocument): any;
+    apply( filter: FilterDocument, context: GuaranteeContext ): any;
 }
 
 const isEmptyFilter = isEmptyObject;

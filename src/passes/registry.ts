@@ -1,5 +1,6 @@
 import { isFilterContradiction } from '../analyzer/filters';
 import { withCandidateFilterRuleProfile } from '../filter-rule-registry';
+import { GuaranteeContext, OptimizerOptions, resolvePipelineGuarantees } from '../guarantees';
 import { deepClone, structuralFingerprint } from '../utils';
 import { AdjacentAddFieldMergingPass } from './adjacent-addfield-merging';
 import { AddFieldPushdownPass } from './add-field-pushdown';
@@ -223,8 +224,9 @@ interface SweepResult
 }
 
 function optimizeStageChildrenForSweep(
-    stage  : any,
-    passes : readonly PipelinePass[]
+    stage   : any,
+    passes  : readonly PipelinePass[],
+    context : GuaranteeContext
 ): any
 {
     if( !stage || typeof stage !== 'object' || Array.isArray( stage ))
@@ -244,7 +246,7 @@ function optimizeStageChildrenForSweep(
         {
             if( Array.isArray( subpipeline ))
             {
-                const optimizedSub = applyGlobalSweep( subpipeline, passes );
+                const optimizedSub = applyGlobalSweep( subpipeline, passes, context );
 
                 if( !pipelinesShallowEqual( optimizedSub, subpipeline ))
                 {
@@ -277,7 +279,7 @@ function optimizeStageChildrenForSweep(
         && Array.isArray( lookup.pipeline )
     )
     {
-        const optimizedLookupPipeline = applyGlobalSweep( lookup.pipeline, passes );
+        const optimizedLookupPipeline = applyGlobalSweep( lookup.pipeline, passes, context );
 
         if( !pipelinesShallowEqual( optimizedLookupPipeline, lookup.pipeline ))
         {
@@ -300,7 +302,7 @@ function optimizeStageChildrenForSweep(
         && Array.isArray( unionWith.pipeline )
     )
     {
-        const optimizedUnionPipeline = applyGlobalSweep( unionWith.pipeline, passes );
+        const optimizedUnionPipeline = applyGlobalSweep( unionWith.pipeline, passes, context );
 
         if( !pipelinesShallowEqual( optimizedUnionPipeline, unionWith.pipeline ))
         {
@@ -319,7 +321,8 @@ function optimizeStageChildrenForSweep(
 
 function applyGlobalSweepWithDirty(
     pipeline : any[],
-    passes   : readonly PipelinePass[]
+    passes   : readonly PipelinePass[],
+    context  : GuaranteeContext
 ): SweepResult
 {
     let modified = false;
@@ -328,7 +331,7 @@ function applyGlobalSweepWithDirty(
     for( let i = 0; i < pipeline.length; i++ )
     {
         const origStage = pipeline[ i ];
-        const optStage = optimizeStageChildrenForSweep( origStage, passes );
+        const optStage = optimizeStageChildrenForSweep( origStage, passes, context );
 
         if( optStage !== origStage )
         {
@@ -348,7 +351,7 @@ function applyGlobalSweepWithDirty(
             continue;
         }
 
-        const next = pass.execute( current );
+        const next = pass.execute( current, context );
 
         if( !pipelinesShallowEqual( current, next ))
         {
@@ -398,20 +401,23 @@ function hasUnionWithAfter( pipeline: readonly any[], fromIndex: number ): boole
 
 function applyGlobalSweep(
     pipeline : any[],
-    passes   : readonly PipelinePass[]
+    passes   : readonly PipelinePass[],
+    context  : GuaranteeContext
 ): any[]
 {
-    return applyGlobalSweepWithDirty( pipeline, passes ).pipeline;
+    return applyGlobalSweepWithDirty( pipeline, passes, context ).pipeline;
 }
 
 /**
  * Package-private scheduler seam for deterministic custom-pass and budget tests.
- * The package root intentionally does not export it.
+ * The package root intentionally does not export it. Options are resolved once here,
+ * so a top-level `$out` or `$merge` forces strict errors for every level.
  */
 export function optimizePipelineWithPasses(
     pipeline    : any,
     passes      : readonly PipelinePass[],
-    sweepBudget = DEFAULT_GLOBAL_SWEEP_BUDGET
+    sweepBudget = DEFAULT_GLOBAL_SWEEP_BUDGET,
+    options?    : OptimizerOptions
 ): any
 {
     if( !Array.isArray( pipeline ))
@@ -431,13 +437,14 @@ export function optimizePipelineWithPasses(
         return pristine;
     }
 
+    const context = resolvePipelineGuarantees( pipeline, options );
     let current = deepClone( pristine );
     let currentFingerprint: string | null = null;
     let history: Set<string> | null = null;
 
     for( let sweep = 0; sweep < sweepBudget; sweep++ )
     {
-        const sweepResult = applyGlobalSweepWithDirty( current, passes );
+        const sweepResult = applyGlobalSweepWithDirty( current, passes, context );
 
         if( !sweepResult.modified )
         {
@@ -471,11 +478,13 @@ export function optimizePipelineWithPasses(
     return pristine;
 }
 
-export function optimizePipelineWithProductionRegistry(pipeline: any): any
+export function optimizePipelineWithProductionRegistry( pipeline: any, options?: OptimizerOptions ): any
 {
     return optimizePipelineWithPasses(
         pipeline,
-        resolveCandidatePasses(activePipelineTransformationIds),
+        resolveCandidatePasses( activePipelineTransformationIds ),
+        DEFAULT_GLOBAL_SWEEP_BUDGET,
+        options
     );
 }
 
@@ -486,10 +495,11 @@ export function optimizePipelineWithCandidateProfile(
     pipeline: any,
     selectedTransformationIds: readonly string[] = candidatePipelineProfile,
     selectedFilterRuleIds?: readonly string[],
+    options?: OptimizerOptions,
 ): any
 {
     const passes = resolveCandidatePasses(selectedTransformationIds);
-    const run = () => optimizePipelineWithPasses(pipeline, passes);
+    const run = () => optimizePipelineWithPasses( pipeline, passes, DEFAULT_GLOBAL_SWEEP_BUDGET, options );
 
     if (selectedFilterRuleIds)
     {

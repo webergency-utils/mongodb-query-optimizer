@@ -4,6 +4,13 @@ import {
     withCandidateFilterRuleProfile,
 } from './filter-rule-registry';
 import { isFilterRewriteSafe } from './analyzer/filters';
+import
+{
+    GuaranteeContext,
+    OptimizerOptions,
+    resolveFilterGuarantees
+}
+from './guarantees';
 import {
     isPlainObject,
     isOperatorSubdocument,
@@ -15,6 +22,7 @@ const DEFAULT_FILTER_SWEEP_BUDGET = 32;
 function optimizeOperatorChildren(
     operatorDocument: Record<string, any>,
     rules: readonly FilterRule[],
+    context: GuaranteeContext,
 ): Record<string, any>
 {
     let result = operatorDocument;
@@ -26,7 +34,7 @@ function optimizeOperatorChildren(
             continue;
         }
 
-        const optimized = applyFilterSweep(value, rules);
+        const optimized = applyFilterSweep(value, rules, context);
         if (optimized !== value)
         {
             if (result === operatorDocument)
@@ -189,6 +197,7 @@ function simplifyFieldIntervals(
 function applyFilterDocumentSweep(
     filter: Record<string, any>,
     rules: readonly FilterRule[],
+    context: GuaranteeContext,
 ): any
 {
     if (!isFilterRewriteSafe(filter))
@@ -205,12 +214,12 @@ function applyFilterDocumentSweep(
         if ((key === '$and' || key === '$or') && Array.isArray(value))
         {
             optimizedValue = value.map((condition) =>
-                applyFilterSweep(condition, rules),
+                applyFilterSweep(condition, rules, context),
             );
         }
         else if (!key.startsWith('$') && isOperatorSubdocument(value))
         {
-            optimizedValue = optimizeOperatorChildren(value, rules);
+            optimizedValue = optimizeOperatorChildren(value, rules, context);
             optimizedValue = simplifyFieldIntervals(optimizedValue);
 
             if (Array.isArray(optimizedValue.$in) && optimizedValue.$in.length === 0)
@@ -237,13 +246,13 @@ function applyFilterDocumentSweep(
             return current;
         }
 
-        current = rule.apply(current);
+        current = rule.apply(current, context);
     }
 
     return current;
 }
 
-function applyFilterSweep(filter: any, rules: readonly FilterRule[]): any
+function applyFilterSweep(filter: any, rules: readonly FilterRule[], context: GuaranteeContext): any
 {
     if (
         !filter
@@ -261,13 +270,14 @@ function applyFilterSweep(filter: any, rules: readonly FilterRule[]): any
         return filter;
     }
 
-    return applyFilterDocumentSweep(filter, rules);
+    return applyFilterDocumentSweep(filter, rules, context);
 }
 
 function optimizeFilterWithRules(
     filter: any,
     rules: readonly FilterRule[],
     sweepBudget = DEFAULT_FILTER_SWEEP_BUDGET,
+    context: GuaranteeContext,
 ): any
 {
     if (
@@ -302,7 +312,7 @@ function optimizeFilterWithRules(
 
     for (let sweep = 0; sweep < sweepBudget; sweep++)
     {
-        const next = applyFilterSweep(current, rules);
+        const next = applyFilterSweep(current, rules, context);
         const nextFingerprint = structuralFingerprint(next);
 
         if (nextFingerprint === currentFingerprint)
@@ -323,9 +333,17 @@ function optimizeFilterWithRules(
     return rootCopy;
 }
 
-export function optimizeFilter<T = any>( filter: any ): T
+export function optimizeFilter<T = any>( filter: any, options?: OptimizerOptions ): T
 {
-        return optimizeFilterWithRules( filter, getActiveFilterRules());
+    return optimizeFilterWithContext( filter, resolveFilterGuarantees( options ));
+}
+
+/**
+ * Package-private entry for passes that already hold a resolved pipeline context.
+ */
+export function optimizeFilterWithContext( filter: any, context: GuaranteeContext ): any
+{
+    return optimizeFilterWithRules( filter, getActiveFilterRules(), DEFAULT_FILTER_SWEEP_BUDGET, context );
 }
 
 /**
@@ -335,9 +353,10 @@ export function optimizeFilterWithRulesForTesting(
     filter: any,
     rules: readonly FilterRule[],
     sweepBudget = DEFAULT_FILTER_SWEEP_BUDGET,
+    options?: OptimizerOptions,
 ): any
 {
-    return optimizeFilterWithRules(filter, rules, sweepBudget);
+    return optimizeFilterWithRules(filter, rules, sweepBudget, resolveFilterGuarantees( options ));
 }
 
 /**
@@ -346,15 +365,16 @@ export function optimizeFilterWithRulesForTesting(
 export function optimizeFilterWithCandidateProfile(
     filter: any,
     selectedRuleIds?: readonly string[],
+    options?: OptimizerOptions,
 ): any
 {
     if (selectedRuleIds)
     {
         return withCandidateFilterRuleProfile(
-            () => optimizeFilter(filter),
+            () => optimizeFilter(filter, options),
             selectedRuleIds,
         );
     }
 
-    return withCandidateFilterRuleProfile(() => optimizeFilter(filter));
+    return withCandidateFilterRuleProfile(() => optimizeFilter(filter, options));
 }

@@ -11,6 +11,7 @@ export default defineConfig({
         "src/analyzer/paths.ts": { branches: 100 },
         "src/analyzer/projections.ts": { branches: 100 },
         "src/analyzer/semantics.ts": { branches: 100 },
+        "src/guarantees.ts": { branches: 100 },
         "src/passes/add-field-pushdown.ts": { branches: 100 },
         "src/passes/add-field-pushdown-proofs.ts": { branches: 100 },
         "src/passes/bucket-filter-pushdown.ts": { branches: 100 },
