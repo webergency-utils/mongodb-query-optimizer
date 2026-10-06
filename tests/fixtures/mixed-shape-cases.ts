@@ -72,7 +72,6 @@ export const mixedShapeDifferentialCases: readonly MixedShapeDifferentialCase[] 
         ],
         observation: 'ordered-bson',
         expectedOriginalOutcome: 'success',
-        knownBugModes: [ 'default', 'strictFieldOrder', 'strictErrors' ],
     },
 
     // AE2: Hoisted field changes field order
@@ -111,7 +110,6 @@ export const mixedShapeDifferentialCases: readonly MixedShapeDifferentialCase[] 
         ],
         observation: 'ordered-bson',
         expectedOriginalOutcome: 'success',
-        knownBugModes: [ 'strictFieldOrder' ],
     },
 
     // AE3: Unwound field is an object, not an array (known bug in unwind-prefilter until U10)

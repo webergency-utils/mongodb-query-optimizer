@@ -227,6 +227,16 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'u9-generated-top-level-add-field-pushdown',
         'u9-generated-nested-add-field-pushdown',
         'feat-add-field-pushdown-oracle',
+        {
+            status: 'active',
+            proofRecheckNote: 'Proof audited: shape-tolerant, blocks sibling reads on split, blocks $$ROOT/$$CURRENT reads on split, constrained under strictFieldOrder when crossed stage adds fields and under strictErrors when crossed stage may error.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-ae1-sibling-read',
+                strictFieldOrder: 'mixed-shape-ae2-field-order',
+                strictErrors: 'mixed-shape-ae1-sibling-read'
+            },
+            strictModeBehavior: 'constrained'
+        }
     ),
     evidence(
         'top-k-pushdown',

@@ -456,4 +456,277 @@ describe('AddFieldPushdownPass', () =>
 
         expect( proveAddFieldPushdown( pipeline, 1 ) ).toBeNull();
     });
+
+    it( 'refuses split when remaining field reads a pushed sibling key (AE1)', () =>
+    {
+        const pipeline =
+        [
+            {
+                $lookup:
+                {
+                    from         : 'foreign',
+                    localField   : 'foreignId',
+                    foreignField : '_id',
+                    as           : 'foreignDocs'
+                }
+            },
+            {
+                $addFields:
+                {
+                    score    : { $add: [ '$score', 5 ] },
+                    oldScore : '$score'
+                }
+            },
+            {
+                $sort: { score: -1, _id: 1 }
+            },
+            {
+                $limit: 2
+            }
+        ];
+
+        expect( proveAddFieldPushdown( pipeline, 1 ) ).toBeNull();
+
+        const pass = new AddFieldPushdownPass();
+        const optimized = pass.execute( pipeline );
+
+        expect( optimized ).toEqual( pipeline );
+    });
+
+    it( 'refuses split when remaining field expression is unknown or malformed', () =>
+    {
+        const pipeline =
+        [
+            {
+                $lookup:
+                {
+                    from         : 'foreign',
+                    localField   : 'f',
+                    foreignField : 'f',
+                    as           : 'items'
+                }
+            },
+            {
+                $addFields:
+                {
+                    pushedField : '$score',
+                    badField    : { $invalidOperator: 1 }
+                }
+            },
+            {
+                $sort: { pushedField: 1 }
+            }
+        ];
+
+        expect( proveAddFieldPushdown( pipeline, 1 ) ).toBeNull();
+    });
+
+    it( 'refuses split when remaining field expression has unknown dependencies', () =>
+    {
+        const pipeline =
+        [
+            {
+                $lookup:
+                {
+                    from         : 'foreign',
+                    localField   : 'f',
+                    foreignField : 'f',
+                    as           : 'items'
+                }
+            },
+            {
+                $addFields:
+                {
+                    pushedField : '$score',
+                    fnField     :
+                    {
+                        $function:
+                        {
+                            body : 'function(x){ return x; }',
+                            args : [ '$$UNRECOGNIZED_SPECIAL_VAR' ],
+                            lang : 'js'
+                        }
+                    }
+                }
+            },
+            {
+                $sort: { pushedField: 1 }
+            }
+        ];
+
+        expect( proveAddFieldPushdown( pipeline, 1 ) ).toBeNull();
+    });
+
+    it( 'refuses split when remaining field expression reads $$ROOT or $$CURRENT', () =>
+    {
+        const pipelineRoot =
+        [
+            {
+                $lookup:
+                {
+                    from         : 'foreign',
+                    localField   : 'f',
+                    foreignField : 'f',
+                    as           : 'items'
+                }
+            },
+            {
+                $addFields:
+                {
+                    pushedField : '$score',
+                    rootDoc     : '$$ROOT'
+                }
+            },
+            {
+                $sort: { pushedField: 1 }
+            }
+        ];
+
+        expect( proveAddFieldPushdown( pipelineRoot, 1 ) ).toBeNull();
+
+        const pipelineCurrent =
+        [
+            {
+                $lookup:
+                {
+                    from         : 'foreign',
+                    localField   : 'f',
+                    foreignField : 'f',
+                    as           : 'items'
+                }
+            },
+            {
+                $addFields:
+                {
+                    pushedField : '$score',
+                    currDoc     : '$$CURRENT'
+                }
+            },
+            {
+                $sort: { pushedField: 1 }
+            }
+        ];
+
+        expect( proveAddFieldPushdown( pipelineCurrent, 1 ) ).toBeNull();
+    });
+
+    it( 'allows split when remaining field expression reads an unrelated path', () =>
+    {
+        const pipeline =
+        [
+            {
+                $lookup:
+                {
+                    from         : 'foreign',
+                    localField   : 'f',
+                    foreignField : 'f',
+                    as           : 'items'
+                }
+            },
+            {
+                $addFields:
+                {
+                    pushedField : '$score',
+                    otherField  : '$unrelated'
+                }
+            },
+            {
+                $sort: { pushedField: 1 }
+            }
+        ];
+
+        const proof = proveAddFieldPushdown( pipeline, 1 );
+
+        expect( proof ).not.toBeNull();
+        expect( Object.keys( proof!.pushedFields ) ).toEqual([ 'pushedField' ]);
+        expect( Object.keys( proof!.remainingFields! ) ).toEqual([ 'otherField' ]);
+    });
+
+    it( 'obeys GuaranteeContext strictFieldOrder and strictErrors guards', () =>
+    {
+        const lookupPipeline =
+        [
+            {
+                $lookup:
+                {
+                    from         : 'foreign',
+                    localField   : 'f',
+                    foreignField : 'f',
+                    as           : 'items'
+                }
+            },
+            {
+                $addFields:
+                {
+                    computed : { $add: [ '$score', 1 ] }
+                }
+            },
+            {
+                $sort: { computed: 1 }
+            }
+        ];
+
+        const sfoContext = { strictFieldOrder: true, strictErrors: false };
+        const seContext = { strictFieldOrder: false, strictErrors: true };
+
+        // Across $lookup under strictFieldOrder: refused because both stages add fields
+        expect( canPushFieldAcrossStage( 'computed', { $add: [ '$score', 1 ] }, lookupPipeline[ 0 ], sfoContext )).toBe( false );
+        expect( proveAddFieldPushdown( lookupPipeline, 1, sfoContext )).toBeNull();
+
+        const pass = new AddFieldPushdownPass();
+
+        expect( pass.execute( lookupPipeline, sfoContext )).toEqual( lookupPipeline );
+
+        // Across $unset under strictFieldOrder: allowed because $unset adds no fields
+        const unsetPipeline =
+        [
+            {
+                $unset: 'temp'
+            },
+            {
+                $addFields:
+                {
+                    computed : { $add: [ '$score', 1 ] }
+                }
+            },
+            {
+                $sort: { computed: 1 }
+            }
+        ];
+
+        expect( canPushFieldAcrossStage( 'computed', { $add: [ '$score', 1 ] }, unsetPipeline[ 0 ], sfoContext )).toBe( true );
+        expect( proveAddFieldPushdown( unsetPipeline, 1, sfoContext )).not.toBeNull();
+
+        const optimizedUnset = pass.execute( unsetPipeline, sfoContext );
+
+        expect( optimizedUnset[ 0 ] ).toHaveProperty( '$addFields' );
+        expect( optimizedUnset[ 1 ] ).toHaveProperty( '$unset' );
+
+        // Pushing a stage with potential errors ($toInt) across $lookup under strictErrors: refused
+        const errorPipeline =
+        [
+            {
+                $lookup:
+                {
+                    from         : 'foreign',
+                    localField   : 'f',
+                    foreignField : 'f',
+                    as           : 'items'
+                }
+            },
+            {
+                $addFields:
+                {
+                    parsed : { $toInt: '$raw' }
+                }
+            },
+            {
+                $sort: { parsed: 1 }
+            }
+        ];
+
+        expect( canPushFieldAcrossStage( 'parsed', { $toInt: '$raw' }, errorPipeline[ 0 ], seContext )).toBe( false );
+        expect( proveAddFieldPushdown( errorPipeline, 1, seContext )).toBeNull();
+        expect( pass.execute( errorPipeline, seContext )).toEqual( errorPipeline );
+    });
 });

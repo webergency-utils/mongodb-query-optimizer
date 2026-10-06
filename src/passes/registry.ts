@@ -64,7 +64,9 @@ const registeredPipelineTransformationIds = Object.freeze([
 export type PipelineTransformationId =
     typeof registeredPipelineTransformationIds[number];
 
-const activePipelineTransformationIds: readonly PipelineTransformationId[] = Object.freeze([]);
+const activePipelineTransformationIds: readonly PipelineTransformationId[] = Object.freeze([
+    'add-field-pushdown'
+]);
 
 const containedPipelineTransformationIds: readonly PipelineTransformationId[] = Object.freeze([
     'stage-priority-reorder',

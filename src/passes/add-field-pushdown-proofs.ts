@@ -1,26 +1,28 @@
-import { relatePaths } from '../analyzer/paths.js';
 import { analyzeExpression } from '../analyzer/expressions.js';
+import { relatePaths } from '../analyzer/paths.js';
 import { analyzeStage } from '../analyzer/semantics.js';
+import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
 import { isPlainObject } from '../utils.js';
+import { canMoveStageAcrossStage } from './guarantee-guards.js';
 import { getSingleStageEntry } from './helpers.js';
 
 export interface AddFieldPushdownProof
 {
-    readonly sourceIndex: number;
-    readonly targetIndex: number;
-    readonly operator: '$addFields' | '$set';
-    readonly pushedFields: Record<string, unknown>;
-    readonly remainingFields: Record<string, unknown> | null;
+    readonly sourceIndex     : number;
+    readonly targetIndex     : number;
+    readonly operator        : '$addFields' | '$set';
+    readonly pushedFields    : Record<string, unknown>;
+    readonly remainingFields : Record<string, unknown> | null;
 }
 
 const PASSIVE_PRECEDING_OPERATORS = new Set([
     '$lookup',
-    '$unset',
+    '$unset'
 ]);
 
 export function arePathsDisjoint(
-    left: Iterable<string>,
-    right: Iterable<string>
+    left  : Iterable<string>,
+    right : Iterable<string>
 ): boolean
 {
     for( const leftPath of left )
@@ -38,18 +40,29 @@ export function arePathsDisjoint(
 }
 
 export function canPushFieldAcrossStage(
-    fieldKey: string,
-    expression: unknown,
-    precedingStage: unknown
+    fieldKey           : string,
+    expression         : unknown,
+    precedingStage     : unknown,
+    context            : GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT,
+    downstreamPipeline : readonly unknown[] = []
 ): boolean
 {
     const precedingEntry = getSingleStageEntry( precedingStage );
+
     if( !precedingEntry || !PASSIVE_PRECEDING_OPERATORS.has( precedingEntry[ 0 ] ))
     {
         return false;
     }
 
+    const movingStage = { $addFields: { [ fieldKey ]: expression } };
+
+    if( !canMoveStageAcrossStage( movingStage, precedingStage, 'earlier', context, downstreamPipeline ))
+    {
+        return false;
+    }
+
     const precedingSemantics = analyzeStage( precedingStage );
+
     if( precedingSemantics.malformed )
     {
         return false;
@@ -64,6 +77,7 @@ export function canPushFieldAcrossStage(
     }
 
     const exprSummary = analyzeExpression( expression );
+
     if(
         exprSummary.unknown
         || exprSummary.dependencies.unknown
@@ -83,6 +97,7 @@ export function canPushFieldAcrossStage(
     }
 
     const fieldKeyList = [ fieldKey ];
+
     if(
         !arePathsDisjoint( fieldKeyList, precedingSemantics.dependencies.local )
         || !arePathsDisjoint( fieldKeyList, precedingSemantics.writes )
@@ -97,8 +112,8 @@ export function canPushFieldAcrossStage(
 }
 
 export function collectDownstreamDemandedKeys(
-    pipeline: readonly any[],
-    fromIndex: number
+    pipeline  : readonly any[],
+    fromIndex : number
 ): Set<string>
 {
     const demanded = new Set<string>();
@@ -107,10 +122,8 @@ export function collectDownstreamDemandedKeys(
     {
         const stage = pipeline[ i ];
         const entry = getSingleStageEntry( stage );
-        if( !entry )
-        {
-            continue;
-        }
+
+        if( !entry ){ continue; }
 
         if( entry[ 0 ] === '$sort' && isPlainObject( entry[ 1 ] ))
         {
@@ -122,6 +135,7 @@ export function collectDownstreamDemandedKeys(
         else if( entry[ 0 ] === '$match' )
         {
             const semantics = analyzeStage( stage );
+
             if( !semantics.dependencies.unknown )
             {
                 for( const path of semantics.dependencies.local )
@@ -136,8 +150,9 @@ export function collectDownstreamDemandedKeys(
 }
 
 export function proveAddFieldPushdown(
-    pipeline: readonly any[],
-    stageIndex: number
+    pipeline   : readonly any[],
+    stageIndex : number,
+    context    : GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT
 ): AddFieldPushdownProof | null
 {
     if( stageIndex <= 0 || stageIndex >= pipeline.length )
@@ -147,6 +162,7 @@ export function proveAddFieldPushdown(
 
     const currentStage = pipeline[ stageIndex ];
     const entry = getSingleStageEntry( currentStage );
+
     if(
         !entry
         || ( entry[ 0 ] !== '$addFields' && entry[ 0 ] !== '$set' )
@@ -159,23 +175,27 @@ export function proveAddFieldPushdown(
     const operator = entry[ 0 ] as '$addFields' | '$set';
     const spec = entry[ 1 ];
     const allKeys = Object.keys( spec );
+
     if( allKeys.length === 0 )
     {
         return null;
     }
 
     const demandedKeys = collectDownstreamDemandedKeys( pipeline, stageIndex );
+
     if( demandedKeys.size === 0 )
     {
         return null;
     }
 
     const candidateKeys = allKeys.filter(( key ) => demandedKeys.has( key ));
+
     if( candidateKeys.length === 0 )
     {
         return null;
     }
 
+    const downstreamPipeline = pipeline.slice( stageIndex + 1 );
     let furthestTarget = stageIndex;
     const pushableKeys: string[] = [];
 
@@ -186,16 +206,18 @@ export function proveAddFieldPushdown(
 
         for( let i = stageIndex - 1; i >= 0; i-- )
         {
-            if( !canPushFieldAcrossStage( key, expr, pipeline[ i ] ))
+            if( !canPushFieldAcrossStage( key, expr, pipeline[ i ], context, downstreamPipeline ))
             {
                 break;
             }
+
             target = i;
         }
 
         if( target < stageIndex )
         {
             pushableKeys.push( key );
+
             if( target < furthestTarget )
             {
                 furthestTarget = target;
@@ -209,26 +231,30 @@ export function proveAddFieldPushdown(
     }
 
     const validPushKeys: string[] = [];
+
     for( const key of pushableKeys )
     {
         const expr = spec[ key ];
         let canReachFurthest = true;
+
         for( let i = stageIndex - 1; i >= furthestTarget; i-- )
         {
-            if( !canPushFieldAcrossStage( key, expr, pipeline[ i ] ))
+            if( !canPushFieldAcrossStage( key, expr, pipeline[ i ], context, downstreamPipeline ))
             {
                 canReachFurthest = false;
+
                 break;
             }
         }
+
         if( canReachFurthest )
         {
             validPushKeys.push( key );
         }
     }
 
-
     const pushedFields: Record<string, unknown> = {};
+
     for( const key of validPushKeys )
     {
         pushedFields[ key ] = spec[ key ];
@@ -236,9 +262,31 @@ export function proveAddFieldPushdown(
 
     const remainingKeys = allKeys.filter(( key ) => !validPushKeys.includes( key ));
     let remainingFields: Record<string, unknown> | null = null;
+
     if( remainingKeys.length > 0 )
     {
+        for( const remKey of remainingKeys )
+        {
+            const remExpr = spec[ remKey ];
+            const remExprSummary = analyzeExpression( remExpr );
+
+            if(
+                remExprSummary.unknown
+                || remExprSummary.dependencies.unknown
+                || remExprSummary.dependencies.local.has( '*' )
+            )
+            {
+                return null;
+            }
+
+            if( !arePathsDisjoint( remExprSummary.dependencies.local, validPushKeys ))
+            {
+                return null;
+            }
+        }
+
         remainingFields = {};
+
         for( const key of remainingKeys )
         {
             remainingFields[ key ] = spec[ key ];
@@ -250,6 +298,6 @@ export function proveAddFieldPushdown(
         targetIndex: furthestTarget,
         operator,
         pushedFields,
-        remainingFields,
+        remainingFields
     };
 }

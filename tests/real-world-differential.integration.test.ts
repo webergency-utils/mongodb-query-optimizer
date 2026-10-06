@@ -108,8 +108,7 @@ describe.sequential( 'MongoDB 8 real-world differential matrix', () =>
             expect( result.equal ).toBe( true );
         } );
 
-        // Known bug B: add-field-pushdown reorders fields across $lookup without checking context.strictFieldOrder (resolved in U7)
-        it.fails( 'detects known bug B in strictFieldOrder mode for test.query', async () =>
+        it( 'verifies test.query in strictFieldOrder mode', async () =>
         {
             const testCase = createDifferentialCase(
                 'rw-test-query-sfo',
