@@ -91,6 +91,10 @@ export const filterProofManifest: readonly TransformationProofEvidence<FilterRul
         'u9-generated-top-level-filter-optimization',
         'u9-generated-nested-filter-optimization',
         'u4-pipeline-top-level-filter-rules',
+        {
+            status: 'inactive',
+            reason: 'Implicit equality matches array elements where explicit BSON equality does not; inactive pending exhaustive polymorphic array traversal proofs.'
+        }
     ),
     evidence(
         'simplify-singleton-in',
@@ -98,6 +102,10 @@ export const filterProofManifest: readonly TransformationProofEvidence<FilterRul
         'u9-generated-top-level-adjacent-match-merging',
         'u9-generated-nested-adjacent-match-merging',
         'u4-pipeline-nested-lookup-filters',
+        {
+            status: 'inactive',
+            reason: 'Singleton $in with regex or nested arrays has distinct BSON regex and multikey semantics compared to implicit equality; inactive pending multikey safety proofs.'
+        }
     ),
     evidence(
         'flatten-conjunctions',
@@ -105,6 +113,10 @@ export const filterProofManifest: readonly TransformationProofEvidence<FilterRul
         'u9-generated-top-level-limit-skip-coalescing',
         'u9-generated-nested-limit-skip-coalescing',
         'u4-filter-invalid-empty-and',
+        {
+            status: 'inactive',
+            reason: 'Flattening $and conjunctions alters evaluation order and short-circuit error semantics under strictErrors; inactive pending error containment proof.'
+        }
     ),
     evidence(
         'flatten-disjunctions',
@@ -112,6 +124,10 @@ export const filterProofManifest: readonly TransformationProofEvidence<FilterRul
         'u9-generated-top-level-match-pushdown',
         'u9-generated-nested-match-pushdown',
         'u4-filter-invalid-empty-or',
+        {
+            status: 'inactive',
+            reason: 'Flattening $or disjunctions alters index planner candidate selection and branch short-circuit evaluation order under strictErrors; inactive pending index-awareness audit.'
+        }
     ),
     evidence(
         'simplify-conjunction-identities',
@@ -119,6 +135,10 @@ export const filterProofManifest: readonly TransformationProofEvidence<FilterRul
         'u9-generated-top-level-limit-advance',
         'u9-generated-nested-limit-advance',
         'u4-filter-invalid-empty-and',
+        {
+            status: 'inactive',
+            reason: 'Dropping empty or contradictory conjunctions drops clauses that may contain un-evaluated error-prone expressions under strictErrors; inactive pending error guard integration.'
+        }
     ),
     evidence(
         'simplify-disjunction-identities',
@@ -126,6 +146,10 @@ export const filterProofManifest: readonly TransformationProofEvidence<FilterRul
         'u9-generated-top-level-unused-field-pruning',
         'u9-generated-nested-unused-field-pruning',
         'u4-filter-match-all-or-with-sibling',
+        {
+            status: 'inactive',
+            reason: 'Removing contradictory disjunction branches can suppress execution errors under strictErrors when other branches fail to match; inactive pending error containment proof.'
+        }
     ),
     evidence(
         'deduplicate-conjunctions',
@@ -133,6 +157,10 @@ export const filterProofManifest: readonly TransformationProofEvidence<FilterRul
         'u9-generated-top-level-adjacent-project-merging',
         'u9-generated-nested-adjacent-project-merging',
         'u4-filter-multikey-embedded-document-order',
+        {
+            status: 'inactive',
+            reason: 'Deduplicating conjunction expressions suppresses duplicate error-prone expressions under strictErrors; inactive pending error safety proof.'
+        }
     ),
     evidence(
         'merge-conjunctions',
@@ -140,6 +168,10 @@ export const filterProofManifest: readonly TransformationProofEvidence<FilterRul
         'u9-generated-top-level-adjacent-add-field-merging',
         'u9-generated-nested-adjacent-add-field-merging',
         'u4-pipeline-adjacent-multikey-matches',
+        {
+            status: 'inactive',
+            reason: 'Merging conjunctions into root object alters document field order and multikey duplicate path semantics; inactive pending field-order and multikey proof.'
+        }
     ),
 ]);
 
@@ -161,6 +193,10 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'u9-generated-top-level-filter-optimization',
         'u9-generated-nested-filter-optimization',
         'pipeline-invalid-empty-logical-array-contained',
+        {
+            status: 'inactive',
+            reason: 'Filter optimization pass delegates to the filter rule registry; inactive pending standalone filter rule gating across mixed-shape pipelines.'
+        }
     ),
     evidence(
         'adjacent-match-merging',
@@ -168,6 +204,10 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'u9-generated-top-level-adjacent-match-merging',
         'u9-generated-nested-adjacent-match-merging',
         'u4-pipeline-nested-facet-filters',
+        {
+            status: 'inactive',
+            reason: 'Merging adjacent $match stages across multikey or dotted paths alters array element independent matching semantics; blocked by multikey traversal safety.'
+        }
     ),
     evidence(
         'group-filter-pushdown',
