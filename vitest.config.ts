@@ -24,6 +24,7 @@ export default defineConfig({
         "src/passes/expr-normalization-proofs.ts": { branches: 100 },
         "src/passes/facet-prefix-hoisting.ts": { branches: 100 },
         "src/passes/facet-proofs.ts": { branches: 100 },
+        "src/passes/guarantee-guards.ts": { branches: 100 },
         "src/passes/group-filter-pushdown.ts": { branches: 100 },
         "src/passes/group-pushdown-proofs.ts": { branches: 100 },
         "src/passes/limit-skip-coalescing.ts": { branches: 100 },
