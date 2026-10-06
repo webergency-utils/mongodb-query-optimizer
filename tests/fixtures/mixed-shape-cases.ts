@@ -182,7 +182,6 @@ export const mixedShapeDifferentialCases: readonly MixedShapeDifferentialCase[] 
         ],
         observation: 'ordered-bson',
         expectedOriginalOutcome: 'failure',
-        knownBugModes: [ 'strictErrors' ],
     },
 
     // Polymorphic $add failing on non-numeric shapes

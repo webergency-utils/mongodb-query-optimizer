@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { OptimizerOptions } from '../src/index.js';
-import { optimizePipeline } from './helpers/pre-gate-optimizer.js';
+import { optimizePipelineWithCandidateProfile } from '../src/passes/registry.js';
 import {
     mixedShapeDifferentialCases,
     type MixedShapeDifferentialCase,
@@ -17,7 +17,12 @@ function materializeMixedShapeCase(
     options: OptimizerOptions = {},
 ): MongoDifferentialCase
 {
-    const optimized = optimizePipeline( testCase.pipeline as any[], options );
+    const optimized = optimizePipelineWithCandidateProfile(
+        testCase.pipeline as any[],
+        [ testCase.passId ],
+        undefined,
+        options
+    );
     const policy = oraclePolicyFromOptions( options );
 
     return {

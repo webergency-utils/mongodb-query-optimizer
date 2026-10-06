@@ -244,6 +244,16 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'u9-generated-top-level-top-k-pushdown',
         'u9-generated-nested-top-k-pushdown',
         'feat-top-k-pushdown-oracle',
+        {
+            status: 'active',
+            proofRecheckNote: 'Proof audited: sort semantics preserved across BSON types and arrays since crossed passive stages do not modify sort keys; constrained under strictErrors when crossed stage may error.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-ae5-toint-error',
+                strictFieldOrder: 'mixed-shape-ae5-toint-error',
+                strictErrors: 'mixed-shape-ae5-toint-error'
+            },
+            strictModeBehavior: 'constrained'
+        }
     ),
     evidence(
         'unused-field-pruning',

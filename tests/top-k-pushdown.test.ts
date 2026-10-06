@@ -9,6 +9,8 @@ import
     proveTopKPushdown,
 }
 from '../src/passes/top-k-proofs.js';
+import { resolvePipelineGuarantees } from '../src/guarantees.js';
+import { optimizePipeline as optimizePipelineProduction } from '../src/index.js';
 import { optimizePipeline } from './helpers/pre-gate-optimizer.js';
 import { runMockPipeline } from './helpers/mock-engine.js';
 
@@ -287,6 +289,108 @@ describe( 'TopKPushdownPass execution and mock verification', () =>
             { $limit: 2 },
             { $addFields: { tag: 'verified' } },
         ]);
+
+        const originalOutput = runMockPipeline( docs, pipeline );
+        const optimizedOutput = runMockPipeline( docs, optimized );
+
+        expect( optimizedOutput ).toEqual( originalOutput );
+    });
+
+    it( 'refuses to push across stage with errors under strictErrors mode (AE5)', () =>
+    {
+        const pipeline =
+        [
+            {
+                $addFields:
+                {
+                    parsed: { $toInt: '$val' }
+                }
+            },
+            {
+                $sort: { rank: 1, _id: 1 }
+            },
+            {
+                $limit: 1
+            }
+        ];
+
+        const defaultContext = { strictFieldOrder: false, strictErrors: false };
+        const strictErrorsContext = { strictFieldOrder: false, strictErrors: true };
+
+        // canTopKPushAcrossStage
+        expect( canTopKPushAcrossStage( pipeline[ 0 ], [ 'rank', '_id' ], defaultContext )).toBe( true );
+        expect( canTopKPushAcrossStage( pipeline[ 0 ], [ 'rank', '_id' ], strictErrorsContext )).toBe( false );
+
+        // proveTopKPushdown
+        expect( proveTopKPushdown( pipeline, 1, defaultContext )).not.toBeNull();
+        expect( proveTopKPushdown( pipeline, 1, strictErrorsContext )).toBeNull();
+
+        // Pass execution
+        const pass = new TopKPushdownPass();
+
+        expect( pass.execute( pipeline, strictErrorsContext )).toEqual( pipeline );
+
+        const pushed = pass.execute( pipeline, defaultContext );
+
+        expect( pushed[ 0 ] ).toHaveProperty( '$sort' );
+        expect( pushed[ 1 ] ).toHaveProperty( '$limit' );
+        expect( pushed[ 2 ] ).toHaveProperty( '$addFields' );
+    });
+
+    it( 'enforces strictErrors when pipeline contains a write stage ($merge / $out) (AE6)', () =>
+    {
+        const mergePipeline =
+        [
+            {
+                $addFields:
+                {
+                    parsed: { $toInt: '$val' }
+                }
+            },
+            {
+                $sort: { rank: 1, _id: 1 }
+            },
+            {
+                $limit: 5
+            },
+            {
+                $merge: { into: 'targetColl' }
+            }
+        ];
+
+        const pass = new TopKPushdownPass();
+        const writeContext = resolvePipelineGuarantees( mergePipeline, {} );
+
+        expect( writeContext.strictErrors ).toBe( true );
+        expect( pass.execute( mergePipeline, writeContext )).toEqual( mergePipeline );
+
+        // Production optimizePipeline only runs active gated passes and preserves strictErrors on write pipelines
+        expect( optimizePipelineProduction( mergePipeline )).toEqual( mergePipeline );
+    });
+
+    it( 'preserves sort semantics over documents with array sort keys and mixed values', () =>
+    {
+        const docs =
+        [
+            { _id: 1, tags: [ 5, 20 ], name: 'A' },
+            { _id: 2, tags: [ 2, 50 ], name: 'B' },
+            { _id: 3, tags: 10, name: 'C' },
+            { _id: 4, tags: [ 1, 15 ], name: 'D' }
+        ];
+
+        const pipeline =
+        [
+            { $addFields: { note: 'active' } },
+            { $sort: { tags: 1, _id: 1 } },
+            { $limit: 2 }
+        ];
+
+        const pass = new TopKPushdownPass();
+        const optimized = pass.execute( pipeline );
+
+        expect( optimized[ 0 ] ).toHaveProperty( '$sort' );
+        expect( optimized[ 1 ] ).toHaveProperty( '$limit' );
+        expect( optimized[ 2 ] ).toHaveProperty( '$addFields' );
 
         const originalOutput = runMockPipeline( docs, pipeline );
         const optimizedOutput = runMockPipeline( docs, optimized );

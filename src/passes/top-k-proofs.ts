@@ -1,26 +1,28 @@
 import { relatePaths } from '../analyzer/paths.js';
 import { projectionVisibility } from '../analyzer/projections.js';
 import { analyzeStage } from '../analyzer/semantics.js';
+import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
 import { isPlainObject } from '../utils.js';
+import { canMoveStageAcrossStage } from './guarantee-guards.js';
 import { getSingleStageEntry } from './helpers.js';
 
 export interface TopKPushdownProof
 {
-    readonly sortIndex: number;
-    readonly targetIndex: number;
-    readonly sliceLength: number;
+    readonly sortIndex   : number;
+    readonly targetIndex : number;
+    readonly sliceLength : number;
 }
 
 const TOP_K_PASSIVE_OPERATORS = new Set([
     '$lookup',
     '$addFields',
     '$set',
-    '$unset',
+    '$unset'
 ]);
 
 export function arePathsDisjoint(
-    left: Iterable<string>,
-    right: Iterable<string>
+    left  : Iterable<string>,
+    right : Iterable<string>
 ): boolean
 {
     for( const leftPath of left )
@@ -40,6 +42,7 @@ export function arePathsDisjoint(
 export function parseSafeSortKeys( sortStage: unknown ): string[] | null
 {
     const entry = getSingleStageEntry( sortStage );
+
     if(
         !entry
         || entry[ 0 ] !== '$sort'
@@ -51,6 +54,7 @@ export function parseSafeSortKeys( sortStage: unknown ): string[] | null
 
     const sortSpec = entry[ 1 ];
     const keys = Object.keys( sortSpec );
+
     if(
         keys.length === 0
         || Object.values( sortSpec ).some(
@@ -65,8 +69,8 @@ export function parseSafeSortKeys( sortStage: unknown ): string[] | null
 }
 
 export function parseTopKFollower(
-    pipeline: readonly any[],
-    sortIndex: number
+    pipeline  : readonly any[],
+    sortIndex : number
 ): { sliceLength: number } | null
 {
     if( sortIndex + 1 >= pipeline.length )
@@ -76,6 +80,7 @@ export function parseTopKFollower(
 
     const firstFollower = pipeline[ sortIndex + 1 ];
     const firstEntry = getSingleStageEntry( firstFollower );
+
     if( !firstEntry )
     {
         return null;
@@ -84,23 +89,28 @@ export function parseTopKFollower(
     if( firstEntry[ 0 ] === '$limit' )
     {
         const limitVal = firstEntry[ 1 ];
+
         if( typeof limitVal === 'number' && Number.isSafeInteger( limitVal ) && limitVal > 0 )
         {
             return { sliceLength: 2 };
         }
+
         return null;
     }
 
     if( firstEntry[ 0 ] === '$skip' && sortIndex + 2 < pipeline.length )
     {
         const skipVal = firstEntry[ 1 ];
+
         if( typeof skipVal === 'number' && Number.isSafeInteger( skipVal ) && skipVal >= 0 )
         {
             const secondFollower = pipeline[ sortIndex + 2 ];
             const secondEntry = getSingleStageEntry( secondFollower );
+
             if( secondEntry && secondEntry[ 0 ] === '$limit' )
             {
                 const limitVal = secondEntry[ 1 ];
+
                 if( typeof limitVal === 'number' && Number.isSafeInteger( limitVal ) && limitVal > 0 )
                 {
                     return { sliceLength: 3 };
@@ -113,17 +123,28 @@ export function parseTopKFollower(
 }
 
 export function canTopKPushAcrossStage(
-    stage: unknown,
-    sortKeys: readonly string[]
+    stage              : unknown,
+    sortKeys           : readonly string[],
+    context            : GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT,
+    downstreamPipeline : readonly unknown[] = []
 ): boolean
 {
     const entry = getSingleStageEntry( stage );
+
     if( !entry || !TOP_K_PASSIVE_OPERATORS.has( entry[ 0 ] ))
     {
         return false;
     }
 
+    const sortStage = { $sort: Object.fromEntries( sortKeys.map(( k ) => [ k, 1 ] )) };
+
+    if( !canMoveStageAcrossStage( sortStage, stage, 'earlier', context, downstreamPipeline ))
+    {
+        return false;
+    }
+
     const semantics = analyzeStage( stage );
+
     if(
         semantics.unknown
         || semantics.malformed
@@ -147,8 +168,9 @@ export function canTopKPushAcrossStage(
 }
 
 export function proveTopKPushdown(
-    pipeline: readonly any[],
-    sortIndex: number
+    pipeline  : readonly any[],
+    sortIndex : number,
+    context   : GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT
 ): TopKPushdownProof | null
 {
     if( sortIndex <= 0 || sortIndex >= pipeline.length )
@@ -157,24 +179,29 @@ export function proveTopKPushdown(
     }
 
     const sortKeys = parseSafeSortKeys( pipeline[ sortIndex ] );
+
     if( !sortKeys )
     {
         return null;
     }
 
     const follower = parseTopKFollower( pipeline, sortIndex );
+
     if( !follower )
     {
         return null;
     }
 
+    const downstreamPipeline = pipeline.slice( sortIndex + 1 );
     let targetIndex = sortIndex;
+
     for( let i = sortIndex - 1; i >= 0; i-- )
     {
-        if( !canTopKPushAcrossStage( pipeline[ i ], sortKeys ))
+        if( !canTopKPushAcrossStage( pipeline[ i ], sortKeys, context, downstreamPipeline ))
         {
             break;
         }
+
         targetIndex = i;
     }
 
@@ -186,6 +213,6 @@ export function proveTopKPushdown(
     return {
         sortIndex,
         targetIndex,
-        sliceLength: follower.sliceLength,
+        sliceLength: follower.sliceLength
     };
 }
