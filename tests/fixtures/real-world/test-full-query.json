@@ -1,0 +1,177 @@
+[{
+"$match": {
+  "deleted": {
+    "$ne": true
+    }
+  }
+},{
+"$lookup": {
+  "from": "briefings",
+  "localField": "_id",
+  "foreignField": "relations.jobIDs",
+  "as": "briefings"
+  }
+},{
+"$lookup": {
+  "from": "placements",
+  "localField": "engagements.applications.id",
+  "foreignField": "applicationID",
+  "as": "latestPlacement",
+  "pipeline": [{
+    "$match": {
+      "applicationID": {
+        "$exists": true
+        }
+      }
+    },{
+    "$sort": {
+      "events.created": -1
+      }
+    },{
+    "$limit": 1
+    }]
+  }
+},{
+"$addFields": {
+  "ragStatus": {
+    "$function": {
+      "body": "function ragStatus(job) {\n    const businessDaysSince = (date) => {\n        const start = new Date(date);\n        const end = new Date();\n        start.setHours(0, 0, 0, 0);\n        end.setHours(0, 0, 0, 0);\n        if (start >= end) {\n            return 0;\n        }\n        let businessDays = 0;\n        const current = new Date(start);\n        while (current < end) {\n            const day = current.getDay();\n            if (day !== 0 && day !== 6) {\n                businessDays++;\n            }\n            current.setDate(current.getDate() + 1);\n        }\n        return businessDays;\n    };\n    const _daysFromCreation = (job) => {\n        const openDate = ([...(job.history ?? [])].reverse().find(h => {\n            if (typeof h.action === 'string') {\n                if (h.action === 'Job reopened')\n                    return true;\n                try {\n                    const parsed = JSON.parse(h.action);\n                    return (typeof parsed === 'object' && parsed !== null && parsed.status !== undefined && parsed.status.new === \"open\");\n                }\n                catch (e) {\n                    return false;\n                }\n            }\n            return false;\n        })?.events?.created || job.events.created);\n        return Math.floor((Date.now() - openDate.getTime()) / 1000 / 60 / 60 / 24);\n    };\n    const _businessDaysFromCreation = (job) => {\n        const openDate = ([...(job.history ?? [])].reverse().find(h => {\n            if (typeof h.action === 'string') {\n                if (h.action === 'Job reopened')\n                    return true;\n                try {\n                    const parsed = JSON.parse(h.action);\n                    return (typeof parsed === 'object' && parsed !== null && parsed.status !== undefined && parsed.status.new === \"open\");\n                }\n                catch (e) {\n                    return false;\n                }\n            }\n            return false;\n        })?.events?.created || job.events.created);\n        return businessDaysSince(new Date(openDate));\n    };\n    const _dateLastBriefing = (job) => job.briefings.filter(b => b.status !== 'cancelled' && b.date.end < new Date()).sort((a, b) => b.date.end.getTime() - a.date.end.getTime())[0]?.date.end;\n    const _businessDaysFromLastBriefing = (job) => _dateLastBriefing(job) ? businessDaysSince(new Date(_dateLastBriefing(job))) : businessDaysSince(new Date(0));\n    const _daysFromLastBriefing = (job) => _dateLastBriefing(job) ? Math.floor((Date.now() - _dateLastBriefing(job).getTime()) / 1000 / 60 / 60 / 24) : undefined;\n    const _hasFutureBriefings = (job) => job.briefings.filter(b => b.status !== 'cancelled' && b.date.end >= new Date() && (!b.relations.applicationIDs || b.relations.applicationIDs?.length === 0)).length > 0;\n    const _dateOnHold = (job) => job.status === 'paused' ? job.positions.filter(p => p.status === 'paused')[0]?.events.updated || job.history.filter(h => h.action === 'Job put on hold' || h.action.match(/\"new\":\"paused\"/))[0]?.events.created || job.events.updated || job.events.refreshed : undefined;\n    //const _daysFromOnHold = ( job: JOB ) => job.status === 'paused' && _dateOnHold(job) ? Math.floor(( Date.now() - _dateOnHold(job)!.getTime() ) / 1000 / 60 / 60 / 24 ) : undefined;\n    const _daysFromOnHold = (job) => job.status === 'paused' && _dateOnHold(job) ? businessDaysSince(_dateOnHold(job)) : undefined;\n    const _activePositionsCount = (job) => job.positions.filter(position => position.active).length;\n    const _getApplicationStatusDate = (application, status) => {\n        if (!application) {\n            return undefined;\n        }\n        return application.events[status] || [...application.history.filter(a => a.status === status)].reverse()[0]?.events.created;\n    };\n    const _applicationSlotsCount = (job) => {\n        const slotsPerEngagement = job.settings.engagement.cvs;\n        return job.engagements.filter(e => e.status === 'active').length * slotsPerEngagement;\n    };\n    const _applicationsActiveCount = (job) => job.engagements.reduce((acc, engagement) => acc + engagement.applications.reduce((acc, application) => acc + (!['withdrawn', 'dropout', 'rejected'].includes(application.status) ? 1 : 0), 0), 0);\n    //const _percentageOfApplicationsSubmitted = ( job: JOB ) =>  _applicationSlotsCount(job) > 0 ? Math.floor( ( _applicationsActiveCount(job) / _applicationSlotsCount(job) ) * 100 ) : 0;\n    const _applicationsInterviewing = (job) => job.engagements.flatMap(e => e.applications).filter(a => a.status === 'interviewing');\n    const _dateLastActiveApplicationInterviewing = (job) => _getApplicationStatusDate(_applicationsInterviewing(job).sort((a, b) => (_getApplicationStatusDate(b, 'interviewing') || new Date(0)).getTime() - (_getApplicationStatusDate(a, 'interviewing') || new Date(0)).getTime())[0], 'interviewing');\n    const _daysFromLastActiveApplicationInterviewing = (job) => _dateLastActiveApplicationInterviewing(job) && _dateLastActiveApplicationInterviewing(job).getTime() > 0 ? Math.floor((Date.now() - _dateLastActiveApplicationInterviewing(job).getTime()) / 1000 / 60 / 60 / 24) : undefined;\n    const _applicationsUnderOffer = (job) => job.engagements.flatMap(e => e.applications).filter(a => a.status === 'under-offer');\n    const _hasApplicationUnderOffer = (job) => _applicationsUnderOffer(job).length > 0;\n    const _applicationsPlaced = (job) => job.engagements.flatMap(e => e.applications).filter(a => ['hired', 'placed'].includes(a.status) && (a.events?.placed || a.events?.hired));\n    const _hasPlacementLogged = (job) => _applicationsPlaced(job).length > 0;\n    let applicationUnderOffer = _hasApplicationUnderOffer(job);\n    let placementLogged = _hasPlacementLogged(job);\n    let activePositionsCount = _activePositionsCount(job);\n    let _job = job;\n    if ((placementLogged && activePositionsCount > 0) || (applicationUnderOffer && activePositionsCount > 1)) {\n        _job = {\n            ..._job,\n            engagements: _job.engagements.map(e => ({ ...e, applications: e.applications.filter(a => !['under-offer', 'placed', 'hired'].includes(a.status)) }))\n        };\n    }\n    try {\n        const daysFromCreation = _daysFromCreation(_job);\n        const businessDaysFromCreation = _businessDaysFromCreation(_job);\n        const daysFromLastBriefing = _daysFromLastBriefing(_job);\n        const businessDaysFromLastBriefing = _businessDaysFromLastBriefing(_job);\n        const daysFromOnHold = _daysFromOnHold(_job);\n        const daysFromLastActiveApplicationInterviewing = _daysFromLastActiveApplicationInterviewing(_job);\n        //const percentageOfAppplicationsSubmitted = _percentageOfApplicationsSubmitted( _job );\n        const applicationsInterviewing = _applicationsInterviewing(_job).length;\n        const activeApplicationsCount = _applicationsActiveCount(_job);\n        applicationUnderOffer = _hasApplicationUnderOffer(_job);\n        placementLogged = _hasPlacementLogged(_job);\n        activePositionsCount = _activePositionsCount(_job);\n        //const daysFromLatestEvent = Math.min( daysFromCreation, daysFromLastBriefing || Infinity );\n        const businessDaysFromLatestEvent = Math.min(businessDaysFromCreation, businessDaysFromLastBriefing);\n        if (daysFromCreation <= 3) {\n            return { status: 'white', reason: 'Less than 3 days from creation' };\n        }\n        if (daysFromLastBriefing !== undefined && daysFromLastBriefing <= 3) {\n            return { status: 'white', reason: 'Less than 3 days from last briefing' };\n        }\n        if (_hasFutureBriefings(job)) {\n            return { status: 'white', reason: 'Has planned briefings in the future' };\n        }\n        if (daysFromOnHold !== undefined && daysFromOnHold <= 21) {\n            return { status: 'green', reason: 'On hold for less than 21 days' };\n        }\n        if (daysFromOnHold !== undefined && daysFromOnHold <= 42) {\n            return { status: 'amber', reason: 'On hold for 22 to 42 days' };\n        }\n        if (daysFromOnHold !== undefined && daysFromOnHold > 42) {\n            return { status: 'red', reason: 'On hold for more than 42 days' };\n        }\n        if ((placementLogged && activePositionsCount === 0) || (applicationUnderOffer && activePositionsCount === 1)) {\n            return { status: 'green', reason: placementLogged ? 'Placement logged' : 'Application under offer' };\n        }\n        if (businessDaysFromLatestEvent > 15) {\n            if (applicationsInterviewing >= 3) {\n                return { status: 'green', reason: 'More than 3 active interviews' };\n            }\n            if (applicationsInterviewing >= 2) {\n                return { status: 'amber', reason: '2 active interviews' };\n            }\n            if (applicationsInterviewing < 2) {\n                return { status: 'red', reason: '1 or less active interviews' };\n            }\n        }\n        if (daysFromLastActiveApplicationInterviewing !== undefined && daysFromLastActiveApplicationInterviewing >= 42) {\n            return { status: 'red', reason: 'Last application interviewing more than 42 days ago' };\n        }\n        if (daysFromLastActiveApplicationInterviewing !== undefined && daysFromLastActiveApplicationInterviewing >= 28) {\n            return { status: 'amber', reason: 'Last application interviewing more than 28 days ago' };\n        }\n        if (daysFromCreation >= 90) {\n            return { status: 'white', reason: 'Job older than 90+ days' };\n        }\n        /*if ( daysFromLatestEvent > 3 )\n        {\n            if ( percentageOfAppplicationsSubmitted > 50 ) { return { status: 'green', reason: 'More than 50% active applications' }; }\n            if ( percentageOfAppplicationsSubmitted >= 25 ) { return { status: 'amber', reason: '25% to 50% active applications'}; }\n            if ( percentageOfAppplicationsSubmitted < 25 ) { return { status: 'red', reason: 'Less than 25% active applications'}; }\n        }*/\n        if (businessDaysFromLatestEvent >= 1 && businessDaysFromLatestEvent <= 5) {\n            if (activeApplicationsCount >= 5) {\n                return { status: 'green', reason: '5+ active applications in first 5 days' };\n            }\n            if (activeApplicationsCount >= 3) {\n                return { status: 'amber', reason: '3 to 4 active applications in first 5 days' };\n            }\n            if (activeApplicationsCount < 3) {\n                return { status: 'red', reason: '3 or less active applications in first 5 days' };\n            }\n        }\n        if (businessDaysFromLatestEvent >= 6 && businessDaysFromLatestEvent <= 10) {\n            if (activeApplicationsCount >= 10) {\n                return { status: 'green', reason: '10+ active applications in first 10 days' };\n            }\n            if (activeApplicationsCount >= 7) {\n                return { status: 'amber', reason: '7 to 9 active applications in first 10 days' };\n            }\n            if (activeApplicationsCount < 7) {\n                return { status: 'red', reason: '6 or less active applications in first 10 days' };\n            }\n        }\n        if (businessDaysFromLatestEvent >= 11) {\n            if (activeApplicationsCount >= 5) {\n                return { status: 'green', reason: '5+ active applications after 11+ days' };\n            }\n            if (activeApplicationsCount >= 3) {\n                return { status: 'amber', reason: '3 to 4 active applications after 11+ days' };\n            }\n            if (activeApplicationsCount < 3) {\n                return { status: 'red', reason: '3 or less active applications after 11+ days' };\n            }\n        }\n        return { status: 'white', reason: 'Fallback' };\n    }\n    catch (e) {\n        return { status: 'white', reason: 'Error' };\n    }\n}",
+      "args": ["$$ROOT"],
+      "lang": "js"
+      }
+    }
+  }
+},{
+"$addFields": {
+  "normalizedSalary": {
+    "$function": {
+      "body": "function normalizeSalaryRange(salary, rateTo, currencyTo, currencyRates, worktimeRate) {\n    if (!salary?.range?.min || !salary?.range?.max) {\n        return { min: 0, max: 0 };\n    }\n    return {\n        min: salary.range.min * currencyRates[salary.currency] * (worktimeRate[salary.rate] / worktimeRate[rateTo]),\n        max: salary.range.max * currencyRates[salary.currency] * (worktimeRate[salary.rate] / worktimeRate[rateTo]),\n    };\n}",
+      "args": ["$employment.salary","year","GBP",{
+        "EUR": 0.8472,
+        "USD": 0.756158514816137,
+        "JPY": 0.004778880866425993,
+        "CZK": 0.03464180569185476,
+        "DKK": 0.11334537427252658,
+        "GBP": 1,
+        "HUF": 0.0023034257748776508,
+        "PLN": 0.19344674049549032,
+        "RON": 0.1587616888105991,
+        "SEK": 0.07528993556987336,
+        "CHF": 0.9098915261518633,
+        "ISK": 0.006183941605839416,
+        "NOK": 0.07875435742505228,
+        "TRY": 0.015382520358417081,
+        "AUD": 0.5263092501708393,
+        "BRL": 0.15169474833927196,
+        "CAD": 0.5305278978019914,
+        "CNY": 0.11278255544609814,
+        "HKD": 0.09635484788171736,
+        "IDR": 0.000042212488459079745,
+        "ILS": 0.24692509472457008,
+        "INR": 0.007852333130969539,
+        "KRW": 0.000562624518528357,
+        "MXN": 0.04166256860160906,
+        "MYR": 0.18501452250442224,
+        "NZD": 0.4227966862960375,
+        "PHP": 0.012065110582605848,
+        "SGD": 0.5906302286670385,
+        "THB": 0.022441195168467893,
+        "ZAR": 0.04548407359486317
+        },{
+        "minute": 450,
+        "hour": 7.5,
+        "day": 1,
+        "week": 0.2,
+        "month": 0.04608294930875576,
+        "year": 0.0038402457757296467
+        }],
+      "lang": "js"
+      }
+    },
+  "totalApplicationsCount": {
+    "$sum": {
+      "$map": {
+        "input": "$engagements",
+        "as": "engagement",
+        "in": {
+          "$size": {
+            "$filter": {
+              "input": "$$engagement.applications",
+              "as": "application",
+              "cond": {
+                "$and": [{
+
+                  },{
+
+                  }]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+  "activeApplicationsCount": {
+    "$sum": {
+      "$map": {
+        "input": "$engagements",
+        "as": "engagement",
+        "in": {
+          "$size": {
+            "$filter": {
+              "input": "$$engagement.applications",
+              "as": "application",
+              "cond": {
+                "$and": ["$$application.active",{
+
+                  }]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+  "totalPositionsCount": {
+    "$size": "$positions"
+    },
+  "activePositionsCount": {
+    "$size": {
+      "$filter": {
+        "input": "$positions",
+        "as": "position",
+        "cond": "$$position.active"
+        }
+      }
+    },
+  "totalEngagementsCount": {
+    "$size": "$engagements"
+    },
+  "activeEngagementsCount": {
+    "$size": {
+      "$filter": {
+        "input": "$engagements",
+        "as": "engagement",
+        "cond": {
+          "$eq": ["$$engagement.status","active"]
+          }
+        }
+      }
+    },
+  "furthestStage": {
+    "$function": {
+      "body": "function furthestStage(engagements, positions) {\n    const stages = ['posted', 'engaged', 'application', 'interviewing', 'offer', 'placed', 'hired'];\n    let i = 0;\n    for (let engagement of engagements) {\n        if (engagement.status === 'active' && i < 1) {\n            i = 1;\n        }\n        const limitStage = positions.filter(p => p.active).length > 0;\n        for (let application of engagement?.applications.filter(a => limitStage ? !['rejected', 'withdrawn', 'dropout', 'transferred', 'placed', 'hired'].includes(a.status) : true) || []) {\n            if (application.active && i < 2) {\n                i = 2;\n            }\n            if (application.status === 'interviewing' && i < 3) {\n                i = 3;\n            }\n            if (application.status === 'under-offer' && i < 4) {\n                i = 4;\n            }\n            if (application.status === 'placed' && i < 5) {\n                i = 5;\n            }\n            if (application.status === 'hired' && i < 6) {\n                i = 6;\n            }\n        }\n        if (i === 6) {\n            break;\n        }\n    }\n    return stages[i];\n}",
+      "args": ["$engagements","$positions"],
+      "lang": "js"
+      }
+    }
+  }
+},{
+"$sort": {
+    "furthestStage": 1,
+  "events.created": -1,
+  "_id": -1
+  }
+},{
+"$limit": 100
+}]

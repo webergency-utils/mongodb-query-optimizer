@@ -1,0 +1,167 @@
+[{
+"$match": {
+  "deleted": {
+    "$ne": true
+    }
+  }
+},{
+"$lookup": {
+  "from": "briefings",
+  "localField": "_id",
+  "foreignField": "relations.jobIDs",
+  "as": "briefings"
+  }
+},{
+"$lookup": {
+  "from": "placements",
+  "localField": "engagements.applications.id",
+  "foreignField": "applicationID",
+  "as": "latestPlacement",
+  "pipeline": [{
+    "$match": {
+      "applicationID": {
+        "$exists": true
+        }
+      }
+    },{
+    "$sort": {
+      "events.created": -1
+      }
+    },{
+    "$limit": 1
+    }]
+  }
+},{
+"$addFields": {
+  "normalizedSalary": {
+    "$function": {
+      "body": "function normalizeSalaryRange(salary, rateTo, currencyTo, currencyRates, worktimeRate) {\n    if (!salary?.range?.min || !salary?.range?.max) {\n        return { min: 0, max: 0 };\n    }\n    return {\n        min: salary.range.min * currencyRates[salary.currency] * (worktimeRate[salary.rate] / worktimeRate[rateTo]),\n        max: salary.range.max * currencyRates[salary.currency] * (worktimeRate[salary.rate] / worktimeRate[rateTo]),\n    };\n}",
+      "args": ["$employment.salary","year","GBP",{
+        "EUR": 0.8472,
+        "USD": 0.756158514816137,
+        "JPY": 0.004778880866425993,
+        "CZK": 0.03464180569185476,
+        "DKK": 0.11334537427252658,
+        "GBP": 1,
+        "HUF": 0.0023034257748776508,
+        "PLN": 0.19344674049549032,
+        "RON": 0.1587616888105991,
+        "SEK": 0.07528993556987336,
+        "CHF": 0.9098915261518633,
+        "ISK": 0.006183941605839416,
+        "NOK": 0.07875435742505228,
+        "TRY": 0.015382520358417081,
+        "AUD": 0.5263092501708393,
+        "BRL": 0.15169474833927196,
+        "CAD": 0.5305278978019914,
+        "CNY": 0.11278255544609814,
+        "HKD": 0.09635484788171736,
+        "IDR": 0.000042212488459079745,
+        "ILS": 0.24692509472457008,
+        "INR": 0.007852333130969539,
+        "KRW": 0.000562624518528357,
+        "MXN": 0.04166256860160906,
+        "MYR": 0.18501452250442224,
+        "NZD": 0.4227966862960375,
+        "PHP": 0.012065110582605848,
+        "SGD": 0.5906302286670385,
+        "THB": 0.022441195168467893,
+        "ZAR": 0.04548407359486317
+        },{
+        "minute": 450,
+        "hour": 7.5,
+        "day": 1,
+        "week": 0.2,
+        "month": 0.04608294930875576,
+        "year": 0.0038402457757296467
+        }],
+      "lang": "js"
+      }
+    },
+  "totalApplicationsCount": {
+    "$sum": {
+      "$map": {
+        "input": "$engagements",
+        "as": "engagement",
+        "in": {
+          "$size": {
+            "$filter": {
+              "input": "$$engagement.applications",
+              "as": "application",
+              "cond": {
+                "$and": [{
+
+                  },{
+
+                  }]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+  "activeApplicationsCount": {
+    "$sum": {
+      "$map": {
+        "input": "$engagements",
+        "as": "engagement",
+        "in": {
+          "$size": {
+            "$filter": {
+              "input": "$$engagement.applications",
+              "as": "application",
+              "cond": {
+                "$and": ["$$application.active",{
+
+                  }]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+  "totalPositionsCount": {
+    "$size": "$positions"
+    },
+  "activePositionsCount": {
+    "$size": {
+      "$filter": {
+        "input": "$positions",
+        "as": "position",
+        "cond": "$$position.active"
+        }
+      }
+    },
+  "totalEngagementsCount": {
+    "$size": "$engagements"
+    },
+  "activeEngagementsCount": {
+    "$size": {
+      "$filter": {
+        "input": "$engagements",
+        "as": "engagement",
+        "cond": {
+          "$eq": ["$$engagement.status","active"]
+          }
+        }
+      }
+    },
+  "furthestStage": {
+    "$function": {
+      "body": "function furthestStage(engagements, positions) {\n    const stages = ['posted', 'engaged', 'application', 'interviewing', 'offer', 'placed', 'hired'];\n    let i = 0;\n    for (let engagement of engagements) {\n        if (engagement.status === 'active' && i < 1) {\n            i = 1;\n        }\n        const limitStage = positions.filter(p => p.active).length > 0;\n        for (let application of engagement?.applications.filter(a => limitStage ? !['rejected', 'withdrawn', 'dropout', 'transferred', 'placed', 'hired'].includes(a.status) : true) || []) {\n            if (application.active && i < 2) {\n                i = 2;\n            }\n            if (application.status === 'interviewing' && i < 3) {\n                i = 3;\n            }\n            if (application.status === 'under-offer' && i < 4) {\n                i = 4;\n            }\n            if (application.status === 'placed' && i < 5) {\n                i = 5;\n            }\n            if (application.status === 'hired' && i < 6) {\n                i = 6;\n            }\n        }\n        if (i === 6) {\n            break;\n        }\n    }\n    return stages[i];\n}",
+      "args": ["$engagements","$positions"],
+      "lang": "js"
+      }
+    }
+  }
+},{
+"$sort": {
+    "furthestStage": 1,
+  "events.created": -1,
+  "_id": -1
+  }
+},{
+"$limit": 100
+}]
