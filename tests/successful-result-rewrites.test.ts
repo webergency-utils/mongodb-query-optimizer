@@ -369,6 +369,21 @@ describe('redundant lookup elimination pass', () =>
             expected,
         );
     });
+
+    it('accepts guarantee context and respects strictErrors for error-prone lookups', () =>
+    {
+        const pass = new RedundantLookupEliminationPass();
+        const safePipeline = [
+            lookup(),
+            { $project: { name: 1 } },
+        ];
+        expect(pass.execute(safePipeline, { strictFieldOrder: true, strictErrors: true })).toEqual([
+            { $project: { name: 1 } },
+        ]);
+
+        const malformedLookup = { $lookup: 'invalid' };
+        expect(proveRedundantLookupElimination(malformedLookup, { $project: { name: 1 } }, { strictFieldOrder: false, strictErrors: true })).toBe(false);
+    });
 });
 
 describe('lookup delay proofs', () =>

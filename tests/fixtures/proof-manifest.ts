@@ -413,6 +413,16 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'u9-generated-top-level-redundant-lookup-elimination',
         'u9-generated-nested-redundant-lookup-elimination',
         'u7-redundant-lookup-discarded-project',
+        {
+            status: 'active',
+            proofRecheckNote: 'Proof audited: eliminates simple equality lookups whose alias is immediately discarded by following stage; under strictErrors, error-prone stages cannot be removed.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-redundant-lookup-elimination',
+                strictFieldOrder: 'mixed-shape-redundant-lookup-elimination',
+                strictErrors: 'mixed-shape-redundant-lookup-elimination'
+            },
+            strictModeBehavior: 'constrained'
+        }
     ),
     evidence(
         'sort-project-commute',

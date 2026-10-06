@@ -475,4 +475,37 @@ export const mixedShapeDifferentialCases: readonly MixedShapeDifferentialCase[] 
         observation: 'ordered-bson',
         expectedOriginalOutcome: 'success',
     },
+
+    // Polymorphic redundant lookup elimination
+    {
+        id: 'mixed-shape-redundant-lookup-elimination',
+        description: 'redundant-lookup-elimination removes lookup immediately discarded by project',
+        passId: 'redundant-lookup-elimination',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: standardMixedShapeDocs,
+            },
+            foreign: {
+                documents: [
+                    { _id: 1, val: 10 },
+                    { _id: 2, val: 20 },
+                ],
+            },
+        },
+        pipeline: [
+            { $sort: { _id: 1 } },
+            {
+                $lookup: {
+                    from: 'foreign',
+                    localField: 'val',
+                    foreignField: 'val',
+                    as: 'joined',
+                },
+            },
+            { $project: { _id: 1, status: 1 } },
+        ],
+        observation: 'ordered-bson',
+        expectedOriginalOutcome: 'success',
+    },
 ];

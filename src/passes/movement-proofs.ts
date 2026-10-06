@@ -20,6 +20,7 @@ import { GuaranteeContext, DEFAULT_GUARANTEE_CONTEXT } from '../guarantees.js';
 import
 {
     canMoveStageAcrossStage,
+    canRemoveStage,
     isStageProvenErrorFree,
     stageReadsFieldOrder,
 }
@@ -926,18 +927,24 @@ export function proveLookupDelayAcrossStage(
  * the successful output. Lookup execution errors are out of scope.
  */
 export function proveRedundantLookupElimination(
-    lookupStage: unknown,
-    followingStage: unknown,
+    lookupStage    : unknown,
+    followingStage : unknown,
+    context?       : GuaranteeContext
 ): boolean
 {
-    if (!isSimpleEqualityLookup(lookupStage))
+    if( context && !canRemoveStage( lookupStage, context ))
+    {
+        return false;
+    }
+
+    if( !isSimpleEqualityLookup( lookupStage ))
     {
         return false;
     }
 
     return isExactPathDiscardedByFollower(
         lookupStage.$lookup.as,
-        followingStage,
+        followingStage
     );
 }
 
