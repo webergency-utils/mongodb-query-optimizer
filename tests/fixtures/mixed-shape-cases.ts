@@ -527,4 +527,23 @@ export const mixedShapeDifferentialCases: readonly MixedShapeDifferentialCase[] 
         observation: 'ordered-bson',
         expectedOriginalOutcome: 'success',
     },
+
+    // Polymorphic complex projection deferral
+    {
+        id: 'mixed-shape-complex-projection-deferral',
+        description: 'complex-projection-deferral moves error-free addFields past sort over polymorphic documents',
+        passId: 'complex-projection-deferral',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: standardMixedShapeDocs,
+            },
+        },
+        pipeline: [
+            { $addFields: { extra: 1 } },
+            { $sort: { val: 1, _id: 1 } },
+        ],
+        observation: 'ordered-bson',
+        expectedOriginalOutcome: 'success',
+    },
 ];

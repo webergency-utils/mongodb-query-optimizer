@@ -447,6 +447,16 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'u9-generated-top-level-complex-projection-deferral',
         'u9-generated-nested-complex-projection-deferral',
         'u6-add-field-deferral-sort',
+        {
+            status: 'active',
+            proofRecheckNote: 'Proof audited: delays deterministic addFields/set past adjacent sort when sort keys do not overlap written fields; field order is preserved; constrained under strictErrors when addFields stage may error.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-complex-projection-deferral',
+                strictFieldOrder: 'mixed-shape-complex-projection-deferral',
+                strictErrors: 'mixed-shape-complex-projection-deferral',
+            },
+            strictModeBehavior: 'constrained',
+        },
     ),
     evidence(
         'facet-prefix-hoisting',
