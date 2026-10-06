@@ -175,6 +175,16 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'u9-generated-top-level-group-filter-pushdown',
         'u9-generated-nested-group-filter-pushdown',
         'feat-group-filter-pushdown-oracle',
+        {
+            status: 'active',
+            proofRecheckNote: 'Proof audited: pushes ID prefilters before group; preserves null/array group semantics in MQL; restricts computed ID pushdown to null-rejecting string ops; constrained under strictErrors when group stage may error.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-group-filter-pushdown',
+                strictFieldOrder: 'mixed-shape-group-filter-pushdown',
+                strictErrors: 'mixed-shape-group-filter-pushdown'
+            },
+            strictModeBehavior: 'constrained'
+        }
     ),
     evidence(
         'bucket-filter-pushdown',

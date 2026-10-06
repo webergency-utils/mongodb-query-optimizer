@@ -632,4 +632,25 @@ describe('optimizePipeline execution parity for group filter pushdown', () =>
             { _id: 'Sales', headcount: 3, payroll: 290 },
         ]);
     });
+
+    it( 'blocks pushing down filter when group stage may error under strictErrors', () =>
+    {
+        const pass = new GroupFilterPushdownPass();
+        const pipeline = [
+            {
+                $group: {
+                    _id: '$department',
+                    total: { $sum: { $toInt: '$val' } }
+                }
+            },
+            {
+                $match: {
+                    _id: 'Sales'
+                }
+            }
+        ];
+
+        const result = pass.execute( pipeline, { strictFieldOrder: false, strictErrors: true } );
+        expect( result ).toEqual( pipeline );
+    });
 });

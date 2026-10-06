@@ -106,6 +106,7 @@ describe('explicit immutable transformation registries', () =>
         const status = getPipelineTransformationRegistryStatus();
 
         expect(status.active).toEqual([
+            'group-filter-pushdown',
             'unwind-prefilter',
             'match-pushdown',
             'limit-advance',

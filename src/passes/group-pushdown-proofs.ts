@@ -1,4 +1,6 @@
+import { GuaranteeContext } from '../guarantees.js';
 import { deepClone, isPlainObject } from '../utils.js';
+import { isStageProvenErrorFree } from './guarantee-guards.js';
 import {
     combineConjuncts,
     decomposeFilterIntoConjuncts,
@@ -33,9 +35,15 @@ function conditionRejectsNull( condition: unknown ): boolean
 
 export function proveGroupFilterPushdown(
     groupStage: unknown,
-    matchStage: unknown
+    matchStage: unknown,
+    context?: GuaranteeContext
 ): GroupFilterPushdownProof | null
 {
+    if( context?.strictErrors && !isStageProvenErrorFree( groupStage ))
+    {
+        return null;
+    }
+
     const groupSpec = getStageSpec<Record<string, any>>( groupStage, '$group' );
     const matchSpec = getStageSpec<Record<string, any>>( matchStage, '$match' );
 

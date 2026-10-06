@@ -65,6 +65,7 @@ export type PipelineTransformationId =
     typeof registeredPipelineTransformationIds[number];
 
 const activePipelineTransformationIds: readonly PipelineTransformationId[] = Object.freeze([
+    'group-filter-pushdown',
     'unwind-prefilter',
     'match-pushdown',
     'limit-advance',
