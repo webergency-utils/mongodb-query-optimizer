@@ -8,9 +8,12 @@ import {
     type FindOptions,
 } from 'mongodb';
 import type {
+    ExpectedOriginalOutcome,
     LogicalCollectionFixture,
     ObservationMode,
+    OracleComparisonPolicy,
 } from '../helpers/mongodb-oracle.js';
+import type { OptimizerOptions } from '../../src/index.js';
 
 interface SemanticCaseBase
 {
@@ -18,6 +21,9 @@ interface SemanticCaseBase
     readonly mainCollectionId: string;
     readonly collections: Readonly<Record<string, LogicalCollectionFixture>>;
     readonly observation: ObservationMode;
+    readonly policy?: OracleComparisonPolicy;
+    readonly expectedOriginalOutcome?: ExpectedOriginalOutcome;
+    readonly optimizerOptions?: OptimizerOptions;
     readonly affectedTransformationIds: readonly string[];
 }
 
@@ -353,7 +359,9 @@ export const productionSemanticCases: readonly SemanticCase[] = [
         filter: {
             $and: [],
         },
-        observation: 'acceptance-error',
+        observation: 'ordered-bson',
+        policy: { errors: 'strict' },
+        expectedOriginalOutcome: 'failure',
         affectedTransformationIds: [
             'flatten-conjunctions',
             'simplify-conjunction-identities',
@@ -371,7 +379,9 @@ export const productionSemanticCases: readonly SemanticCase[] = [
         filter: {
             $or: [],
         },
-        observation: 'acceptance-error',
+        observation: 'ordered-bson',
+        policy: { errors: 'strict' },
+        expectedOriginalOutcome: 'failure',
         affectedTransformationIds: [
             'flatten-disjunctions',
             'simplify-disjunction-identities',
@@ -477,7 +487,9 @@ export const productionSemanticCases: readonly SemanticCase[] = [
                 },
             },
         ],
-        observation: 'acceptance-error',
+        observation: 'ordered-bson',
+        policy: { errors: 'strict' },
+        expectedOriginalOutcome: 'failure',
         affectedTransformationIds: ['filter-optimization'],
         expectedEquivalent: true,
     },
@@ -946,7 +958,9 @@ export const productionSemanticCases: readonly SemanticCase[] = [
             { $set: { ratio: { $divide: [1, '$divisor'] } } },
             { $match: { status: 'active' } },
         ],
-        observation: 'acceptance-error',
+        observation: 'ordered-bson',
+        policy: { errors: 'strict' },
+        expectedOriginalOutcome: 'success',
         affectedTransformationIds: ['match-pushdown'],
         expectedEquivalent: true,
     },
@@ -1389,7 +1403,9 @@ export const productionSemanticCases: readonly SemanticCase[] = [
             { $set: { dead: { $divide: [1, '$divisor'] } } },
             { $unset: 'dead' },
         ],
-        observation: 'acceptance-error',
+        observation: 'ordered-bson',
+        policy: { errors: 'strict' },
+        expectedOriginalOutcome: 'failure',
         affectedTransformationIds: ['unused-field-pruning'],
         expectedEquivalent: true,
     },
@@ -2093,7 +2109,9 @@ export const productionSemanticCases: readonly SemanticCase[] = [
             { $set: { computed: { $add: ['$untyped', 1] } } },
             { $match: { status: 'active' } },
         ],
-        observation: 'acceptance-error',
+        observation: 'ordered-bson',
+        policy: { errors: 'strict' },
+        expectedOriginalOutcome: 'success',
         affectedTransformationIds: ['match-pushdown'],
         expectedEquivalent: true,
     },
@@ -2113,7 +2131,9 @@ export const productionSemanticCases: readonly SemanticCase[] = [
             { $set: { computed: { $add: ['$untyped', 1] } } },
             { $skip: 1 },
         ],
-        observation: 'acceptance-error',
+        observation: 'ordered-bson',
+        policy: { errors: 'strict' },
+        expectedOriginalOutcome: 'success',
         affectedTransformationIds: ['limit-advance'],
         expectedEquivalent: true,
     },
@@ -2139,7 +2159,9 @@ export const productionSemanticCases: readonly SemanticCase[] = [
                 },
             },
         ],
-        observation: 'acceptance-error',
+        observation: 'ordered-bson',
+        policy: { errors: 'strict' },
+        expectedOriginalOutcome: 'success',
         affectedTransformationIds: ['match-pushdown'],
         expectedEquivalent: true,
     },
@@ -2164,7 +2186,9 @@ export const productionSemanticCases: readonly SemanticCase[] = [
                 },
             },
         ],
-        observation: 'acceptance-error',
+        observation: 'ordered-bson',
+        policy: { errors: 'strict' },
+        expectedOriginalOutcome: 'failure',
         affectedTransformationIds: ['unused-field-pruning'],
         expectedEquivalent: true,
     },
@@ -2185,7 +2209,9 @@ export const productionSemanticCases: readonly SemanticCase[] = [
             { $set: { dead: { $add: ['$source', 1] } } },
             { $unset: 'dead' },
         ],
-        observation: 'acceptance-error',
+        observation: 'ordered-bson',
+        policy: { errors: 'strict' },
+        expectedOriginalOutcome: 'failure',
         affectedTransformationIds: ['unused-field-pruning'],
         expectedEquivalent: true,
     },
@@ -3137,19 +3163,8 @@ export const productionSemanticCases: readonly SemanticCase[] = [
                     extraInfo: '$foreignDocs.title',
                 },
             },
-            { $sort: { computedScore: -1, _id: 1 } },
+            { $sort: { computedScore: -1 } },
             { $limit: 2 },
-            {
-                $replaceWith: {
-                    _id: '$_id',
-                    name: '$name',
-                    score: '$score',
-                    foreignId: '$foreignId',
-                    foreignDocs: '$foreignDocs',
-                    computedScore: '$computedScore',
-                    extraInfo: '$extraInfo',
-                },
-            },
         ],
         observation: 'ordered-bson',
         affectedTransformationIds: [ 'add-field-pushdown', 'top-k-pushdown' ],
@@ -3190,19 +3205,8 @@ export const productionSemanticCases: readonly SemanticCase[] = [
                     extraInfo: '$foreignDocs.title',
                 },
             },
-            { $sort: { computedScore: -1, _id: 1 } },
+            { $sort: { computedScore: -1 } },
             { $limit: 2 },
-            {
-                $replaceWith: {
-                    _id: '$_id',
-                    name: '$name',
-                    score: '$score',
-                    foreignId: '$foreignId',
-                    foreignDocs: '$foreignDocs',
-                    computedScore: '$computedScore',
-                    extraInfo: '$extraInfo',
-                },
-            },
         ],
         observation: 'ordered-bson',
         affectedTransformationIds: [ 'add-field-pushdown', 'top-k-pushdown' ],

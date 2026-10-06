@@ -18,13 +18,17 @@ import {
 } from './fixtures/generated-interactions.js';
 import {
     MongoDifferentialOracle,
+    oraclePolicyFromOptions,
     type MongoDifferentialCase,
     validateMongoOracleEnvironment,
 } from './helpers/mongodb-oracle.js';
 
-function materializeCase(testCase: SemanticCase): MongoDifferentialCase
+function materializeCase( testCase: SemanticCase ): MongoDifferentialCase
 {
-    if (testCase.kind === 'filter')
+    const optimizerOptions = testCase.optimizerOptions;
+    const policy = testCase.policy ?? oraclePolicyFromOptions( optimizerOptions );
+
+    if( testCase.kind === 'filter' )
     {
         const optimized = testCase.optimizedFilterOverride
             ?? (
@@ -32,8 +36,9 @@ function materializeCase(testCase: SemanticCase): MongoDifferentialCase
                     ? optimizeFilterWithCandidateProfile(
                         testCase.filter,
                         testCase.candidateRuleIds,
+                        optimizerOptions,
                     )
-                    : optimizeFilter(testCase.filter)
+                    : optimizeFilter( testCase.filter, optimizerOptions )
             );
 
         return {
@@ -51,6 +56,8 @@ function materializeCase(testCase: SemanticCase): MongoDifferentialCase
                 options: testCase.options,
             },
             observation: testCase.observation,
+            policy,
+            expectedOriginalOutcome: testCase.expectedOriginalOutcome,
             originalForm: testCase.filter,
             optimizedForm: optimized,
         };
@@ -64,8 +71,9 @@ function materializeCase(testCase: SemanticCase): MongoDifferentialCase
             testCase.pipeline,
             testCase.candidateTransformationIds ?? [],
             testCase.candidateRuleIds,
+            optimizerOptions,
         )
-        : optimizePipeline(testCase.pipeline as any[]);
+        : optimizePipeline( testCase.pipeline as any[], optimizerOptions );
 
     return {
         id: testCase.id,
@@ -82,6 +90,8 @@ function materializeCase(testCase: SemanticCase): MongoDifferentialCase
             options: testCase.options,
         },
         observation: testCase.observation,
+        policy,
+        expectedOriginalOutcome: testCase.expectedOriginalOutcome,
         originalForm: testCase.pipeline,
         optimizedForm: optimized,
     };
@@ -124,7 +134,6 @@ describe.sequential('MongoDB 8 differential oracle', () =>
         it(`keeps the production form equivalent: ${testCase.id}`, async () =>
         {
             const result = await oracle.compare(materializeCase(testCase));
-
             expect(result.equal).toBe(testCase.expectedEquivalent);
         });
     }

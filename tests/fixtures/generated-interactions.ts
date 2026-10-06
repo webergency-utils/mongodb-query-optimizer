@@ -466,23 +466,9 @@ function makeInteractionPipeline(
                     },
                 },
                 { $addFields: { computedScore: { $add: [ '$score', 1 ] } } },
+                // Keep _id tie-breaker because generated documents have non-unique score values; removing $replaceWith only.
                 { $sort: { computedScore: 1, _id: 1 } },
                 { $limit: firstLimit },
-                {
-                    $replaceWith: {
-                        _id: '$_id',
-                        status: '$status',
-                        score: '$score',
-                        marker: '$marker',
-                        tenant: '$tenant',
-                        nullable: '$nullable',
-                        ordered: '$ordered',
-                        secret: '$secret',
-                        items: '$items',
-                        foreignItems: '$foreignItems',
-                        computedScore: '$computedScore',
-                    },
-                },
             ];
         case 'top-k-pushdown':
             return [

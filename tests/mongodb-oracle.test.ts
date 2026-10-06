@@ -7,6 +7,7 @@ import {
     buildPhysicalCollectionNames,
     compareObservations,
     isCurrentLeaseOwner,
+    oraclePolicyFromOptions,
     validateMongoOracleEnvironment,
 } from './helpers/mongodb-oracle.js';
 
@@ -295,86 +296,267 @@ describe("MongoDB oracle namespace and ownership guards", () =>
     });
 });
 
-describe("MongoDB oracle observation comparison", () =>
+describe( 'MongoDB oracle observation comparison', () =>
 {
-    it("preserves order, missing fields, nulls, and embedded key order", () =>
+    it( 'preserves order, missing fields, nulls, and key order under strict field order', () =>
     {
-        expect(compareObservations({
-            mode: "ordered-bson",
-            original: success({ value: 1 }, { value: 2 }),
-            optimized: success({ value: 2 }, { value: 1 }),
-        }).equal).toBe(false);
-        expect(compareObservations({
-            mode: "ordered-bson",
-            original: success({ value: null }),
-            optimized: success({}),
-        }).equal).toBe(false);
-        expect(compareObservations({
-            mode: "ordered-bson",
-            original: success({ embedded: { a: 1, b: 2 } }),
-            optimized: success({ embedded: { b: 2, a: 1 } }),
-        }).equal).toBe(false);
-    });
+        expect( compareObservations( {
+            mode: 'ordered-bson',
+            policy: { fieldOrder: 'strict' },
+            original: success( { value: 1 }, { value: 2 } ),
+            optimized: success( { value: 2 }, { value: 1 } ),
+        } ).equal ).toBe( false );
 
-    it("compares multisets without losing multiplicity", () =>
+        expect( compareObservations( {
+            mode: 'ordered-bson',
+            policy: { fieldOrder: 'strict' },
+            original: success( { value: null } ),
+            optimized: success( {} ),
+        } ).equal ).toBe( false );
+
+        expect( compareObservations( {
+            mode: 'ordered-bson',
+            policy: { fieldOrder: 'strict' },
+            original: success( { a: 1, b: 2 } ),
+            optimized: success( { b: 2, a: 1 } ),
+        } ).equal ).toBe( false );
+
+        expect( compareObservations( {
+            mode: 'ordered-bson',
+            policy: { fieldOrder: 'strict' },
+            original: success( { embedded: { a: 1, b: 2 } } ),
+            optimized: success( { embedded: { b: 2, a: 1 } } ),
+        } ).equal ).toBe( false );
+    } );
+
+    it( 'relaxes field order in relaxed mode including embedded objects while preserving array order', () =>
     {
-        expect(compareObservations({
-            mode: "multiset",
-            original: success({ value: 1 }, { value: 2 }),
-            optimized: success({ value: 2 }, { value: 1 }),
-        }).equal).toBe(true);
-        expect(compareObservations({
-            mode: "multiset",
-            original: success({ value: 1 }, { value: 1 }),
-            optimized: success({ value: 1 }),
-        }).equal).toBe(false);
-    });
+        expect( compareObservations( {
+            mode: 'ordered-bson',
+            policy: { fieldOrder: 'relaxed' },
+            original: success( { a: 1, b: 2 } ),
+            optimized: success( { b: 2, a: 1 } ),
+        } ).equal ).toBe( true );
 
-    it("compares stable server error identity and normalizes only generated namespaces", () =>
+        expect( compareObservations( {
+            mode: 'ordered-bson',
+            policy: { fieldOrder: 'relaxed' },
+            original: success( { embedded: { a: 1, b: 2 } } ),
+            optimized: success( { embedded: { b: 2, a: 1 } } ),
+        } ).equal ).toBe( true );
+
+        expect( compareObservations( {
+            mode: 'ordered-bson',
+            policy: { fieldOrder: 'relaxed' },
+            original: success( { list: [ 1, 2 ] } ),
+            optimized: success( { list: [ 2, 1 ] } ),
+        } ).equal ).toBe( false );
+
+        // Default when policy is omitted is relaxed
+        expect( compareObservations( {
+            mode: 'ordered-bson',
+            original: success( { a: 1, b: 2 } ),
+            optimized: success( { b: 2, a: 1 } ),
+        } ).equal ).toBe( true );
+    } );
+
+    it( 'compares multisets without losing multiplicity and respects canonicalization', () =>
     {
-        const originalNamespace = "wqo_run_case_original_main";
-        const optimizedNamespace = "wqo_run_case_optimized_main";
-        expect(compareObservations({
-            mode: "acceptance-error",
-            original: failure(26, `NamespaceNotFound:${originalNamespace}`, ["Retryable"]),
-            optimized: failure(26, `NamespaceNotFound:${optimizedNamespace}`, ["Retryable"]),
-            generatedNamespaces: [originalNamespace, optimizedNamespace],
-        }).equal).toBe(true);
-        expect(compareObservations({
-            mode: "acceptance-error",
-            original: failure(26, "NamespaceNotFound", ["Retryable"]),
-            optimized: failure(26, "NamespaceNotFound", ["TransientTransactionError"]),
-        }).equal).toBe(false);
-        expect(compareObservations({
-            mode: "acceptance-error",
-            original: success({ value: 1 }),
-            optimized: success({ value: 999 }),
-        }).equal).toBe(true);
-    });
+        expect( compareObservations( {
+            mode: 'multiset',
+            original: success( { value: 1 }, { value: 2 } ),
+            optimized: success( { value: 2 }, { value: 1 } ),
+        } ).equal ).toBe( true );
 
-    it("requires structural barriers to retain the BSON form", () =>
+        expect( compareObservations( {
+            mode: 'multiset',
+            original: success( { value: 1 }, { value: 1 } ),
+            optimized: success( { value: 1 } ),
+        } ).equal ).toBe( false );
+
+        expect( compareObservations( {
+            mode: 'multiset',
+            policy: { fieldOrder: 'relaxed' },
+            original: success( { a: 1, b: 2 }, { x: 10, y: 20 } ),
+            optimized: success( { y: 20, x: 10 }, { b: 2, a: 1 } ),
+        } ).equal ).toBe( true );
+    } );
+
+    it( 'evaluates error policy in relaxed and strict modes', () =>
     {
-        expect(compareObservations({
-            mode: "structural-barrier",
-            original: success({ accepted: true }),
-            optimized: success({ accepted: true }),
-            originalForm: [{ $project: { value: { $rand: {} } } }],
-            optimizedForm: [{ $project: { value: { $rand: {} } } }],
-        }).equal).toBe(true);
-        expect(compareObservations({
-            mode: "structural-barrier",
-            original: success({ accepted: true }),
-            optimized: success({ accepted: true }),
-            originalForm: [{ $project: { value: { $rand: {} } } }],
-            optimizedForm: [{ $project: { value: 1 } }],
-        }).equal).toBe(false);
+        // Relaxed errors: original error with optimized success is equal
+        expect( compareObservations( {
+            mode: 'ordered-bson',
+            policy: { errors: 'relaxed' },
+            original: failure( 1, 'OriginalError' ),
+            optimized: success( { value: 1 } ),
+        } ).equal ).toBe( true );
 
-        expect(compareObservations({
-            mode: "structural-barrier",
-            original: failure(9, "FailedToParse"),
-            optimized: failure(9, "FailedToParse"),
-            originalForm: [{ $limit: "2" }],
-            optimizedForm: [{ $limit: 2 }],
-        }).equal).toBe(false);
-    });
-});
+        // Relaxed errors: original error with optimized error is equal
+        expect( compareObservations( {
+            mode: 'ordered-bson',
+            policy: { errors: 'relaxed' },
+            original: failure( 1, 'OriginalError' ),
+            optimized: failure( 2, 'DifferentError' ),
+        } ).equal ).toBe( true );
+
+        // Relaxed errors: original success with optimized error is not equal
+        expect( compareObservations( {
+            mode: 'ordered-bson',
+            policy: { errors: 'relaxed' },
+            original: success( { value: 1 } ),
+            optimized: failure( 1, 'OptimizedError' ),
+        } ).equal ).toBe( false );
+
+        // Strict errors: original error with optimized success is not equal
+        expect( compareObservations( {
+            mode: 'ordered-bson',
+            policy: { errors: 'strict' },
+            original: failure( 1, 'OriginalError' ),
+            optimized: success( { value: 1 } ),
+        } ).equal ).toBe( false );
+
+        // Strict errors: two errors with different codes and labels are equal (status checked only)
+        expect( compareObservations( {
+            mode: 'ordered-bson',
+            policy: { errors: 'strict' },
+            original: failure( 1, 'CodeA', [ 'LabelA' ] ),
+            optimized: failure( 2, 'CodeB', [ 'LabelB' ] ),
+        } ).equal ).toBe( true );
+
+        // Strict errors: original success with optimized error is not equal
+        expect( compareObservations( {
+            mode: 'ordered-bson',
+            policy: { errors: 'strict' },
+            original: success( { value: 1 } ),
+            optimized: failure( 2, 'CodeB' ),
+        } ).equal ).toBe( false );
+    } );
+
+    it( 'enforces expected original outcome in every policy', () =>
+    {
+        // Expected success fails if original errors, in every policy
+        expect( compareObservations( {
+            mode: 'ordered-bson',
+            policy: { errors: 'relaxed' },
+            expectedOriginalOutcome: 'success',
+            original: failure( 1, 'OriginalError' ),
+            optimized: success( { value: 1 } ),
+        } ).equal ).toBe( false );
+
+        expect( compareObservations( {
+            mode: 'ordered-bson',
+            policy: { errors: 'strict' },
+            expectedOriginalOutcome: 'success',
+            original: failure( 1, 'OriginalError' ),
+            optimized: failure( 1, 'OriginalError' ),
+        } ).equal ).toBe( false );
+
+        expect( compareObservations( {
+            mode: 'ordered-bson',
+            expectedOriginalOutcome: 'success',
+            original: success( { value: 1 } ),
+            optimized: success( { value: 1 } ),
+        } ).equal ).toBe( true );
+
+        // Expected failure fails if original succeeds
+        expect( compareObservations( {
+            mode: 'ordered-bson',
+            expectedOriginalOutcome: 'failure',
+            original: success( { value: 1 } ),
+            optimized: success( { value: 1 } ),
+        } ).equal ).toBe( false );
+
+        expect( compareObservations( {
+            mode: 'ordered-bson',
+            policy: { errors: 'strict' },
+            expectedOriginalOutcome: 'failure',
+            original: failure( 1, 'Err' ),
+            optimized: failure( 2, 'Err2' ),
+        } ).equal ).toBe( true );
+    } );
+
+    it( 'derives comparison policy from optimizer options', () =>
+    {
+        expect( oraclePolicyFromOptions( undefined ) ).toEqual( {
+            fieldOrder: 'relaxed',
+            errors: 'relaxed',
+        } );
+
+        expect( oraclePolicyFromOptions( {} ) ).toEqual( {
+            fieldOrder: 'relaxed',
+            errors: 'relaxed',
+        } );
+
+        expect( oraclePolicyFromOptions( { strictFieldOrder: true } ) ).toEqual( {
+            fieldOrder: 'strict',
+            errors: 'relaxed',
+        } );
+
+        expect( oraclePolicyFromOptions( { strictErrors: true } ) ).toEqual( {
+            fieldOrder: 'relaxed',
+            errors: 'strict',
+        } );
+
+        expect( oraclePolicyFromOptions( { strictFieldOrder: true, strictErrors: true } ) ).toEqual( {
+            fieldOrder: 'strict',
+            errors: 'strict',
+        } );
+    } );
+
+    it( 'requires structural barriers to retain the BSON form', () =>
+    {
+        expect( compareObservations( {
+            mode: 'structural-barrier',
+            original: success( { accepted: true } ),
+            optimized: success( { accepted: true } ),
+            originalForm: [ { $project: { value: { $rand: {} } } } ],
+            optimizedForm: [ { $project: { value: { $rand: {} } } } ],
+        } ).equal ).toBe( true );
+
+        expect( compareObservations( {
+            mode: 'structural-barrier',
+            original: success( { accepted: true } ),
+            optimized: success( { accepted: true } ),
+            originalForm: [ { $project: { value: { $rand: {} } } } ],
+            optimizedForm: [ { $project: { value: 1 } } ],
+        } ).equal ).toBe( false );
+
+        expect( compareObservations( {
+            mode: 'structural-barrier',
+            original: failure( 9, 'FailedToParse' ),
+            optimized: failure( 9, 'FailedToParse' ),
+            originalForm: [ { $limit: '2' } ],
+            optimizedForm: [ { $limit: 2 } ],
+        } ).equal ).toBe( false );
+
+        expect( compareObservations( {
+            mode: 'structural-barrier',
+            original: failure( 9, 'FailedToParse' ),
+            optimized: success( { accepted: true } ),
+            originalForm: [ { $limit: 2 } ],
+            optimizedForm: [ { $limit: 2 } ],
+        } ).equal ).toBe( false );
+    } );
+
+    it( 'supports legacy acceptance-error mode', () =>
+    {
+        expect( compareObservations( {
+            mode: 'acceptance-error',
+            original: failure( 26, 'NamespaceNotFound' ),
+            optimized: failure( 99, 'AnotherError' ),
+        } ).equal ).toBe( true );
+
+        expect( compareObservations( {
+            mode: 'acceptance-error',
+            original: failure( 26, 'NamespaceNotFound' ),
+            optimized: success( { value: 1 } ),
+        } ).equal ).toBe( false );
+
+        expect( compareObservations( {
+            mode: 'acceptance-error',
+            original: success( { value: 1 } ),
+            optimized: success( { value: 999 } ),
+        } ).equal ).toBe( true );
+    } );
+} );

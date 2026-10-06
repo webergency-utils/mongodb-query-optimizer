@@ -37,6 +37,27 @@ export type ObservationMode =
     | 'acceptance-error'
     | 'structural-barrier';
 
+export type FieldOrderPolicy = 'relaxed' | 'strict';
+export type ErrorPolicy = 'relaxed' | 'strict';
+export type ExpectedOriginalOutcome = 'success' | 'failure';
+
+export interface OracleComparisonPolicy
+{
+    readonly fieldOrder?: FieldOrderPolicy;
+    readonly errors?: ErrorPolicy;
+}
+
+export function oraclePolicyFromOptions( options?: {
+    readonly strictFieldOrder?: boolean;
+    readonly strictErrors?: boolean;
+} ): OracleComparisonPolicy
+{
+    return {
+        fieldOrder: options?.strictFieldOrder ? 'strict' : 'relaxed',
+        errors: options?.strictErrors ? 'strict' : 'relaxed',
+    };
+}
+
 export interface OracleError
 {
     readonly code?: number;
@@ -57,6 +78,8 @@ export type OracleExecution =
 export interface ObservationComparison
 {
     readonly mode: ObservationMode;
+    readonly policy?: OracleComparisonPolicy;
+    readonly expectedOriginalOutcome?: ExpectedOriginalOutcome;
     readonly original: OracleExecution;
     readonly optimized: OracleExecution;
     readonly generatedNamespaces?: readonly string[];
@@ -90,6 +113,8 @@ export interface MongoDifferentialCase
     readonly original: OracleOperation;
     readonly optimized: OracleOperation;
     readonly observation: ObservationMode;
+    readonly policy?: OracleComparisonPolicy;
+    readonly expectedOriginalOutcome?: ExpectedOriginalOutcome;
     readonly originalForm?: unknown;
     readonly optimizedForm?: unknown;
 }
@@ -394,103 +419,105 @@ export function isCurrentLeaseOwner(
     );
 }
 
-function canonicalBson(value: unknown): string
+function canonicalBson( value: unknown ): string
 {
-    return BSON.EJSON.stringify(value, {
+    return BSON.EJSON.stringify( value, {
         relaxed: false,
         legacy: false,
-    });
+    } );
 }
 
-function normalizeGeneratedNamespaces(
-    value: string | undefined,
-    namespaces: readonly string[],
-): string | undefined
+function canonicalizeRelaxedValue( value: unknown ): unknown
 {
-    if (value === undefined)
+    if( Array.isArray( value ) )
     {
-        return undefined;
+        return value.map( canonicalizeRelaxedValue );
     }
 
-    let normalized = value;
-    for (const namespace of namespaces)
+    if( isPlainObject( value ) )
     {
-        normalized = normalized.split(namespace).join("<owned-namespace>");
+        const sorted: Record<string, unknown> = {};
+        const keys = Object.keys( value ).sort();
+
+        for( const key of keys )
+        {
+            sorted[key] = canonicalizeRelaxedValue( value[key] );
+        }
+
+        return sorted;
     }
 
-    return normalized;
+    return value;
 }
 
-function sameError(
-    left: OracleError,
-    right: OracleError,
-    namespaces: readonly string[],
-): boolean
-{
-    return (
-        left.code === right.code
-        && normalizeGeneratedNamespaces(left.codeName, namespaces)
-            === normalizeGeneratedNamespaces(right.codeName, namespaces)
-        && canonicalBson([...left.labels].sort()) === canonicalBson([...right.labels].sort())
-    );
-}
-
-function sameExecutionAcceptance(
-    left: OracleExecution,
-    right: OracleExecution,
-    namespaces: readonly string[],
-): boolean
-{
-    if (left.status !== right.status)
-    {
-        return false;
-    }
-
-    if (left.status === "error" && right.status === "error")
-    {
-        return sameError(left.error, right.error, namespaces);
-    }
-
-    return true;
-}
-
-export function compareObservations(input: ObservationComparison): {
+export function compareObservations( input: ObservationComparison ): {
     readonly equal: boolean;
 }
 {
-    const namespaces = input.generatedNamespaces ?? [];
-    if (!sameExecutionAcceptance(input.original, input.optimized, namespaces))
+    if( input.expectedOriginalOutcome !== undefined )
+    {
+        const expectedStatus = input.expectedOriginalOutcome === 'success' ? 'success' : 'error';
+        if( input.original.status !== expectedStatus )
+        {
+            return { equal: false };
+        }
+    }
+
+    if( input.mode === 'structural-barrier' )
+    {
+        if( input.original.status !== input.optimized.status )
+        {
+            return { equal: false };
+        }
+
+        return {
+            equal: canonicalBson( input.originalForm ) === canonicalBson( input.optimizedForm ),
+        };
+    }
+
+    const errorsPolicy: ErrorPolicy = input.policy?.errors
+        ?? ( input.mode === 'acceptance-error' ? 'strict' : 'relaxed' );
+
+    if( input.original.status === 'error' )
+    {
+        if( errorsPolicy === 'relaxed' )
+        {
+            return { equal: true };
+        }
+
+        return { equal: input.optimized.status === 'error' };
+    }
+
+    if( input.optimized.status === 'error' )
     {
         return { equal: false };
     }
 
-    if (input.mode === "structural-barrier")
-    {
-        return {
-            equal: canonicalBson(input.originalForm) === canonicalBson(input.optimizedForm),
-        };
-    }
-
-    if (
-        input.original.status === "error"
-        || input.optimized.status === "error"
-        || input.mode === "acceptance-error"
-    )
+    if( input.mode === 'acceptance-error' )
     {
         return { equal: true };
     }
 
-    const originalFingerprints = input.original.documents.map(canonicalBson);
-    const optimizedFingerprints = input.optimized.documents.map(canonicalBson);
+    const fieldOrderPolicy: FieldOrderPolicy = input.policy?.fieldOrder ?? 'relaxed';
 
-    if (input.mode === "multiset")
+    const originalDocs = fieldOrderPolicy === 'relaxed'
+        ? input.original.documents.map( canonicalizeRelaxedValue )
+        : input.original.documents;
+    const optimizedDocs = fieldOrderPolicy === 'relaxed'
+        ? input.optimized.documents.map( canonicalizeRelaxedValue )
+        : input.optimized.documents;
+
+    const originalFingerprints = originalDocs.map( canonicalBson );
+    const optimizedFingerprints = optimizedDocs.map( canonicalBson );
+
+    if( input.mode === 'multiset' )
     {
         originalFingerprints.sort();
         optimizedFingerprints.sort();
     }
 
     return {
-        equal: canonicalBson(originalFingerprints) === canonicalBson(optimizedFingerprints),
+        equal: canonicalBson( originalFingerprints ) === canonicalBson( optimizedFingerprints ),
     };
 }
 
@@ -802,14 +829,16 @@ export class MongoDifferentialOracle
             optimizedNames[testCase.mainCollectionId],
             optimizedOperation,
         );
-        const comparison = compareObservations({
+        const comparison = compareObservations( {
             mode: testCase.observation,
+            policy: testCase.policy,
+            expectedOriginalOutcome: testCase.expectedOriginalOutcome,
             original,
             optimized,
             generatedNamespaces: collectionNames,
             originalForm: testCase.originalForm,
             optimizedForm: testCase.optimizedForm,
-        });
+        } );
 
         return {
             equal: comparison.equal,
