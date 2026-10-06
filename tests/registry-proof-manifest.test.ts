@@ -42,6 +42,8 @@ const EXPECTED_ACTIVE_PIPELINE_IDS = [
     'limit-skip-coalescing',
     'match-pushdown',
     'limit-advance',
+    'add-field-pushdown',
+    'top-k-pushdown',
     'unused-field-pruning',
     'adjacent-project-merging',
     'adjacent-add-field-merging',

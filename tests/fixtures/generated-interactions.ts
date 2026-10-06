@@ -6,7 +6,7 @@ import type {
 import type { SemanticCase } from './semantic-cases.js';
 
 export const GENERATED_INTERACTION_SEED = 0x5eed_2026;
-export const GENERATED_INTERACTION_CASE_COUNT = 46;
+export const GENERATED_INTERACTION_CASE_COUNT = 50;
 
 interface InteractionDescriptor
 {
@@ -90,6 +90,14 @@ const interactionDescriptors: readonly InteractionDescriptor[] = Object.freeze([
     {
         pipelineId: 'facet-prefix-hoisting',
         filterId: 'flatten-disjunctions',
+    },
+    {
+        pipelineId: 'add-field-pushdown',
+        filterId: 'simplify-equality',
+    },
+    {
+        pipelineId: 'top-k-pushdown',
+        filterId: 'simplify-equality',
     },
 ]);
 
@@ -445,6 +453,43 @@ function makeInteractionPipeline(
                         ],
                     },
                 },
+            ];
+        case 'add-field-pushdown':
+            return [
+                { $match: filter },
+                {
+                    $lookup: {
+                        from: 'foreign',
+                        localField: 'tenant',
+                        foreignField: 'tenant',
+                        as: 'foreignItems',
+                    },
+                },
+                { $addFields: { computedScore: { $add: [ '$score', 1 ] } } },
+                { $sort: { computedScore: 1, _id: 1 } },
+                { $limit: firstLimit },
+                {
+                    $replaceWith: {
+                        _id: '$_id',
+                        status: '$status',
+                        score: '$score',
+                        marker: '$marker',
+                        tenant: '$tenant',
+                        nullable: '$nullable',
+                        ordered: '$ordered',
+                        secret: '$secret',
+                        items: '$items',
+                        foreignItems: '$foreignItems',
+                        computedScore: '$computedScore',
+                    },
+                },
+            ];
+        case 'top-k-pushdown':
+            return [
+                { $match: filter },
+                { $addFields: { tag: 'active' } },
+                { $sort: { score: -1, _id: 1 } },
+                { $limit: firstLimit },
             ];
         default:
             throw new Error(`Generated interaction cannot use contained pass: ${id}`);

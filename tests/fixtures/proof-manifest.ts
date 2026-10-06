@@ -167,6 +167,20 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'u5-limit-nested-lookup-safe',
     ),
     evidence(
+        'add-field-pushdown',
+        'feat-add-field-pushdown-focused',
+        'u9-generated-top-level-add-field-pushdown',
+        'u9-generated-nested-add-field-pushdown',
+        'feat-add-field-pushdown-oracle',
+    ),
+    evidence(
+        'top-k-pushdown',
+        'feat-top-k-pushdown-focused',
+        'u9-generated-top-level-top-k-pushdown',
+        'u9-generated-nested-top-k-pushdown',
+        'feat-top-k-pushdown-oracle',
+    ),
+    evidence(
         'unused-field-pruning',
         'u6-dead-write-unset-top-level',
         'u9-generated-top-level-unused-field-pruning',

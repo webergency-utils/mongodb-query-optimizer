@@ -17,6 +17,7 @@
   "files": [
     "dist",
     "USAGE.md",
+    "SUPPORT.md",
     "README.md"
   ],
   "publishConfig": {
@@ -33,6 +34,7 @@
     "test:integration": "vitest run --project integration",
     "test:all": "npm run typecheck && npm test && npm run test:integration && npm run test:coverage && npm run build",
     "test:coverage": "vitest run --project unit --coverage",
+    "optimize": "tsx scripts/optimize.ts",
     "version": "npm run build && npm publish && npm run commit && git push"
   },
   "repository": {

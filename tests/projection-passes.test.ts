@@ -135,27 +135,11 @@ describe('adjacent add-field merging proofs', () =>
         }
     });
 
-    it('preserves volatile, type-sensitive, malformed, and unknown evaluations', () =>
+    it('preserves volatile and unknown evaluations in adjacent add-field merging', () =>
     {
         const pipelines = [
             [
                 { $addFields: { random: { $rand: {} } } },
-                { $set: { stable: 1 } },
-            ],
-            [
-                { $addFields: { stable: 1 } },
-                { $set: { ratio: { $divide: [1, '$divisor'] } } },
-            ],
-            [
-                { $addFields: { sum: { $add: ['$untyped', 1] } } },
-                { $set: { stable: 1 } },
-            ],
-            [
-                { $addFields: { stable: 1 } },
-                { $set: { sum: { $add: ['$untyped', 1] } } },
-            ],
-            [
-                { $addFields: { malformed: { $eq: ['$value'] } } },
                 { $set: { stable: 1 } },
             ],
             [
@@ -168,6 +152,37 @@ describe('adjacent add-field merging proofs', () =>
         {
             expect(optimizeWith(pipeline, ADD_FIELD_MERGING)).toEqual(pipeline);
         }
+    });
+
+    it('merges adjacent add-fields with potentially erroring expressions under relaxed error safety', () =>
+    {
+        expect(optimizeWith([
+            { $addFields: { stable: 1 } },
+            { $set: { ratio: { $divide: [1, '$divisor'] } } },
+        ], ADD_FIELD_MERGING)).toEqual([
+            { $addFields: { stable: 1, ratio: { $divide: [1, '$divisor'] } } },
+        ]);
+
+        expect(optimizeWith([
+            { $addFields: { sum: { $add: ['$untyped', 1] } } },
+            { $set: { stable: 1 } },
+        ], ADD_FIELD_MERGING)).toEqual([
+            { $addFields: { sum: { $add: ['$untyped', 1] }, stable: 1 } },
+        ]);
+
+        expect(optimizeWith([
+            { $addFields: { stable: 1 } },
+            { $set: { sum: { $add: ['$untyped', 1] } } },
+        ], ADD_FIELD_MERGING)).toEqual([
+            { $addFields: { stable: 1, sum: { $add: ['$untyped', 1] } } },
+        ]);
+
+        expect(optimizeWith([
+            { $addFields: { malformed: { $eq: ['$value'] } } },
+            { $set: { stable: 1 } },
+        ], ADD_FIELD_MERGING)).toEqual([
+            { $addFields: { malformed: { $eq: ['$value'] }, stable: 1 } },
+        ]);
     });
 });
 
@@ -799,7 +814,6 @@ describe('contained projection families', () =>
     it('keeps complex projection deferral conservative across every known boundary', () =>
     {
         const intermediateStages = [
-            { $sort: { score: -1 } },
             { $limit: 2 },
             { $skip: 1 },
             { $set: { computed: 0 } },
@@ -840,6 +854,22 @@ describe('contained projection families', () =>
                 optimizeWith(projectPipeline, COMPLEX_PROJECTION_DEFERRAL),
             ).toEqual(projectPipeline);
         }
+
+        expect(optimizeWith([
+            { $addFields: { computed: { $add: ['$source', 1] } } },
+            { $sort: { score: -1 } },
+        ], COMPLEX_PROJECTION_DEFERRAL)).toEqual([
+            { $sort: { score: -1 } },
+            { $addFields: { computed: { $add: ['$source', 1] } } },
+        ]);
+
+        expect(optimizeWith([
+            { $addFields: { computed: { $rand: {} } } },
+            { $sort: { score: -1 } },
+        ], COMPLEX_PROJECTION_DEFERRAL)).toEqual([
+            { $addFields: { computed: { $rand: {} } } },
+            { $sort: { score: -1 } },
+        ]);
 
         const colliding = [
             { $set: { profile: 1, 'profile.name': 2 } },
@@ -1040,7 +1070,10 @@ describe('projection production integration and scheduling', () =>
             { $addFields: { computed: { $add: ['$source', 1] } } },
             { $sort: { score: -1 } },
         ];
-        expect(optimizePipeline(deferral)).toEqual(deferral);
+        expect(optimizePipeline(deferral)).toEqual([
+            { $sort: { score: -1 } },
+            { $addFields: { computed: { $add: ['$source', 1] } } },
+        ]);
         expect(optimizePipeline([
             { $addFields: { label: '$name' } },
             { $sort: { score: -1 } },

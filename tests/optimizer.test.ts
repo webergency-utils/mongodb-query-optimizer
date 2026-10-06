@@ -218,7 +218,7 @@ describe('optimizePipeline', () => {
         ]);
     });
 
-    it('should keep disjoint matches after $unwind without a dedicated proof', () => {
+    it('should push disjoint matches before $unwind', () => {
         const data = [
             { _id: 1, category: 'electronics', items: [1, 2] },
             { _id: 2, category: 'clothing', items: [3] }
@@ -227,7 +227,11 @@ describe('optimizePipeline', () => {
             { $unwind: '$items' },
             { $match: { category: 'electronics' } }
         ];
-        verifyPipelineEquivalence(data, pipeline, pipeline);
+        const expected = [
+            { $match: { category: 'electronics' } },
+            { $unwind: '$items' }
+        ];
+        verifyPipelineEquivalence(data, pipeline, expected);
     });
 
     it('should retain $lookup and preserving $unwind without uniqueness metadata', () => {

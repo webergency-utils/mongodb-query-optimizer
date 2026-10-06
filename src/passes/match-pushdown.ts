@@ -17,6 +17,11 @@ export class MatchPushdownPass implements PipelinePass
 
         for( let index = 1; index < result.length; index++ )
         {
+            if( !result[ index ] || typeof result[ index ] !== 'object' || !( '$match' in result[ index ] ))
+            {
+                continue;
+            }
+
             let currentIndex = index;
 
             while( currentIndex > 0 )
@@ -31,6 +36,13 @@ export class MatchPushdownPass implements PipelinePass
                 const previousStage = result[ currentIndex - 1 ];
                 result[ currentIndex - 1 ] = proof.matchStage;
                 result[ currentIndex ] = previousStage;
+
+                if( proof.residualStage )
+                {
+                    result.splice( currentIndex + 1, 0, proof.residualStage );
+                    index++;
+                }
+
                 currentIndex--;
                 changed = true;
             }

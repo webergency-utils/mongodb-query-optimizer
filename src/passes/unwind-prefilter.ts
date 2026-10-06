@@ -31,6 +31,19 @@ function hasPrefilter(
     return false;
 }
 
+function isPipelineLookupForPath( stage: unknown, path: string ): boolean
+{
+    if( !stage || typeof stage !== 'object' || Array.isArray( stage ) ){ return false }
+
+    const lookup = ( stage as Record<string, unknown> ).$lookup;
+
+    if( !lookup || typeof lookup !== 'object' || Array.isArray( lookup ) ){ return false }
+
+    const lookupObj = lookup as Record<string, unknown>;
+
+    return lookupObj.as === path && Array.isArray( lookupObj.pipeline );
+}
+
 export class UnwindPrefilterPass implements PipelinePass
 {
     readonly name       = 'unwind-prefilter';
@@ -49,19 +62,34 @@ export class UnwindPrefilterPass implements PipelinePass
                 const proof = proveUnwindPrefilter(currentStage, nextStage);
                 if (proof)
                 {
-                    const prevMatch = result.length > 0
-                        ? result[result.length - 1]?.$match
-                        : undefined;
+                    const prevStage = result.length > 0 ? result[ result.length - 1 ] : undefined;
 
-                    const alreadyPresent = prevMatch !== undefined && hasPrefilter(
-                        prevMatch,
-                        proof.arrayPath,
-                        proof.prefilterStage.$match[proof.arrayPath],
-                    );
-
-                    if (!alreadyPresent)
+                    if( !isPipelineLookupForPath( prevStage, proof.arrayPath ))
                     {
-                        result.push(proof.prefilterStage);
+                        let alreadyPresent = false;
+
+                        for( let j = result.length - 1; j >= 0; j-- )
+                        {
+                            const candidate = result[ j ];
+
+                            if( candidate && typeof candidate === 'object' && '$match' in candidate )
+                            {
+                                if( hasPrefilter(
+                                    candidate.$match,
+                                    proof.arrayPath,
+                                    proof.prefilterStage.$match[ proof.arrayPath ],
+                                ))
+                                {
+                                    alreadyPresent = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if( !alreadyPresent )
+                        {
+                            result.push( proof.prefilterStage );
+                        }
                     }
                 }
             }

@@ -1,24 +1,29 @@
 import { deepClone, isPlainObject } from '../utils.js';
-import { getStageSpec } from './helpers.js';
+import {
+    combineConjuncts,
+    decomposeFilterIntoConjuncts,
+    getStageSpec,
+} from './helpers.js';
 
-export interface GroupFilterPushdownProof {
+export interface GroupFilterPushdownProof
+{
     prefilterStage: { $match: Record<string, any> };
     postfilterStage: { $match: Record<string, any> } | null;
 }
 
-function conditionRejectsNull(condition: unknown): boolean
+function conditionRejectsNull( condition: unknown ): boolean
 {
-    if (typeof condition === 'string')
+    if( typeof condition === 'string' )
     {
         return condition.length > 0;
     }
 
-    if (typeof condition === 'number' || typeof condition === 'boolean')
+    if( typeof condition === 'number' || typeof condition === 'boolean' )
     {
         return true;
     }
 
-    if (isPlainObject(condition) && '$ne' in condition)
+    if( isPlainObject( condition ) && '$ne' in condition )
     {
         return condition.$ne === null;
     }
@@ -28,89 +33,89 @@ function conditionRejectsNull(condition: unknown): boolean
 
 export function proveGroupFilterPushdown(
     groupStage: unknown,
-    matchStage: unknown,
+    matchStage: unknown
 ): GroupFilterPushdownProof | null
 {
     const groupSpec = getStageSpec<Record<string, any>>( groupStage, '$group' );
     const matchSpec = getStageSpec<Record<string, any>>( matchStage, '$match' );
 
-    if (!groupSpec || !matchSpec || !('_id' in groupSpec))
+    if( !groupSpec || !matchSpec || !( '_id' in groupSpec ))
     {
         return null;
     }
 
-    const idSpec = groupSpec._id;
-    const accumulatorFields = new Set(
-        Object.keys(groupSpec).filter((k) => k !== '_id'),
-    );
+    const conjuncts = decomposeFilterIntoConjuncts( matchSpec );
 
-    const prefilter: Record<string, any> = {};
-    const postfilter: Record<string, any> = {};
+    const idSpec = groupSpec._id;
+    const prefilterConjuncts: Record<string, any>[] = [];
+    const postfilterConjuncts: Record<string, any>[] = [];
     let hasIdCondition = false;
-    let isOneToOne = false;
 
     // Inspect _id specification
-    if (
+    if(
         typeof idSpec === 'string'
-        && idSpec.startsWith('$')
-        && !idSpec.startsWith('$$')
+        && idSpec.startsWith( '$' )
+        && !idSpec.startsWith( '$$' )
         && idSpec.length > 1
     )
     {
-        isOneToOne = true;
-        const sourceField = idSpec.slice(1);
+        const sourceField = idSpec.slice( 1 );
 
-        for (const [key, val] of Object.entries(matchSpec))
+        for( const conjunct of conjuncts )
         {
-            if (key === '_id')
+            const entries = Object.entries( conjunct );
+            const [ key, val ] = entries[ 0 ]!;
+
+            if( key === '_id' )
             {
-                prefilter[sourceField] = deepClone(val);
+                prefilterConjuncts.push( { [ sourceField ]: deepClone( val ) } );
                 hasIdCondition = true;
             }
-            else if (key.startsWith('_id.'))
+            else if( key.startsWith( '_id.' ))
             {
-                const sub = key.slice(4);
-                prefilter[`${sourceField}.${sub}`] = deepClone(val);
+                const sub = key.slice( 4 );
+                prefilterConjuncts.push( { [ `${ sourceField }.${ sub }` ]: deepClone( val ) } );
                 hasIdCondition = true;
             }
             else
             {
-                postfilter[key] = deepClone(val);
+                postfilterConjuncts.push( deepClone( conjunct ) );
             }
         }
     }
-    else if (isPlainObject(idSpec))
+    else if( isPlainObject( idSpec ))
     {
-        const idKeys = Object.keys(idSpec);
+        const idKeys = Object.keys( idSpec );
         const allStringPaths = (
             idKeys.length > 0
             && idKeys.every(
-                (k) =>
-                    !k.startsWith("$")
-                    && typeof idSpec[k] === "string"
-                    && idSpec[k].startsWith("$")
-                    && !idSpec[k].startsWith("$$")
-                    && idSpec[k].length > 1,
+                ( k ) =>
+                    !k.startsWith( '$' )
+                    && typeof idSpec[ k ] === 'string'
+                    && idSpec[ k ].startsWith( '$' )
+                    && !idSpec[ k ].startsWith( '$$' )
+                    && idSpec[ k ].length > 1
             )
         );
 
-        if (allStringPaths)
+        if( allStringPaths )
         {
-            isOneToOne = true;
-
-            for (const [key, val] of Object.entries(matchSpec))
+            for( const conjunct of conjuncts )
             {
-                if (key.startsWith("_id."))
-                {
-                    const rest = key.slice(4);
-                    const dotIdx = rest.indexOf(".");
-                    const subKey = dotIdx === -1 ? rest : rest.slice(0, dotIdx);
-                    const subPath = dotIdx === -1 ? "" : rest.slice(dotIdx);
+                const entries = Object.entries( conjunct );
+                const [ key, val ] = entries[ 0 ]!;
 
-                    if (subKey in idSpec)
+                if( key.startsWith( '_id.' ))
+                {
+                    const rest = key.slice( 4 );
+                    const dotIdx = rest.indexOf( '.' );
+                    const subKey = dotIdx === -1 ? rest : rest.slice( 0, dotIdx );
+                    const subPath = dotIdx === -1 ? '' : rest.slice( dotIdx );
+
+                    if( subKey in idSpec )
                     {
-                        const sourceField = idSpec[subKey].slice(1) + subPath;
-                        prefilter[sourceField] = deepClone(val);
+                        const sourceField = idSpec[ subKey ].slice( 1 ) + subPath;
+                        prefilterConjuncts.push( { [ sourceField ]: deepClone( val ) } );
                         hasIdCondition = true;
                     }
                     else
@@ -118,16 +123,16 @@ export function proveGroupFilterPushdown(
                         return null;
                     }
                 }
-                else if (key === "_id")
+                else if( key === '_id' )
                 {
-                    if (isPlainObject(val))
+                    if( isPlainObject( val ))
                     {
-                        for (const [subKey, subVal] of Object.entries(val))
+                        for( const [ subKey, subVal ] of Object.entries( val ))
                         {
-                            if (subKey in idSpec)
+                            if( subKey in idSpec )
                             {
-                                const sourceField = idSpec[subKey].slice(1);
-                                prefilter[sourceField] = deepClone(subVal);
+                                const sourceField = idSpec[ subKey ].slice( 1 );
+                                prefilterConjuncts.push( { [ sourceField ]: deepClone( subVal ) } );
                                 hasIdCondition = true;
                             }
                             else
@@ -143,41 +148,48 @@ export function proveGroupFilterPushdown(
                 }
                 else
                 {
-                    postfilter[key] = deepClone(val);
+                    postfilterConjuncts.push( deepClone( conjunct ) );
                 }
             }
         }
         else
         {
-            // Computed expression like { $toUpper: "$dept" }
-            const opKeys = Object.keys(idSpec);
-            if (opKeys.length === 1 && opKeys[0]!.startsWith("$"))
+            // Computed expression like { $toUpper: '$dept' }
+            const opKeys = Object.keys( idSpec );
+
+            if( opKeys.length === 1 && opKeys[ 0 ]!.startsWith( '$' ))
             {
-                const opArg = idSpec[opKeys[0]!];
-                if (
-                    typeof opArg === "string"
-                    && opArg.startsWith("$")
-                    && !opArg.startsWith("$$")
+                const opArg = idSpec[ opKeys[ 0 ]! ];
+
+                if(
+                    typeof opArg === 'string'
+                    && opArg.startsWith( '$' )
+                    && !opArg.startsWith( '$$' )
                     && opArg.length > 1
                 )
                 {
-                    const sourceField = opArg.slice(1);
-                    if (
-                        matchSpec._id === undefined
-                        || !conditionRejectsNull(matchSpec._id)
-                    )
+                    const sourceField = opArg.slice( 1 );
+                    let hasNullRejectingId = false;
+
+                    for( const conjunct of conjuncts )
+                    {
+                        const entries = Object.entries( conjunct );
+                        const [ key, val ] = entries[ 0 ]!;
+
+                        if( key === '_id' && conditionRejectsNull( val ))
+                        {
+                            hasNullRejectingId = true;
+                        }
+                    }
+
+                    if( !hasNullRejectingId )
                     {
                         return null;
                     }
 
-                    prefilter[sourceField] = { $exists: true, $ne: null };
+                    prefilterConjuncts.push( { [ sourceField ]: { $exists: true, $ne: null } } );
                     hasIdCondition = true;
-                    isOneToOne = false;
-
-                    for (const [key, val] of Object.entries(matchSpec))
-                    {
-                        postfilter[key] = deepClone(val);
-                    }
+                    postfilterConjuncts.push( ...conjuncts.map(( c ) => deepClone( c )) );
                 }
                 else
                 {
@@ -195,16 +207,19 @@ export function proveGroupFilterPushdown(
         return null;
     }
 
-    if (!hasIdCondition)
+    if( !hasIdCondition )
     {
         return null;
     }
 
-    const postKeys = Object.keys(postfilter);
-    const postfilterStage = postKeys.length > 0 ? { $match: postfilter } : null;
+    const postfilterStage = (
+        postfilterConjuncts.length > 0
+            ? { $match: combineConjuncts( postfilterConjuncts ) }
+            : null
+    );
 
     return {
-        prefilterStage: { $match: prefilter },
+        prefilterStage: { $match: combineConjuncts( prefilterConjuncts ) },
         postfilterStage,
     };
 }

@@ -252,6 +252,135 @@ describe('proveGroupFilterPushdown', () =>
         expect(proveGroupFilterPushdown({ $group: { _id: '$a' }, extra: 1 }, { $match: {} })).toBeNull();
         expect(proveGroupFilterPushdown({ $group: { _id: '$a' } }, { $match: {}, extra: 1 })).toBeNull();
     });
+
+    it('proves pushdown for $and conjunction with _id and accumulator', () =>
+    {
+        const group = {
+            $group: {
+                _id: '$userId',
+                total: { $sum: '$amount' },
+            },
+        };
+        const match = {
+            $match: {
+                $and: [
+                    { _id: 'user-123' },
+                    { total: { $gt: 100 } },
+                ],
+            },
+        };
+
+        const proof = proveGroupFilterPushdown(group, match);
+        expect(proof).not.toBeNull();
+        expect(proof?.prefilterStage).toEqual({
+            $match: {
+                userId: 'user-123',
+            },
+        });
+        expect(proof?.postfilterStage).toEqual({
+            $match: {
+                total: { $gt: 100 },
+            },
+        });
+    });
+
+    it('combines multiple pushable conjuncts on same field into $and', () =>
+    {
+        const group = {
+            $group: {
+                _id: '$userId',
+                total: { $sum: '$amount' },
+            },
+        };
+        const match = {
+            $match: {
+                $and: [
+                    { _id: { $gte: 10 } },
+                    { _id: { $lte: 50 } },
+                ],
+            },
+        };
+
+        const proof = proveGroupFilterPushdown(group, match);
+        expect(proof).not.toBeNull();
+        expect(proof?.prefilterStage).toEqual({
+            $match: {
+                $and: [
+                    { userId: { $gte: 10 } },
+                    { userId: { $lte: 50 } },
+                ],
+            },
+        });
+        expect(proof?.postfilterStage).toBeNull();
+    });
+
+    it('proves pushdown for subdocument _id with $and conjunctions', () =>
+    {
+        const group = {
+            $group: {
+                _id: {
+                    dept: '$department',
+                    role: '$jobRole',
+                },
+                total: { $sum: '$salary' },
+            },
+        };
+        const match = {
+            $match: {
+                $and: [
+                    { '_id.dept': 'Sales' },
+                    { '_id.role': 'Manager' },
+                    { total: { $gt: 50 } },
+                ],
+            },
+        };
+
+        const proof = proveGroupFilterPushdown(group, match);
+        expect(proof).not.toBeNull();
+        expect(proof?.prefilterStage).toEqual({
+            $match: {
+                department: 'Sales',
+                jobRole: 'Manager',
+            },
+        });
+        expect(proof?.postfilterStage).toEqual({
+            $match: {
+                total: { $gt: 50 },
+            },
+        });
+    });
+
+    it('proves pushdown for computed _id with $and conjunction containing null-rejecting _id', () =>
+    {
+        const group = {
+            $group: {
+                _id: { $toUpper: '$dept' },
+                count: { $sum: 1 },
+            },
+        };
+        const match = {
+            $match: {
+                $and: [
+                    { _id: 'SALES' },
+                    { count: { $gt: 5 } },
+                ],
+            },
+        };
+
+        const proof = proveGroupFilterPushdown(group, match);
+        expect(proof).not.toBeNull();
+        expect(proof?.prefilterStage).toEqual({
+            $match: {
+                dept: { $exists: true, $ne: null },
+            },
+        });
+        expect(proof?.postfilterStage).toEqual({
+            $match: {
+                _id: 'SALES',
+                count: { $gt: 5 },
+            },
+        });
+    });
 });
 
 describe('GroupFilterPushdownPass', () =>
@@ -454,6 +583,47 @@ describe('optimizePipeline execution parity for group filter pushdown', () =>
         ];
 
         const optimized = optimizePipeline(pipeline);
+        const originalResults = runMockPipeline(employeeDataset, pipeline);
+        const optimizedResults = runMockPipeline(employeeDataset, optimized);
+
+        expect(optimizedResults).toEqual(originalResults);
+        expect(optimizedResults).toEqual([
+            { _id: 'Sales', headcount: 3, payroll: 290 },
+        ]);
+    });
+
+    it('optimizes $and conjunction across $group with execution parity', () =>
+    {
+        const pipeline = [
+            {
+                $group: {
+                    _id: '$department',
+                    headcount: { $sum: 1 },
+                    payroll: { $sum: '$salary' },
+                },
+            },
+            {
+                $match: {
+                    $and: [
+                        { _id: 'Sales' },
+                        { payroll: { $gt: 200 } },
+                    ],
+                },
+            },
+        ];
+
+        const optimized = optimizePipeline(pipeline);
+        expect(optimized[0]).toEqual({
+            $match: {
+                department: 'Sales',
+            },
+        });
+        expect(optimized[optimized.length - 1]).toEqual({
+            $match: {
+                payroll: { $gt: 200 },
+            },
+        });
+
         const originalResults = runMockPipeline(employeeDataset, pipeline);
         const optimizedResults = runMockPipeline(employeeDataset, optimized);
 

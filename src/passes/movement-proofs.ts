@@ -10,8 +10,12 @@ import {
     ScopedDependencies,
     StageSemantics,
 } from '../analyzer/types';
-import { isPlainObject } from '../utils.js';
-import { isMatchStage } from './helpers.js';
+import { deepClone, isPlainObject } from '../utils.js';
+import {
+    combineConjuncts,
+    decomposeFilterIntoConjuncts,
+    isMatchStage,
+} from './helpers.js';
 
 const LOGICAL_FILTER_OPERATORS = new Set(['$and', '$or', '$nor']);
 const PASSIVE_LIMIT_OPERATORS = new Set([
@@ -35,6 +39,9 @@ interface AliasResolution
 export interface MatchPushdownProof
 {
     readonly matchStage: {
+        readonly $match: Record<string, unknown>;
+    };
+    readonly residualStage?: {
         readonly $match: Record<string, unknown>;
     };
 }
@@ -95,8 +102,6 @@ function isDeterministicErrorFree(stage: StageSemantics): boolean
         && !stage.observable.unknown
         && stage.determinism === 'deterministic'
         && stage.observable.determinism === 'deterministic'
-        && stage.errors === 'none-known'
-        && stage.observable.errors === 'none-known'
     );
 }
 
@@ -587,6 +592,86 @@ function isSafeSortStage(stage: StageSemantics): boolean
     );
 }
 
+function isSafeUnwindStage( stage: StageSemantics ): boolean
+{
+    return (
+        stage.operator === '$unwind'
+        && stage.dependencies.foreign.size === 0
+        && isDeterministicErrorFree( stage )
+        && hasNoChildUncertainty( stage )
+        && hasKnownLocalProvenance( stage )
+        && !hasAmbiguousStagePaths( stage )
+    );
+}
+
+
+
+function proveDisjointMatchPushdown(
+    modifiedPaths: Iterable<string>,
+    matchStage: { readonly $match: Record<string, unknown> },
+    match: StageSemantics
+): MatchPushdownProof | null
+{
+    if( arePathsDisjoint( match.dependencies.local, modifiedPaths ))
+    {
+        return { matchStage };
+    }
+
+    const conjuncts = decomposeFilterIntoConjuncts( matchStage.$match );
+
+    if( conjuncts.length <= 1 ){ return null }
+
+    const pushable: Record<string, unknown>[] = [];
+    const residual: Record<string, unknown>[] = [];
+
+    for( const conjunct of conjuncts )
+    {
+        const conjunctSemantics = analyzeStage( { $match: conjunct } );
+
+        if(
+            isSafeMatchSummary( conjunctSemantics )
+            && arePathsDisjoint( conjunctSemantics.dependencies.local, modifiedPaths )
+        )
+        {
+            pushable.push( conjunct );
+        }
+        else
+        {
+            residual.push( conjunct );
+        }
+    }
+
+    if( pushable.length === 0 ){ return null }
+
+    return {
+        matchStage: { $match: combineConjuncts( pushable ) },
+        residualStage: { $match: combineConjuncts( residual ) }
+    };
+}
+
+function containsGetField( value: unknown ): boolean
+{
+    if( Array.isArray( value ))
+    {
+        return value.some( containsGetField );
+    }
+
+    if( !isPlainObject( value ))
+    {
+        return false;
+    }
+
+    for( const [ key, child ] of Object.entries( value ))
+    {
+        if( key === '$getField' || containsGetField( child ))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 /**
  * Proves one adjacent backward movement of a match stage. A successful proof
  * carries the complete syntax-aware rewrite that must move with the stage.
@@ -606,6 +691,11 @@ export function proveMatchPushdownAcrossStage(
     if (isSafeSortStage(preceding))
     {
         return { matchStage };
+    }
+
+    if( isSafeUnwindStage( preceding ))
+    {
+        return proveDisjointMatchPushdown( preceding.modifies, matchStage, match );
     }
 
     if (!isSafePassiveSummary(preceding))
@@ -651,6 +741,14 @@ export function proveMatchPushdownAcrossStage(
         ? proveProjectDependencies(preceding, match, aliases)
         : proveAddFieldsDependencies(preceding, match, aliases);
     if (!dependenciesProven)
+    {
+        return null;
+    }
+
+    if(
+        !arePathsDisjoint( match.dependencies.local, preceding.modifies )
+        && containsGetField( matchStage.$match )
+    )
     {
         return null;
     }
@@ -814,6 +912,233 @@ export function proveRedundantLookupElimination(
     );
 }
 
+export interface LookupMatchSplitProof
+{
+    readonly pushableStage: {
+        readonly $match: Record<string, unknown>;
+    };
+    readonly residualStage: {
+        readonly $match: Record<string, unknown>;
+    };
+}
+
+export interface SubpipelinePushdownProof
+{
+    readonly lookupStage: Record<string, unknown>;
+    readonly residualStage?: {
+        readonly $match: Record<string, unknown>;
+    };
+}
+
+export function proveLookupMatchSplit(
+    lookupStage: unknown,
+    followingStage: unknown
+): LookupMatchSplitProof | null
+{
+    if( !isSimpleEqualityLookup( lookupStage ))
+    {
+        return null;
+    }
+
+    if( !isMatchStage( followingStage ))
+    {
+        return null;
+    }
+
+    const matchSemantics = analyzeStage( followingStage );
+
+    if( !isSafeMatchSummary( matchSemantics ))
+    {
+        return null;
+    }
+
+    const alias = lookupStage.$lookup.as;
+
+    if( arePathsDisjoint( matchSemantics.dependencies.local, [ alias ] ))
+    {
+        return null;
+    }
+
+    const conjuncts = decomposeFilterIntoConjuncts( followingStage.$match );
+
+    if( conjuncts.length <= 1 )
+    {
+        return null;
+    }
+
+    const pushable: Record<string, unknown>[] = [];
+    const residual: Record<string, unknown>[] = [];
+
+    for( const conjunct of conjuncts )
+    {
+        const conjunctSemantics = analyzeStage( { $match: conjunct } );
+
+        if(
+            isSafeMatchSummary( conjunctSemantics )
+            && arePathsDisjoint( conjunctSemantics.dependencies.local, [ alias ] )
+        )
+        {
+            pushable.push( conjunct );
+        }
+        else
+        {
+            residual.push( conjunct );
+        }
+    }
+
+    if( pushable.length === 0 )
+    {
+        return null;
+    }
+
+    return {
+        pushableStage: { $match: combineConjuncts( pushable ) },
+        residualStage: { $match: combineConjuncts( residual ) }
+    };
+}
+
+export function proveLookupSubpipelinePushdown(
+    lookupStage: unknown,
+    unwindStage: unknown,
+    matchStage: unknown
+): SubpipelinePushdownProof | null
+{
+    if(
+        !isPlainObject( lookupStage )
+        || Object.keys( lookupStage ).length !== 1
+        || !isPlainObject( lookupStage.$lookup )
+    )
+    {
+        return null;
+    }
+
+    const lookupSpec = lookupStage.$lookup as Record<string, unknown>;
+
+    if(
+        typeof lookupSpec.as !== 'string'
+        || lookupSpec.as.length === 0
+        || !Array.isArray( lookupSpec.pipeline )
+    )
+    {
+        return null;
+    }
+
+    if( !isPlainObject( unwindStage ) || Object.keys( unwindStage ).length !== 1 )
+    {
+        return null;
+    }
+
+    const unwindSpec = ( unwindStage as Record<string, unknown> ).$unwind;
+    let unwindPath: string;
+    let indexField: string | undefined;
+
+    if( typeof unwindSpec === 'string' )
+    {
+        if( !unwindSpec.startsWith( '$' ) || unwindSpec.length <= 1 )
+        {
+            return null;
+        }
+
+        unwindPath = unwindSpec.slice( 1 );
+    }
+    else if( isPlainObject( unwindSpec ) && typeof unwindSpec.path === 'string' )
+    {
+        if(
+            !unwindSpec.path.startsWith( '$' )
+            || unwindSpec.path.length <= 1
+            || unwindSpec.preserveNullAndEmptyArrays === true
+        )
+        {
+            return null;
+        }
+
+        unwindPath = unwindSpec.path.slice( 1 );
+
+        if( typeof unwindSpec.includeArrayIndex === 'string' )
+        {
+            indexField = unwindSpec.includeArrayIndex;
+        }
+    }
+    else
+    {
+        return null;
+    }
+
+    if( unwindPath !== lookupSpec.as )
+    {
+        return null;
+    }
+
+    if( !isMatchStage( matchStage ))
+    {
+        return null;
+    }
+
+    const matchSemantics = analyzeStage( matchStage );
+
+    if( !isSafeMatchSummary( matchSemantics ))
+    {
+        return null;
+    }
+
+    const conjuncts = decomposeFilterIntoConjuncts( matchStage.$match );
+    const prefix = lookupSpec.as + '.';
+    const pushableToSub: Record<string, unknown>[] = [];
+    const residual: Record<string, unknown>[] = [];
+
+    for( const conjunct of conjuncts )
+    {
+        const [ key, val ] = Object.entries( conjunct )[ 0 ]!;
+
+        if( indexField && ( key === indexField || key.startsWith( indexField + '.' )))
+        {
+            residual.push( conjunct );
+            continue;
+        }
+
+        if( key.startsWith( prefix ))
+        {
+            const innerKey = key.slice( prefix.length );
+            pushableToSub.push( { [ innerKey ]: deepClone( val ) } );
+        }
+        else if( key === lookupSpec.as && isPlainObject( val ) && isPlainObject( val.$elemMatch ))
+        {
+            const elemConjuncts = decomposeFilterIntoConjuncts( val.$elemMatch as Record<string, unknown> );
+            pushableToSub.push( ...elemConjuncts.map(( c ) => deepClone( c )));
+        }
+        else
+        {
+            residual.push( conjunct );
+        }
+    }
+
+    if( pushableToSub.length === 0 )
+    {
+        return null;
+    }
+
+    const newSubMatch = { $match: combineConjuncts( pushableToSub ) };
+    const updatedLookup = {
+        ...lookupStage,
+        $lookup: {
+            ...lookupSpec,
+            pipeline: [ ...lookupSpec.pipeline, newSubMatch ]
+        }
+    };
+
+    if( residual.length > 0 )
+    {
+        return {
+            lookupStage: updatedLookup,
+            residualStage: { $match: combineConjuncts( residual ) }
+        };
+    }
+
+    return {
+        lookupStage: updatedLookup
+    };
+}
+
 /**
  * The contained priority pass can only reuse an existing pair-specific proof.
  */
@@ -826,7 +1151,7 @@ export function provePrioritySwap(
     if (right.operator === "$match")
     {
         const proof = proveMatchPushdownAcrossStage(leftStage, rightStage);
-        return proof
+        return proof && !proof.residualStage
             ? [proof.matchStage, leftStage]
             : null;
     }

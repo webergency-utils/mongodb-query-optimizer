@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { analyzeStage } from '../src/analyzer/semantics.js';
 import { optimizePipeline } from '../src/index.js';
-import { proveLookupDelayAcrossStage } from '../src/passes/movement-proofs.js';
+import {
+    proveLookupDelayAcrossStage,
+    proveLookupMatchSplit,
+    proveLookupSubpipelinePushdown,
+} from '../src/passes/movement-proofs.js';
 import { LookupDelayPass } from '../src/passes/lookup-delay.js';
 import {
     optimizePipelineWithCandidateProfile,
 } from '../src/passes/registry.js';
+import { runMockPipeline } from './helpers/mock-engine.js';
 import {
     candidateSemanticCases,
     productionSemanticCases,
@@ -538,17 +543,12 @@ describe('lookup delay', () =>
         }
     });
 
-    it('blocks volatile, erroring, wildcard, and unsupported match evaluation', () =>
+    it('blocks volatile, wildcard, and unsupported match evaluation', () =>
     {
         const followingStages = [
             {
                 $match: {
                     $expr: { $gt: [{ $rand: {} }, 0.5] },
-                },
-            },
-            {
-                $match: {
-                    $expr: { $gt: [{ $divide: [1, '$zero'] }, 0] },
                 },
             },
             { $match: { $where: 'return true' } },
@@ -560,6 +560,17 @@ describe('lookup delay', () =>
             const pipeline = [makeLookup(), followingStage];
             expect(optimizeLookups(pipeline)).toEqual(pipeline);
         }
+    });
+
+    it('delays lookup past match with potentially erroring expression', () =>
+    {
+        const matchStage = {
+            $match: {
+                $expr: { $gt: [{ $divide: [1, '$zero'] }, 0] },
+            },
+        };
+        const pipeline = [makeLookup(), matchStage];
+        expect(optimizeLookups(pipeline)).toEqual([matchStage, makeLookup()]);
     });
 
     it('never delays graph lookup or a lookup paired with unwind', () =>
@@ -877,5 +888,526 @@ describe('lookup semantic fixtures', () =>
             fixture.candidateTransformationIds ?? [],
             fixture.candidateRuleIds,
         )).toEqual(fixture.pipeline);
+    });
+});
+
+describe('proveLookupMatchSplit', () =>
+{
+    it('returns null for non-simple lookup stages', () =>
+    {
+        expect(proveLookupMatchSplit(null, { $match: { a: 1 } })).toBeNull();
+        expect(proveLookupMatchSplit({ $lookup: 'not-object' }, { $match: { a: 1 } })).toBeNull();
+        expect(proveLookupMatchSplit({ $other: {} }, { $match: { a: 1 } })).toBeNull();
+    });
+
+    it('returns null for non-match or unsafe match followers', () =>
+    {
+        const lookup = makeLookup();
+        expect(proveLookupMatchSplit(lookup, null)).toBeNull();
+        expect(proveLookupMatchSplit(lookup, { $sort: { a: 1 } })).toBeNull();
+        expect(proveLookupMatchSplit(lookup, { $match: 'invalid' })).toBeNull();
+        expect(proveLookupMatchSplit(lookup, { $match: { $where: 'sleep(100)' } })).toBeNull();
+    });
+
+    it('returns null when match is already fully disjoint from alias', () =>
+    {
+        const lookup = makeLookup({ as: 'orders' });
+        const match = { $match: { status: 'active', age: { $gt: 20 } } };
+        expect(proveLookupMatchSplit(lookup, match)).toBeNull();
+    });
+
+    it('returns null when match cannot be split into pushable conjuncts', () =>
+    {
+        const lookup = makeLookup({ as: 'orders' });
+        expect(proveLookupMatchSplit(lookup, { $match: { 'orders.total': { $gt: 100 } } })).toBeNull();
+        expect(proveLookupMatchSplit(lookup, {
+            $match: {
+                'orders.total': { $gt: 100 },
+                'orders.status': 'completed',
+            },
+        })).toBeNull();
+    });
+
+    it('splits mixed match into pushable disjoint and residual alias conjuncts', () =>
+    {
+        const lookup = makeLookup({ as: 'orders' });
+        const match = {
+            $match: {
+                status: 'active',
+                'orders.total': { $gt: 100 },
+            },
+        };
+
+        const proof = proveLookupMatchSplit(lookup, match);
+        expect(proof).not.toBeNull();
+        expect(proof?.pushableStage).toEqual({
+            $match: {
+                status: 'active',
+            },
+        });
+        expect(proof?.residualStage).toEqual({
+            $match: {
+                'orders.total': { $gt: 100 },
+            },
+        });
+    });
+
+    it('combines multiple pushable conjuncts with key collision into $and', () =>
+    {
+        const lookup = makeLookup({ as: 'orders' });
+        const match = {
+            $match: {
+                $and: [
+                    { score: { $gte: 10 } },
+                    { score: { $lte: 50 } },
+                    { 'orders.status': 'completed' },
+                ],
+            },
+        };
+
+        const proof = proveLookupMatchSplit(lookup, match);
+        expect(proof).not.toBeNull();
+        expect(proof?.pushableStage).toEqual({
+            $match: {
+                $and: [
+                    { score: { $gte: 10 } },
+                    { score: { $lte: 50 } },
+                ],
+            },
+        });
+        expect(proof?.residualStage).toEqual({
+            $match: {
+                'orders.status': 'completed',
+            },
+        });
+    });
+});
+
+describe('proveLookupSubpipelinePushdown', () =>
+{
+    it('returns null on invalid lookup stages', () =>
+    {
+        expect(proveLookupSubpipelinePushdown(null, { $unwind: '$orders' }, { $match: { 'orders.a': 1 } })).toBeNull();
+        expect(proveLookupSubpipelinePushdown({ $lookup: 123 }, { $unwind: '$orders' }, { $match: { 'orders.a': 1 } })).toBeNull();
+        expect(proveLookupSubpipelinePushdown({ $lookup: {}, extra: 1 }, { $unwind: '$orders' }, { $match: { 'orders.a': 1 } })).toBeNull();
+        expect(proveLookupSubpipelinePushdown({ $lookup: { as: 123, pipeline: [] } }, { $unwind: '$orders' }, { $match: { 'orders.a': 1 } })).toBeNull();
+        expect(proveLookupSubpipelinePushdown({ $lookup: { as: '', pipeline: [] } }, { $unwind: '$orders' }, { $match: { 'orders.a': 1 } })).toBeNull();
+        expect(proveLookupSubpipelinePushdown({ $lookup: { as: 'orders', pipeline: 'not-array' } }, { $unwind: '$orders' }, { $match: { 'orders.a': 1 } })).toBeNull();
+    });
+
+    it('returns null on invalid unwind stages', () =>
+    {
+        const lookup = { $lookup: { as: 'orders', pipeline: [] } };
+        expect(proveLookupSubpipelinePushdown(lookup, null, { $match: { 'orders.a': 1 } })).toBeNull();
+        expect(proveLookupSubpipelinePushdown(lookup, { $unwind: 123 }, { $match: { 'orders.a': 1 } })).toBeNull();
+        expect(proveLookupSubpipelinePushdown(lookup, { $unwind: 'not-dollar' }, { $match: { 'orders.a': 1 } })).toBeNull();
+        expect(proveLookupSubpipelinePushdown(lookup, { $unwind: '$' }, { $match: { 'orders.a': 1 } })).toBeNull();
+        expect(proveLookupSubpipelinePushdown(lookup, { $unwind: { path: 'not-dollar' } }, { $match: { 'orders.a': 1 } })).toBeNull();
+        expect(proveLookupSubpipelinePushdown(lookup, { $unwind: { path: '$' } }, { $match: { 'orders.a': 1 } })).toBeNull();
+        expect(proveLookupSubpipelinePushdown(lookup, { $unwind: { path: '$orders', preserveNullAndEmptyArrays: true } }, { $match: { 'orders.a': 1 } })).toBeNull();
+        expect(proveLookupSubpipelinePushdown(lookup, { $unwind: { path: 123 } }, { $match: { 'orders.a': 1 } })).toBeNull();
+        expect(proveLookupSubpipelinePushdown(lookup, { $unwind: '$other' }, { $match: { 'orders.a': 1 } })).toBeNull();
+        expect(proveLookupSubpipelinePushdown(lookup, { $unwind: '$orders', extra: 1 }, { $match: { 'orders.a': 1 } })).toBeNull();
+    });
+
+    it('returns null on invalid match stages', () =>
+    {
+        const lookup = { $lookup: { as: 'orders', pipeline: [] } };
+        const unwind = { $unwind: '$orders' };
+        expect(proveLookupSubpipelinePushdown(lookup, unwind, null)).toBeNull();
+        expect(proveLookupSubpipelinePushdown(lookup, unwind, { $match: 'not-object' })).toBeNull();
+        expect(proveLookupSubpipelinePushdown(lookup, unwind, { $match: { $where: 'sleep(100)' } })).toBeNull();
+        expect(proveLookupSubpipelinePushdown(lookup, unwind, { $match: { status: 'active' } })).toBeNull();
+    });
+
+    it('pushes filter into subpipeline without residual when all conditions target alias', () =>
+    {
+        const lookup = {
+            $lookup: {
+                from: 'orders',
+                as: 'orders',
+                pipeline: [{ $sort: { date: -1 } }],
+            },
+        };
+        const unwind = { $unwind: { path: '$orders' } };
+        const match = {
+            $match: {
+                'orders.status': 'completed',
+                'orders.total': { $gt: 50 },
+            },
+        };
+
+        const proof = proveLookupSubpipelinePushdown(lookup, unwind, match);
+        expect(proof).not.toBeNull();
+        expect(proof?.residualStage).toBeUndefined();
+        expect(proof?.lookupStage).toEqual({
+            $lookup: {
+                from: 'orders',
+                as: 'orders',
+                pipeline: [
+                    { $sort: { date: -1 } },
+                    {
+                        $match: {
+                            status: 'completed',
+                            total: { $gt: 50 },
+                        },
+                    },
+                ],
+            },
+        });
+    });
+
+    it('pushes subpipeline filter and retains residual for non-alias conditions and includeArrayIndex', () =>
+    {
+        const lookup = {
+            $lookup: {
+                from: 'orders',
+                as: 'orders',
+                pipeline: [],
+            },
+        };
+        const unwind = {
+            $unwind: {
+                path: '$orders',
+                includeArrayIndex: 'orderIdx',
+            },
+        };
+        const match = {
+            $match: {
+                'orders.status': 'completed',
+                customerActive: true,
+                orderIdx: 0,
+            },
+        };
+
+        const proof = proveLookupSubpipelinePushdown(lookup, unwind, match);
+        expect(proof).not.toBeNull();
+        expect(proof?.lookupStage).toEqual({
+            $lookup: {
+                from: 'orders',
+                as: 'orders',
+                pipeline: [
+                    { $match: { status: 'completed' } },
+                ],
+            },
+        });
+        expect(proof?.residualStage).toEqual({
+            $match: {
+                customerActive: true,
+                orderIdx: 0,
+            },
+        });
+    });
+
+    it('pushes $elemMatch on alias into subpipeline', () =>
+    {
+        const lookup = {
+            $lookup: {
+                from: 'orders',
+                as: 'orders',
+                pipeline: [],
+            },
+        };
+        const unwind = { $unwind: '$orders' };
+        const match = {
+            $match: {
+                orders: { $elemMatch: { status: 'completed', total: { $gt: 50 } } },
+            },
+        };
+
+        const proof = proveLookupSubpipelinePushdown(lookup, unwind, match);
+        expect(proof).not.toBeNull();
+        expect(proof?.lookupStage).toEqual({
+            $lookup: {
+                from: 'orders',
+                as: 'orders',
+                pipeline: [
+                    {
+                        $match: {
+                            status: 'completed',
+                            total: { $gt: 50 },
+                        },
+                    },
+                ],
+            },
+        });
+        expect(proof?.residualStage).toBeUndefined();
+    });
+
+    it('retains conditions directly on alias field when not a valid $elemMatch', () =>
+    {
+        const lookup = {
+            $lookup: {
+                from: 'orders',
+                as: 'orders',
+                pipeline: [],
+            },
+        };
+        const unwind = { $unwind: '$orders' };
+
+        const match1 = { $match: { orders: 5, 'orders.status': 'completed' } };
+        const proof1 = proveLookupSubpipelinePushdown(lookup, unwind, match1);
+        expect(proof1).not.toBeNull();
+        expect(proof1?.residualStage).toEqual({ $match: { orders: 5 } });
+
+        const match2 = { $match: { orders: { $size: 3 }, 'orders.status': 'completed' } };
+        const proof2 = proveLookupSubpipelinePushdown(lookup, unwind, match2);
+        expect(proof2).not.toBeNull();
+        expect(proof2?.residualStage).toEqual({ $match: { orders: { $size: 3 } } });
+    });
+});
+
+describe('LookupDelayPass mixed match splitting and subpipeline pushdown', () =>
+{
+    const pass = new LookupDelayPass();
+
+    it('splits mixed match across simple equality lookup in pass execution', () =>
+    {
+        const pipeline = [
+            makeLookup({ as: 'orders' }),
+            {
+                $match: {
+                    status: 'active',
+                    'orders.total': { $gt: 100 },
+                },
+            },
+        ];
+
+        const result = pass.execute(pipeline);
+        expect(result).toEqual([
+            { $match: { status: 'active' } },
+            makeLookup({ as: 'orders' }),
+            { $match: { 'orders.total': { $gt: 100 } } },
+        ]);
+    });
+
+    it('pushes filter into subpipeline across unwind and removes match when fully pushed', () =>
+    {
+        const pipeline = [
+            {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [{ $sort: { date: -1 } }],
+                },
+            },
+            { $unwind: '$orders' },
+            { $match: { 'orders.status': 'completed' } },
+        ];
+
+        const result = pass.execute(pipeline);
+        expect(result).toEqual([
+            {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [
+                        { $sort: { date: -1 } },
+                        { $match: { status: 'completed' } },
+                    ],
+                },
+            },
+            { $unwind: '$orders' },
+        ]);
+    });
+
+    it('pushes filter into subpipeline and leaves residual for other fields', () =>
+    {
+        const pipeline = [
+            {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [],
+                },
+            },
+            { $unwind: '$orders' },
+            {
+                $match: {
+                    'orders.status': 'completed',
+                    country: 'US',
+                },
+            },
+        ];
+
+        const result = pass.execute(pipeline);
+        expect(result).toEqual([
+            {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [{ $match: { status: 'completed' } }],
+                },
+            },
+            { $unwind: '$orders' },
+            { $match: { country: 'US' } },
+        ]);
+    });
+
+    it('pushes filter into subpipeline when match stage precedes unwind', () =>
+    {
+        const pipeline = [
+            {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [{ $sort: { date: -1 } }],
+                },
+            },
+            {
+                $match: {
+                    orders: { $elemMatch: { status: 'completed' } },
+                },
+            },
+            { $unwind: '$orders' },
+        ];
+
+        const result = pass.execute(pipeline);
+        expect(result).toEqual([
+            {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [
+                        { $sort: { date: -1 } },
+                        { $match: { status: 'completed' } },
+                    ],
+                },
+            },
+            { $unwind: '$orders' },
+        ]);
+    });
+
+    it('pushes filter into subpipeline when match stage precedes unwind and leaves residual', () =>
+    {
+        const pipeline = [
+            {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [],
+                },
+            },
+            {
+                $match: {
+                    orders: { $elemMatch: { status: 'completed' } },
+                    country: 'US',
+                },
+            },
+            { $unwind: '$orders' },
+        ];
+
+        const result = pass.execute(pipeline);
+        expect(result).toEqual([
+            {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [{ $match: { status: 'completed' } }],
+                },
+            },
+            { $match: { country: 'US' } },
+            { $unwind: '$orders' },
+        ]);
+    });
+});
+
+describe('optimizePipeline end-to-end for lookup enhancements', () =>
+{
+    const customers = [
+        { _id: 1, name: 'Alice', status: 'active', tier: 'gold' },
+        { _id: 2, name: 'Bob', status: 'inactive', tier: 'silver' },
+        { _id: 3, name: 'Charlie', status: 'active', tier: 'silver' },
+    ];
+
+    const orders = [
+        { _id: 101, customerId: 1, total: 150, status: 'completed' },
+        { _id: 102, customerId: 1, total: 50, status: 'pending' },
+        { _id: 103, customerId: 2, total: 200, status: 'completed' },
+        { _id: 104, customerId: 3, total: 80, status: 'completed' },
+    ];
+
+    it('optimizes mixed match across simple equality lookup and preserves execution parity', () =>
+    {
+        const pipeline = [
+            {
+                $lookup: {
+                    from: 'orders',
+                    localField: '_id',
+                    foreignField: 'customerId',
+                    as: 'orders',
+                },
+            },
+            {
+                $match: {
+                    status: 'active',
+                    'orders.total': { $gt: 100 },
+                },
+            },
+        ];
+
+        const optimized = optimizePipeline(pipeline);
+
+        expect(optimized[0]).toEqual({
+            $match: {
+                status: 'active',
+            },
+        });
+        expect(optimized[1]).toEqual({
+            $lookup: {
+                from: 'orders',
+                localField: '_id',
+                foreignField: 'customerId',
+                as: 'orders',
+            },
+        });
+        expect(optimized[2]).toEqual({
+            $match: {
+                'orders.total': { $gt: 100 },
+            },
+        });
+
+        const originalResults = runMockPipeline(customers, pipeline, { orders });
+        const optimizedResults = runMockPipeline(customers, optimized, { orders });
+
+        expect(optimizedResults).toEqual(originalResults);
+        expect(optimizedResults).toHaveLength(1);
+        expect(optimizedResults[0]._id).toBe(1);
+    });
+
+    it('optimizes subpipeline filter pushdown across unwind in full optimizePipeline', () =>
+    {
+        const pipeline = [
+            {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [{ $sort: { total: -1 } }],
+                },
+            },
+            { $unwind: '$orders' },
+            {
+                $match: {
+                    'orders.status': 'completed',
+                },
+            },
+        ];
+
+        const optimized = optimizePipeline(pipeline);
+
+        expect(optimized[0]).toEqual({
+            $lookup: {
+                from: 'orders',
+                as: 'orders',
+                pipeline: [
+                    { $match: { status: 'completed' } },
+                    { $sort: { total: -1 } },
+                ],
+            },
+        });
+        expect(optimized[1]).toEqual({
+            $unwind: '$orders',
+        });
+        expect(optimized).toHaveLength(2);
     });
 });

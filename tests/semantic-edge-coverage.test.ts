@@ -1054,6 +1054,17 @@ describe('movement proof edge behavior', () =>
             { $limit: 1 },
             { $set: { stable: true } },
         ]);
+        expect(provePrioritySwap(
+            { $unwind: '$items' },
+            { $match: { category: 'electronics' } },
+        )).toEqual([
+            { $match: { category: 'electronics' } },
+            { $unwind: '$items' },
+        ]);
+        expect(provePrioritySwap(
+            { $unwind: '$items' },
+            { $match: { category: 'electronics', 'items.qty': 5 } },
+        )).toBeNull();
     });
 });
 
@@ -1291,7 +1302,7 @@ describe('successful-result movement proofs', () =>
         expect(proveAddFieldDeferralAcrossSort(
             { $addFields: { computed: { $add: ['$source', 1] } } },
             { $sort: { score: -1 } },
-        )).toBe(false);
+        )).toBe(true);
         expect(proveAddFieldDeferralAcrossSort(
             { $addFields: { random: { $rand: {} } } },
             { $sort: { score: -1 } },

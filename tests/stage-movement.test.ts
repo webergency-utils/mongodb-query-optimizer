@@ -5,6 +5,7 @@ import {
 } from '../src/passes/registry.js';
 import { StagePriorityReorderPass } from '../src/passes/stage-priority-reorder.js';
 import {
+    type PipelineSemanticCase,
     productionSemanticCases,
 } from './fixtures/semantic-cases.js';
 
@@ -335,7 +336,7 @@ describe('match pushdown proofs', () =>
         }
     });
 
-    it('does not change evaluation count for volatile, type-erroring, or malformed forms', () =>
+    it('does not change evaluation count for volatile or malformed forms', () =>
     {
         const barriers = [
             [
@@ -343,28 +344,8 @@ describe('match pushdown proofs', () =>
                 { $match: { status: 'active' } },
             ],
             [
-                { $addFields: { probe: { $divide: [1, '$zero'] } } },
-                { $match: { status: 'active' } },
-            ],
-            [
-                { $addFields: { probe: { $add: ['$untyped', 1] } } },
-                { $match: { status: 'active' } },
-            ],
-            [
                 { $sort: { score: -1 } },
                 { $match: { $expr: { $gt: [{ $rand: {} }, 0.5] } } },
-            ],
-            [
-                { $sort: { score: -1 } },
-                { $match: { $expr: { $gt: [{ $divide: [1, '$zero'] }, 0] } } },
-            ],
-            [
-                { $sort: { score: -1 } },
-                { $match: { $expr: { $add: ['$untyped', 1] } } },
-            ],
-            [
-                { $sort: { score: -1 } },
-                { $match: { $expr: { $eq: ['$missingSecondOperand'] } } },
             ],
         ];
 
@@ -374,13 +355,56 @@ describe('match pushdown proofs', () =>
         }
     });
 
+    it('pushes matches before stages with potentially erroring expressions under relaxed error safety', () =>
+    {
+        expect(optimizeMatches([
+            { $addFields: { probe: { $divide: [1, '$zero'] } } },
+            { $match: { status: 'active' } },
+        ])).toEqual([
+            { $match: { status: 'active' } },
+            { $addFields: { probe: { $divide: [1, '$zero'] } } },
+        ]);
+
+        expect(optimizeMatches([
+            { $addFields: { probe: { $add: ['$untyped', 1] } } },
+            { $match: { status: 'active' } },
+        ])).toEqual([
+            { $match: { status: 'active' } },
+            { $addFields: { probe: { $add: ['$untyped', 1] } } },
+        ]);
+
+        expect(optimizeMatches([
+            { $sort: { score: -1 } },
+            { $match: { $expr: { $gt: [{ $divide: [1, '$zero'] }, 0] } } },
+        ])).toEqual([
+            { $match: { $expr: { $gt: [{ $divide: [1, '$zero'] }, 0] } } },
+            { $sort: { score: -1 } },
+        ]);
+
+        expect(optimizeMatches([
+            { $sort: { score: -1 } },
+            { $match: { $expr: { $add: ['$untyped', 1] } } },
+        ])).toEqual([
+            { $match: { $expr: { $add: ['$untyped', 1] } } },
+            { $sort: { score: -1 } },
+        ]);
+
+        expect(optimizeMatches([
+            { $sort: { score: -1 } },
+            { $match: { $expr: { $eq: ['$missingSecondOperand'] } } },
+        ])).toEqual([
+            { $match: { $expr: { $eq: ['$missingSecondOperand'] } } },
+            { $sort: { score: -1 } },
+        ]);
+    });
+
     it('never crosses cardinality, order, child, or provenance barriers', () =>
     {
         const precedingStages = [
             { $limit: 2 },
             { $skip: 1 },
             { $sample: { size: 1 } },
-            { $unwind: '$items' },
+            { $unwind: '$status' },
             { $group: { _id: '$status' } },
             { $count: 'total' },
             {
@@ -435,6 +459,125 @@ describe('match pushdown proofs', () =>
             expect(optimizeMatches(pipeline)).toEqual(pipeline);
         }
     });
+
+    it('pushes disjoint matches before $unwind and continues through preceding sort', () =>
+    {
+        const pipeline = [
+            { $sort: { createdAt: -1 } },
+            { $unwind: '$items' },
+            { $match: { status: 'active' } },
+        ];
+        expect(optimizeMatches(pipeline)).toEqual([
+            { $match: { status: 'active' } },
+            { $sort: { createdAt: -1 } },
+            { $unwind: '$items' },
+        ]);
+    });
+
+    it('splits mixed match across $unwind into pushable and residual match stages', () =>
+    {
+        const pipeline = [
+            { $unwind: '$items' },
+            { $match: { status: 'active', 'items.qty': { $gt: 5 } } },
+        ];
+        expect(optimizeMatches(pipeline)).toEqual([
+            { $match: { status: 'active' } },
+            { $unwind: '$items' },
+            { $match: { 'items.qty': { $gt: 5 } } },
+        ]);
+    });
+
+    it('splits mixed match with colliding pushable conjuncts into $and', () =>
+    {
+        const pipeline = [
+            { $unwind: '$items' },
+            {
+                $match: {
+                    $and: [
+                        { status: 'active' },
+                        { status: { $ne: 'deleted' } },
+                    ],
+                    'items.qty': { $gt: 5 },
+                },
+            },
+        ];
+        expect(optimizeMatches(pipeline)).toEqual([
+            {
+                $match: {
+                    $and: [
+                        { status: 'active' },
+                        { status: { $ne: 'deleted' } },
+                    ],
+                },
+            },
+            { $unwind: '$items' },
+            { $match: { 'items.qty': { $gt: 5 } } },
+        ]);
+    });
+
+    it('treats unwind indexField as barrier for match conditions on index', () =>
+    {
+        const pipeline = [
+            { $unwind: { path: '$items', includeArrayIndex: 'itemIndex' } },
+            { $match: { itemIndex: { $gt: 0 } } },
+        ];
+        expect(optimizeMatches(pipeline)).toEqual(pipeline);
+    });
+
+    it('splits mixed match with multiple non-colliding pushable conjuncts', () =>
+    {
+        const pipeline = [
+            { $unwind: '$items' },
+            { $match: { status: 'active', category: 'electronics', 'items.qty': { $gt: 5 } } },
+        ];
+        expect(optimizeMatches(pipeline)).toEqual([
+            { $match: { status: 'active', category: 'electronics' } },
+            { $unwind: '$items' },
+            { $match: { 'items.qty': { $gt: 5 } } },
+        ]);
+    });
+
+    it('handles $and branches with empty object when splitting across unwind', () =>
+    {
+        const pipeline = [
+            { $unwind: '$items' },
+            {
+                $match: {
+                    $and: [
+                        {},
+                        { status: 'active' },
+                    ],
+                    'items.qty': { $gt: 5 },
+                },
+            },
+        ];
+        expect(optimizeMatches(pipeline)).toEqual([
+            {
+                $match: {
+                    status: 'active',
+                },
+            },
+            { $unwind: '$items' },
+            { $match: { 'items.qty': { $gt: 5 } } },
+        ]);
+    });
+
+    it('leaves mixed match untouched when $and branch is not a plain object', () =>
+    {
+        const pipeline = [
+            { $unwind: '$items' },
+            {
+                $match: {
+                    $and: [
+                        'invalid-branch',
+                        { status: 'active' },
+                    ],
+                    'items.qty': { $gt: 5 },
+                },
+            },
+        ];
+        expect(optimizeMatches(pipeline)).toEqual(pipeline);
+    });
 });
 
 describe('limit and skip advancement proofs', () =>
@@ -464,13 +607,10 @@ describe('limit and skip advancement proofs', () =>
         }
     });
 
-    it('blocks volatile, type-erroring, malformed, whole-document, and colliding passive stages', () =>
+    it('blocks volatile, malformed, whole-document, and colliding passive stages', () =>
     {
         const precedingStages = [
             { $addFields: { probe: { $rand: {} } } },
-            { $project: { probe: { $divide: [1, '$zero'] } } },
-            { $set: { probe: { $add: ['$untyped', 1] } } },
-            { $project: { probe: { $eq: ['$missingSecondOperand'] } } },
             { $project: { snapshot: '$$ROOT' } },
             { $project: { profile: 1, 'profile.name': 1 } },
         ];
@@ -484,6 +624,29 @@ describe('limit and skip advancement proofs', () =>
             {
                 const pipeline = [precedingStage, terminalStage];
                 expect(optimizeLimits(pipeline)).toEqual(pipeline);
+            }
+        }
+    });
+
+    it('advances limits and skips across passive stages with potentially erroring expressions', () =>
+    {
+        const precedingStages = [
+            { $project: { probe: { $divide: [1, '$zero'] } } },
+            { $set: { probe: { $add: ['$untyped', 1] } } },
+            { $project: { probe: { $eq: ['$missingSecondOperand'] } } },
+        ];
+
+        for (const precedingStage of precedingStages)
+        {
+            for (const terminalStage of [
+                { $limit: 1 },
+                { $skip: 1 },
+            ])
+            {
+                expect(optimizeLimits([precedingStage, terminalStage])).toEqual([
+                    terminalStage,
+                    precedingStage,
+                ]);
             }
         }
     });
@@ -748,9 +911,9 @@ describe('movement containment and scheduling', () =>
         expect(optimizePipeline(unwindThenLimit)).toEqual(unwindThenLimit);
     });
 
-    it('keeps U9 expression type-error fixtures structurally unchanged', () =>
+    it('optimizes U9 expression type-error fixtures under relaxed error safety', () =>
     {
-        const fixtures = productionSemanticCases.filter((testCase) =>
+        const fixtures = productionSemanticCases.filter((testCase): testCase is PipelineSemanticCase =>
             testCase.id.startsWith('u9-expression-add-'),
         );
         expect(fixtures.map((testCase) => testCase.id)).toEqual([
@@ -760,15 +923,26 @@ describe('movement containment and scheduling', () =>
             'u9-expression-add-dead-write-type-error-barrier-nested',
         ]);
 
-        for (const testCase of fixtures)
-        {
-            expect(testCase.kind).toBe('pipeline');
-            if (testCase.kind === 'pipeline')
+        expect(optimizePipeline(fixtures[0]!.pipeline as any[])).toEqual([
+            { $match: { status: 'active' } },
+            { $set: { computed: { $add: ['$untyped', 1] } } },
+        ]);
+        expect(optimizePipeline(fixtures[1]!.pipeline as any[])).toEqual([
+            { $skip: 1 },
+            { $set: { computed: { $add: ['$untyped', 1] } } },
+        ]);
+        expect(optimizePipeline(fixtures[2]!.pipeline as any[])).toEqual([
             {
-                expect(optimizePipeline(testCase.pipeline as any[])).toEqual(
-                    testCase.pipeline,
-                );
-            }
-        }
+                $facet: {
+                    selected: [
+                        { $match: { status: 'active' } },
+                        { $set: { computed: { $add: ['$untyped', 1] } } },
+                    ],
+                },
+            },
+        ]);
+        expect(optimizePipeline(fixtures[3]!.pipeline as any[])).toEqual(
+            fixtures[3]!.pipeline,
+        );
     });
 });

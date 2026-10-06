@@ -3058,6 +3058,156 @@ export const productionSemanticCases: readonly SemanticCase[] = [
         affectedTransformationIds: ['sort-by-count-simplification'],
         expectedEquivalent: true,
     },
+    {
+        id: 'feat-top-k-pushdown-focused',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, name: 'A', score: 10 },
+                    { _id: 2, name: 'B', score: 30 },
+                    { _id: 3, name: 'C', score: 20 },
+                ],
+            },
+        },
+        pipeline: [
+            { $addFields: { tag: 'computed' } },
+            { $sort: { score: -1, _id: 1 } },
+            { $limit: 2 },
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: ['top-k-pushdown'],
+        expectedEquivalent: true,
+    },
+    {
+        id: 'feat-top-k-pushdown-oracle',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, name: 'A', score: 10 },
+                    { _id: 2, name: 'B', score: 30 },
+                    { _id: 3, name: 'C', score: 20 },
+                ],
+            },
+        },
+        pipeline: [
+            { $addFields: { tag: 'computed' } },
+            { $sort: { score: -1, _id: 1 } },
+            { $limit: 2 },
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: ['top-k-pushdown'],
+        expectedEquivalent: true,
+    },
+    {
+        id: 'feat-add-field-pushdown-focused',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, name: 'A', score: 10, foreignId: 101 },
+                    { _id: 2, name: 'B', score: 30, foreignId: 102 },
+                    { _id: 3, name: 'C', score: 20, foreignId: 103 },
+                ],
+            },
+            foreign: {
+                documents: [
+                    { _id: 101, title: 'F1' },
+                    { _id: 102, title: 'F2' },
+                    { _id: 103, title: 'F3' },
+                ],
+            },
+        },
+        pipeline: [
+            {
+                $lookup: {
+                    from: 'foreign',
+                    localField: 'foreignId',
+                    foreignField: '_id',
+                    as: 'foreignDocs',
+                },
+            },
+            {
+                $addFields: {
+                    computedScore: { $add: [ '$score', 5 ] },
+                    extraInfo: '$foreignDocs.title',
+                },
+            },
+            { $sort: { computedScore: -1, _id: 1 } },
+            { $limit: 2 },
+            {
+                $replaceWith: {
+                    _id: '$_id',
+                    name: '$name',
+                    score: '$score',
+                    foreignId: '$foreignId',
+                    foreignDocs: '$foreignDocs',
+                    computedScore: '$computedScore',
+                    extraInfo: '$extraInfo',
+                },
+            },
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: [ 'add-field-pushdown', 'top-k-pushdown' ],
+        expectedEquivalent: true,
+    },
+    {
+        id: 'feat-add-field-pushdown-oracle',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, name: 'A', score: 10, foreignId: 101 },
+                    { _id: 2, name: 'B', score: 30, foreignId: 102 },
+                    { _id: 3, name: 'C', score: 20, foreignId: 103 },
+                ],
+            },
+            foreign: {
+                documents: [
+                    { _id: 101, title: 'F1' },
+                    { _id: 102, title: 'F2' },
+                    { _id: 103, title: 'F3' },
+                ],
+            },
+        },
+        pipeline: [
+            {
+                $lookup: {
+                    from: 'foreign',
+                    localField: 'foreignId',
+                    foreignField: '_id',
+                    as: 'foreignDocs',
+                },
+            },
+            {
+                $addFields: {
+                    computedScore: { $add: [ '$score', 5 ] },
+                    extraInfo: '$foreignDocs.title',
+                },
+            },
+            { $sort: { computedScore: -1, _id: 1 } },
+            { $limit: 2 },
+            {
+                $replaceWith: {
+                    _id: '$_id',
+                    name: '$name',
+                    score: '$score',
+                    foreignId: '$foreignId',
+                    foreignDocs: '$foreignDocs',
+                    computedScore: '$computedScore',
+                    extraInfo: '$extraInfo',
+                },
+            },
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: [ 'add-field-pushdown', 'top-k-pushdown' ],
+        expectedEquivalent: true,
+    },
 ];
 
 export const candidateSemanticCases: readonly SemanticCase[] = [

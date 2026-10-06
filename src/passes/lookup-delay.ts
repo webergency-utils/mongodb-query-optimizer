@@ -1,7 +1,9 @@
 import { PipelinePass } from './types';
 import
 {
-    proveLookupDelayAcrossStage
+    proveLookupDelayAcrossStage,
+    proveLookupMatchSplit,
+    proveLookupSubpipelinePushdown,
 }
 from './movement-proofs';
 
@@ -25,22 +27,87 @@ export class LookupDelayPass implements PipelinePass
 
             while( currentIndex < result.length - 1 )
             {
-                if( !proveLookupDelayAcrossStage(
+                if( proveLookupDelayAcrossStage(
                     result[ currentIndex ],
                     result[ currentIndex + 1 ]
                 ))
                 {
-                    break;
+                    const nextStage = result[ currentIndex + 1 ];
+                    result[ currentIndex + 1 ] = result[ currentIndex ];
+                    result[ currentIndex ] = nextStage;
+                    currentIndex++;
+                    changed = true;
+                    continue;
                 }
 
-                const nextStage = result[ currentIndex + 1 ];
-                result[ currentIndex + 1 ] = result[ currentIndex ];
-                result[ currentIndex ] = nextStage;
-                currentIndex++;
-                changed = true;
+                const splitProof = proveLookupMatchSplit(
+                    result[ currentIndex ],
+                    result[ currentIndex + 1 ]
+                );
+
+                if( splitProof )
+                {
+                    result[ currentIndex + 1 ] = splitProof.residualStage;
+                    result.splice( currentIndex, 0, splitProof.pushableStage );
+                    currentIndex++;
+                    changed = true;
+                    continue;
+                }
+
+                if( currentIndex + 2 < result.length )
+                {
+                    const subProof = proveLookupSubpipelinePushdown(
+                        result[ currentIndex ],
+                        result[ currentIndex + 1 ],
+                        result[ currentIndex + 2 ]
+                    );
+
+                    if( subProof )
+                    {
+                        result[ currentIndex ] = subProof.lookupStage;
+
+                        if( subProof.residualStage )
+                        {
+                            result[ currentIndex + 2 ] = subProof.residualStage;
+                        }
+                        else
+                        {
+                            result.splice( currentIndex + 2, 1 );
+                        }
+
+                        changed = true;
+                        continue;
+                    }
+
+                    const subProofB = proveLookupSubpipelinePushdown(
+                        result[ currentIndex ],
+                        result[ currentIndex + 2 ],
+                        result[ currentIndex + 1 ]
+                    );
+
+                    if( subProofB )
+                    {
+                        result[ currentIndex ] = subProofB.lookupStage;
+
+                        if( subProofB.residualStage )
+                        {
+                            result[ currentIndex + 1 ] = subProofB.residualStage;
+                        }
+                        else
+                        {
+                            result.splice( currentIndex + 1, 1 );
+                        }
+
+                        changed = true;
+                        continue;
+                    }
+                }
+
+                break;
             }
         }
 
         return changed ? result : pipeline;
     }
 }
+

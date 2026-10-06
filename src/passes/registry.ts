@@ -2,6 +2,7 @@ import { isFilterContradiction } from '../analyzer/filters';
 import { withCandidateFilterRuleProfile } from '../filter-rule-registry';
 import { deepClone, structuralFingerprint } from '../utils';
 import { AdjacentAddFieldMergingPass } from './adjacent-addfield-merging';
+import { AddFieldPushdownPass } from './add-field-pushdown';
 import { AdjacentMatchMergingPass } from './adjacent-match-merging';
 import { AdjacentProjectMergingPass } from './adjacent-project-merging';
 import { BucketFilterPushdownPass } from './bucket-filter-pushdown';
@@ -25,6 +26,7 @@ import { SortByCountSimplificationPass } from './sort-by-count-simplification';
 import { SortProjectCommutePass } from './sort-project-commute';
 import { StagePriorityReorderPass } from './stage-priority-reorder';
 import { PipelinePass } from './types';
+import { TopKPushdownPass } from './top-k-pushdown';
 import { UnusedFieldPruningPass } from './unused-field-pruning';
 import { UnwindPrefilterPass } from './unwind-prefilter';
 
@@ -42,6 +44,8 @@ const registeredPipelineTransformationIds = Object.freeze([
     'limit-skip-coalescing',
     'match-pushdown',
     'limit-advance',
+    'add-field-pushdown',
+    'top-k-pushdown',
     'unused-field-pruning',
     'adjacent-project-merging',
     'adjacent-add-field-merging',
@@ -71,6 +75,8 @@ const activePipelineTransformationIds: readonly PipelineTransformationId[] = Obj
     'limit-skip-coalescing',
     'match-pushdown',
     'limit-advance',
+    'add-field-pushdown',
+    'top-k-pushdown',
     'unused-field-pruning',
     'adjacent-project-merging',
     'adjacent-add-field-merging',
@@ -115,6 +121,8 @@ const candidatePipelineTransformationRegistry: Readonly<
     'limit-skip-coalescing': () => new LimitSkipCoalescingPass(),
     'match-pushdown': () => new MatchPushdownPass(),
     'limit-advance': () => new LimitAdvancePass(),
+    'add-field-pushdown': () => new AddFieldPushdownPass(),
+    'top-k-pushdown': () => new TopKPushdownPass(),
     'lookup-delay': () => new LookupDelayPass(),
     'redundant-lookup-elimination': () => new RedundantLookupEliminationPass(),
     'sort-project-commute': () => new SortProjectCommutePass(),

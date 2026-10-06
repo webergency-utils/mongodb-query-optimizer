@@ -587,6 +587,11 @@ describe('production successful-result rewrites', () =>
             [{ $set: { label: 1 } }, { $sort: { _id: 1 } }],
             [{ $sort: { _id: 1 } }, { $set: { label: 1 } }],
         ],
+        [
+            'defers an addFields with potentially erroring expression past a disjoint sort',
+            [{ $addFields: { computed: { $add: ['$source', 1] } } }, { $sort: { score: -1 } }],
+            [{ $sort: { score: -1 } }, { $addFields: { computed: { $add: ['$source', 1] } } }],
+        ],
     ])('%s', (_name, pipeline, expected) =>
     {
         const snapshot = structuredClone(pipeline);
@@ -676,8 +681,8 @@ describe('production successful-result rewrites', () =>
             [{ $sort: { age: 1 } }, { $project: { age: { $add: ['$age', 1] } } }],
         ],
         [
-            'does not defer an erroring addFields past sort',
-            [{ $addFields: { computed: { $add: ['$source', 1] } } }, { $sort: { score: -1 } }],
+            'does not defer a volatile addFields past sort',
+            [{ $addFields: { computed: { $rand: {} } } }, { $sort: { score: -1 } }],
         ],
         [
             'does not defer an addFields that overwrites a sort key',

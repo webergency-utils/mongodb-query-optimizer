@@ -80,8 +80,6 @@ function hasDeterministicErrorFreeEvaluation(
         && !semantics.observable.unknown
         && semantics.determinism === 'deterministic'
         && semantics.observable.determinism === 'deterministic'
-        && semantics.errors === 'none-known'
-        && semantics.observable.errors === 'none-known'
     );
 }
 
@@ -526,7 +524,6 @@ export function isSafePrunableAssignment(expression: unknown): boolean
         && isSyntacticallyErrorFreeExpression(expression)
         && !summary.unknown
         && summary.determinism === 'deterministic'
-        && summary.errors === 'none-known'
         && hasOnlyExactLocalDependencies(summary)
     );
 }
@@ -707,6 +704,11 @@ export function proveAddFieldDeferralAcrossSort(
     const source = parseAddFieldStage(addStage, true);
     const keys = parseSafeSortKeys(sortStage);
     if (!source || !keys)
+    {
+        return false;
+    }
+
+    if (containsGetField(source.specification))
     {
         return false;
     }
