@@ -119,17 +119,27 @@ describe( 'covered-projection-proofs unit and branch analysis', () =>
         ])).toBeNull();
     });
 
-    it( 'returns null if live fields read _id directly or via subpath', () =>
+    it( 'synthesizes projection retaining _id when live fields reference _id directly or via subpath', () =>
     {
         // Direct read of _id
-        expect( proveCoveredProjectionSynthesis([
+        const proofDirect = proveCoveredProjectionSynthesis([
             { $group: { _id: '$_id', total: { $sum: 1 } } }
-        ])).toBeNull();
+        ]);
 
-        // Read of _id.sub
-        expect( proveCoveredProjectionSynthesis([
-            { $group: { _id: '$_id.sub', total: { $sum: 1 } } }
-        ])).toBeNull();
+        expect( proofDirect ).not.toBeNull();
+        expect( proofDirect?.synthesizedStage ).toEqual({
+            $project: { _id: 1 }
+        });
+
+        // Read of _id.sub with payload field
+        const proofSub = proveCoveredProjectionSynthesis([
+            { $group: { _id: '$_id.sub', total: { $sum: '$qty' } } }
+        ]);
+
+        expect( proofSub ).not.toBeNull();
+        expect( proofSub?.synthesizedStage ).toEqual({
+            $project: { _id: 1, qty: 1 }
+        });
     });
 
     it( 'returns null if path in collapsing stage or intermediate stage is invalid', () =>

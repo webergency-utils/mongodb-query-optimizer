@@ -15,6 +15,8 @@ export default defineConfig({
         "src/passes/bucket-pushdown-proofs.ts": { branches: 100 },
         "src/passes/covered-projection-proofs.ts": { branches: 100 },
         "src/passes/covered-projection-synthesis.ts": { branches: 100 },
+        "src/passes/dead-assignment-elimination.ts": { branches: 100 },
+        "src/passes/dead-assignment-proofs.ts": { branches: 100 },
         "src/passes/expr-match-normalization.ts": { branches: 100 },
         "src/passes/expr-normalization-proofs.ts": { branches: 100 },
         "src/passes/facet-prefix-hoisting.ts": { branches: 100 },

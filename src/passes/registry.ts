@@ -7,6 +7,7 @@ import { AdjacentProjectMergingPass } from './adjacent-project-merging';
 import { BucketFilterPushdownPass } from './bucket-filter-pushdown';
 import { ComplexProjectionDeferralPass } from './complex-projection-deferral';
 import { CoveredProjectionSynthesisPass } from './covered-projection-synthesis';
+import { DeadAssignmentEliminationPass } from './dead-assignment-elimination';
 import { ExprMatchNormalizationPass } from './expr-match-normalization';
 import { FacetPrefixHoistingPass } from './facet-prefix-hoisting';
 import { FilterOptimizationPass } from './filter-optimization';
@@ -52,6 +53,7 @@ const registeredPipelineTransformationIds = Object.freeze([
     'stage-priority-reorder',
     'redundant-projection-elimination',
     'covered-projection-synthesis',
+    'dead-assignment-elimination',
 ] as const);
 
 export type PipelineTransformationId =
@@ -83,6 +85,7 @@ const containedPipelineTransformationIds: readonly PipelineTransformationId[] = 
     'stage-priority-reorder',
     'redundant-projection-elimination',
     'covered-projection-synthesis',
+    'dead-assignment-elimination',
 ]);
 
 export interface PipelineTransformationRegistryStatus
@@ -123,6 +126,7 @@ const candidatePipelineTransformationRegistry: Readonly<
     'facet-prefix-hoisting': () => new FacetPrefixHoistingPass(),
     'redundant-projection-elimination': () => new RedundantProjectionEliminationPass(),
     'covered-projection-synthesis': () => new CoveredProjectionSynthesisPass(),
+    'dead-assignment-elimination': () => new DeadAssignmentEliminationPass(),
 });
 
 const candidatePipelineProfile: readonly PipelineTransformationId[] =

@@ -14,3 +14,5 @@ export * from './redundant-projection-elimination';
 export * from './sort-project-commute';
 export * from './covered-projection-synthesis';
 export * from './covered-projection-proofs';
+export * from './dead-assignment-elimination';
+export * from './dead-assignment-proofs';

@@ -15,14 +15,14 @@ import { getSingleStageEntry } from './helpers.js';
 
 const ADD_FIELD_OPERATORS = new Set(['$addFields', '$set']);
 
-interface AddFieldStage
+export interface AddFieldStage
 {
     readonly operator: '$addFields' | '$set';
     readonly specification: Record<string, unknown>;
     readonly semantics: StageSemantics;
 }
 
-interface SimpleProject
+export interface SimpleProject
 {
     readonly specification: Record<string, unknown>;
     readonly projection: ProjectionSummary;
@@ -85,7 +85,7 @@ function hasDeterministicErrorFreeEvaluation(
     );
 }
 
-function parseAddFieldStage(
+export function parseAddFieldStage(
     stage: unknown,
     requireSafeEvaluation: boolean,
 ): AddFieldStage | null
@@ -153,7 +153,7 @@ function pathsArePairwiseDisjoint(
     return true;
 }
 
-function dependenciesReadAnyPath(
+export function dependenciesReadAnyPath(
     semantics: StageSemantics,
     paths: Iterable<string>,
 ): boolean
@@ -172,9 +172,29 @@ function dependenciesReadAnyPath(
     return false;
 }
 
+function writesCanSafelyMerge(
+    firstWrites: Iterable<string>,
+    secondWrites: Iterable<string>,
+): boolean
+{
+    for (const firstPath of firstWrites)
+    {
+        for (const secondPath of secondWrites)
+        {
+            const relation = relatePaths(firstPath, secondPath);
+            if (relation === 'ancestor' || relation === 'descendant')
+            {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
 /**
  * Proves that two adjacent add/set stages can share one input document.
- * The proof rejects path overlap and every second-stage read of a first write.
+ * The proof rejects hierarchical collisions and second-stage reads of first writes.
  */
 export function proveAdjacentAddFieldMerge(
     firstStage: unknown,
@@ -189,7 +209,7 @@ export function proveAdjacentAddFieldMerge(
     }
 
     if (
-        !pathsArePairwiseDisjoint(
+        !writesCanSafelyMerge(
             first.semantics.writes,
             second.semantics.writes,
         )
@@ -227,7 +247,7 @@ function isExcluded(value: unknown): boolean
     return value === 0 || value === false;
 }
 
-function parseSimpleProject(stage: unknown): SimpleProject | null
+export function parseSimpleProject(stage: unknown): SimpleProject | null
 {
     const entry = getSingleStageEntry(stage);
     if (
@@ -496,7 +516,7 @@ function isSyntacticallyErrorFreeExpression(expression: unknown): boolean
     );
 }
 
-function isSafePrunableAssignment(expression: unknown): boolean
+export function isSafePrunableAssignment(expression: unknown): boolean
 {
     const summary = analyzeExpression(expression, {
         documentScope: 'local',
@@ -511,7 +531,7 @@ function isSafePrunableAssignment(expression: unknown): boolean
     );
 }
 
-function exactUnsetFields(stage: unknown): Set<string> | null
+export function exactUnsetFields(stage: unknown): Set<string> | null
 {
     const entry = getSingleStageEntry(stage);
     if (!entry || entry[0] !== '$unset')
@@ -806,7 +826,7 @@ function observedLiveFields(
     return observed;
 }
 
-function canContinuePastStage(
+export function canContinuePastStage(
     semantics: StageSemantics,
     live: Set<string>,
 ): boolean

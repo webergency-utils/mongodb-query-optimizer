@@ -137,11 +137,14 @@ export function proveCoveredProjectionSynthesis( pipeline: readonly any[] ): Cov
 
     if( live.size === 0 ){ return null }
 
+    let needsId = false;
+
     for( const path of live )
     {
         if( path === '_id' || relatePaths( path, '_id' ) !== 'disjoint' )
         {
-            return null;
+            needsId = true;
+            break;
         }
     }
 
@@ -149,6 +152,11 @@ export function proveCoveredProjectionSynthesis( pipeline: readonly any[] ): Cov
 
     for( const path of live )
     {
+        if( path === '_id' || relatePaths( path, '_id' ) !== 'disjoint' )
+        {
+            continue;
+        }
+
         const hasAncestor = Array.from( live ).some(( other ) =>
             other !== path && relatePaths( other, path ) === 'ancestor'
         );
@@ -167,7 +175,7 @@ export function proveCoveredProjectionSynthesis( pipeline: readonly any[] ): Cov
         projectSpec[ path ] = 1;
     }
 
-    projectSpec._id = 0;
+    projectSpec._id = needsId ? 1 : 0;
 
     return {
         synthesizedStage: { $project: projectSpec },
