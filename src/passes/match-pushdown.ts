@@ -1,3 +1,4 @@
+import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees';
 import { PipelinePass } from './types';
 import
 {
@@ -10,7 +11,7 @@ export class MatchPushdownPass implements PipelinePass
     readonly name       = 'match-pushdown';
     readonly stageTypes = [ '$match' ] as const;
 
-    execute( pipeline: any[] ): any[]
+    execute( pipeline: any[], context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {
         let changed = false;
         const result = [ ...pipeline ];
@@ -26,9 +27,12 @@ export class MatchPushdownPass implements PipelinePass
 
             while( currentIndex > 0 )
             {
+                const downstream = result.slice( currentIndex + 1 );
                 const proof = proveMatchPushdownAcrossStage(
                     result[ currentIndex - 1 ],
-                    result[ currentIndex ]
+                    result[ currentIndex ],
+                    context,
+                    downstream
                 );
 
                 if( !proof ){ break }

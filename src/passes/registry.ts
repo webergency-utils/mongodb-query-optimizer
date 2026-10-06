@@ -66,6 +66,7 @@ export type PipelineTransformationId =
 
 const activePipelineTransformationIds: readonly PipelineTransformationId[] = Object.freeze([
     'unwind-prefilter',
+    'match-pushdown',
     'add-field-pushdown',
     'top-k-pushdown',
     'lookup-delay'

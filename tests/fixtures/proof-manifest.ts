@@ -227,6 +227,16 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'u9-generated-top-level-match-pushdown',
         'u9-generated-nested-match-pushdown',
         'u5-match-nested-facet-safe',
+        {
+            status: 'active',
+            proofRecheckNote: 'Proof audited: rewrites alias references across projections and addFields; checks path-disjointness and field visibility; constrained under strictErrors when crossed stage may error.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-match-pushdown',
+                strictFieldOrder: 'mixed-shape-match-pushdown',
+                strictErrors: 'mixed-shape-match-pushdown'
+            },
+            strictModeBehavior: 'constrained'
+        }
     ),
     evidence(
         'limit-advance',

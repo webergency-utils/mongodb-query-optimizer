@@ -398,6 +398,16 @@ describe('match pushdown proofs', () =>
         ]);
     });
 
+    it( 'blocks moving matches across error-prone stages when strictErrors is enabled', () =>
+    {
+        const pipeline = [
+            { $addFields: { parsed: { $toInt: '$x' } } },
+            { $match: { status: 'active' } }
+        ];
+
+        expect( optimizePipelineWithCandidateProfile( pipeline, MATCH_PUSHDOWN, [], { strictErrors: true } ) ).toEqual( pipeline );
+    });
+
     it('never crosses cardinality, order, child, or provenance barriers', () =>
     {
         const precedingStages = [

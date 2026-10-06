@@ -685,12 +685,20 @@ function containsGetField( value: unknown ): boolean
  * carries the complete syntax-aware rewrite that must move with the stage.
  */
 export function proveMatchPushdownAcrossStage(
-    precedingStage: unknown,
-    matchStage: unknown,
+    precedingStage     : unknown,
+    matchStage         : unknown,
+    context?           : GuaranteeContext,
+    downstreamPipeline : readonly unknown[] = []
 ): MatchPushdownProof | null
 {
-    const match = analyzeStage(matchStage);
-    if (!isSafeMatchSummary(match) || !isMatchStage(matchStage))
+    if( context && !canMoveStageAcrossStage( matchStage, precedingStage, 'earlier', context, downstreamPipeline ))
+    {
+        return null;
+    }
+
+    const match = analyzeStage( matchStage );
+
+    if( !isSafeMatchSummary( match ) || !isMatchStage( matchStage ))
     {
         return null;
     }
