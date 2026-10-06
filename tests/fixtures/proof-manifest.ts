@@ -150,6 +150,10 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'u9-generated-top-level-expr-match-normalization',
         'u9-generated-nested-expr-match-normalization',
         'feat-expr-match-normalization-oracle',
+        {
+            status: 'inactive',
+            reason: '$expr equality compares array values as discrete types, whereas MQL equality automatically traverses array elements; rewriting to MQL expands result sets on polymorphic data.'
+        }
     ),
     evidence(
         'filter-optimization',

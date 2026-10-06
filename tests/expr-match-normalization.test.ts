@@ -365,4 +365,28 @@ describe('optimizePipeline execution parity for expr match normalization', () =>
             { _id: 'audio', totalRevenue: 150, itemCount: 1 },
         ]);
     });
+
+    it('demonstrates polymorphic divergence: $expr equality over array does not match in production', () =>
+    {
+        // In production, optimizePipeline does not normalize $expr on array fields
+        const pipeline = [
+            {
+                $match: {
+                    $expr: {
+                        $eq: ['$tags', 'x'],
+                    },
+                },
+            },
+        ];
+
+        const dataset = [
+            { _id: 1, tags: ['x', 'y'] },
+            { _id: 2, tags: 'x' },
+        ];
+
+        // Original $expr matches only doc 2 (where tags is scalar 'x')
+        const results = runMockPipeline(dataset, pipeline);
+        expect(results.map((d: any) => d._id)).toEqual([2]);
+    });
 });
+
