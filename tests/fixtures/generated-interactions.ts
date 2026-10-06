@@ -4,6 +4,7 @@ import type {
     PipelineTransformationId,
 } from '../../src/passes/registry.js';
 import type { SemanticCase } from './semantic-cases.js';
+import { MIXED_SHAPE_CATALOG } from './mixed-shapes.js';
 
 export const GENERATED_INTERACTION_SEED = 0x5eed_2026;
 export const GENERATED_INTERACTION_CASE_COUNT = 50;
@@ -129,7 +130,7 @@ function makeDocuments(
     activeScore: number,
 ): readonly Document[]
 {
-    const secondaryScore = randomInteger(random, 13, 21);
+    const secondaryScore = randomInteger( random, 13, 21 );
 
     return [
         {
@@ -141,7 +142,8 @@ function makeDocuments(
             nullable: null,
             ordered: { first: 1, second: 2 },
             secret: 'first',
-            items: [{ score: activeScore }],
+            items: [ { score: activeScore } ],
+            polymorphic: MIXED_SHAPE_CATALOG[1].createValue( 1 ),
         },
         {
             _id: 2,
@@ -152,7 +154,8 @@ function makeDocuments(
             nullable: 'present',
             ordered: { first: 2, second: 1 },
             secret: 'second',
-            items: [{ score: secondaryScore }],
+            items: [ { score: secondaryScore } ],
+            polymorphic: MIXED_SHAPE_CATALOG[2].createValue( 2 ),
         },
         {
             _id: 3,
@@ -161,7 +164,8 @@ function makeDocuments(
             marker: false,
             tenant: 'other',
             ordered: { first: 3, second: 3 },
-            items: [{ score: activeScore }],
+            items: [ { score: activeScore } ],
+            polymorphic: MIXED_SHAPE_CATALOG[3].createValue( 3 ),
         },
     ];
 }
