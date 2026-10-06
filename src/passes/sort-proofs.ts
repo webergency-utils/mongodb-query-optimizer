@@ -1,4 +1,6 @@
+import { GuaranteeContext } from '../guarantees.js';
 import { isEmptyObject, isPlainObject } from '../utils.js';
+import { canRemoveStage } from './guarantee-guards.js';
 import
 {
     getSingleStageEntry,
@@ -85,9 +87,15 @@ export function isDeadSortBeforeSortByCount( currentStage: unknown, nextStage: u
 
 export function proveRedundantSortElimination(
     currentStage : unknown,
-    nextStage    : unknown
+    nextStage    : unknown,
+    context?     : GuaranteeContext
 ): boolean
 {
+    if( context && !canRemoveStage( currentStage, context ))
+    {
+        return false;
+    }
+
     if( isAdjacentSort( currentStage, nextStage )){ return true }
 
     if( isDeadSortBeforeGroup( currentStage, nextStage )){ return true }

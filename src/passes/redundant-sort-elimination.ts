@@ -1,3 +1,4 @@
+import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
 import { PipelinePass } from './types.js';
 import 
 { 
@@ -11,7 +12,7 @@ export class RedundantSortEliminationPass implements PipelinePass
     readonly name       = 'redundant-sort-elimination';
     readonly stageTypes = [ '$sort' ] as const;
 
-    execute( pipeline: any[] ): any[]
+    execute( pipeline: any[], context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {
         const result: any[] = [];
 
@@ -28,7 +29,7 @@ export class RedundantSortEliminationPass implements PipelinePass
             {
                 const nextStage = pipeline[i + 1];
 
-                if( proveRedundantSortElimination( currentStage, nextStage ))
+                if( proveRedundantSortElimination( currentStage, nextStage, context ))
                 {
                     continue;
                 }

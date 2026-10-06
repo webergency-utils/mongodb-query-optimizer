@@ -226,6 +226,16 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'u9-generated-top-level-redundant-sort-elimination',
         'u9-generated-nested-redundant-sort-elimination',
         'feat-redundant-sort-elimination-oracle',
+        {
+            status: 'active',
+            proofRecheckNote: 'Proof audited: eliminates redundant sorts before adjacent sort, order-agnostic group, count, and sortByCount; preserves BSON comparison order across polymorphic types and arrays; preserved across strict modes as sort is error-free.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-redundant-sort-elimination',
+                strictFieldOrder: 'mixed-shape-redundant-sort-elimination',
+                strictErrors: 'mixed-shape-redundant-sort-elimination'
+            },
+            strictModeBehavior: 'preserved'
+        }
     ),
     evidence(
         'sort-by-count-simplification',

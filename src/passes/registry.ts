@@ -68,6 +68,7 @@ const activePipelineTransformationIds: readonly PipelineTransformationId[] = Obj
     'group-filter-pushdown',
     'bucket-filter-pushdown',
     'unwind-prefilter',
+    'redundant-sort-elimination',
     'match-pushdown',
     'limit-advance',
     'add-field-pushdown',

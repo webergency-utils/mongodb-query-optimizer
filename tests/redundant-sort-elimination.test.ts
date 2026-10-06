@@ -232,4 +232,20 @@ describe( 'RedundantSortEliminationPass execution and parity', () =>
             { $sort: { _id: 1 } }
         ]);
     });
+
+    it( 'evaluates proveRedundantSortElimination with context', () =>
+    {
+        const pass = new RedundantSortEliminationPass();
+        const pipeline = [
+            { $sort: { a: 1 } },
+            { $sort: { b: 1 } }
+        ];
+
+        expect( pass.execute( pipeline, { strictFieldOrder: true, strictErrors: true } ) ).toEqual([
+            { $sort: { b: 1 } }
+        ]);
+
+        expect( proveRedundantSortElimination( { $sort: { a: 1 } }, { $sort: { b: 1 } }, { strictFieldOrder: true, strictErrors: true } ) ).toBe( true );
+        expect( proveRedundantSortElimination( { $sort: 'invalid' }, { $sort: { b: 1 } }, { strictFieldOrder: false, strictErrors: true } ) ).toBe( false );
+    });
 });
