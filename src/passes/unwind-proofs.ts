@@ -1,67 +1,135 @@
 import { analyzeStage } from '../analyzer/semantics.js';
+import { GuaranteeContext } from '../guarantees.js';
 import { deepClone, isPlainObject } from '../utils.js';
+import { isStageProvenErrorFree } from './guarantee-guards.js';
 import { getSingleStageEntry, getStageSpec } from './helpers.js';
 
-export interface UnwindPrefilterProof {
-    prefilterStage: { $match: Record<string, any> };
-    arrayPath: string;
+export interface UnwindPrefilterProof
+{
+    prefilterStage : { $match: Record<string, any> }
+    arrayPath      : string
 }
 
-function isUnsupportedPrefilterValue(val: unknown): boolean
+function isNonNullScalar( val: unknown ): boolean
 {
-    if (val instanceof RegExp)
+    if( val === null || val === undefined )
+    {
+        return false;
+    }
+
+    const type = typeof val;
+
+    return type === 'string'
+        || type === 'number'
+        || type === 'boolean'
+        || type === 'bigint'
+        || val instanceof Date;
+}
+
+function isQualifyingPrefilterValue( val: unknown ): boolean
+{
+    if( isNonNullScalar( val ))
     {
         return true;
     }
-    if (isPlainObject(val))
+
+    if( !isPlainObject( val ))
     {
-        if ('$ne' in val || '$not' in val || '$nin' in val)
+        return false;
+    }
+
+    const keys = Object.keys( val );
+
+    if( keys.length === 0 )
+    {
+        return false;
+    }
+
+    for( const op of keys )
+    {
+        if( op === '$eq' || op === '$gt' || op === '$gte' || op === '$lt' || op === '$lte' )
         {
-            return true;
+            if( !isNonNullScalar( val[ op ] ))
+            {
+                return false;
+            }
+        }
+        else if( op === '$in' )
+        {
+            const inList = val[ op ];
+
+            if( !Array.isArray( inList ) || inList.length === 0 )
+            {
+                return false;
+            }
+
+            for( const item of inList )
+            {
+                if( !isNonNullScalar( item ))
+                {
+                    return false;
+                }
+            }
+        }
+        else if( op === '$exists' )
+        {
+            if( val[ op ] !== true )
+            {
+                return false;
+            }
+        }
+        else
+        {
+            return false;
         }
     }
-    return false;
+
+    return true;
 }
 
 export function proveUnwindPrefilter(
-    unwindStage: unknown,
-    matchStage: unknown,
+    unwindStage : unknown,
+    matchStage  : unknown,
+    context?    : GuaranteeContext
 ): UnwindPrefilterProof | null
 {
     const unwindEntry = getSingleStageEntry( unwindStage );
     const matchSpec = getStageSpec<Record<string, any>>( matchStage, '$match' );
 
-    if (!unwindEntry || unwindEntry[0] !== '$unwind' || !matchSpec)
+    if( !unwindEntry || unwindEntry[ 0 ] !== '$unwind' || !matchSpec )
     {
         return null;
     }
 
-    const unwindSpec = unwindEntry[1];
+    const unwindSpec = unwindEntry[ 1 ];
 
     let arrayPath: string;
     let indexField: string | undefined;
 
-    if (typeof unwindSpec === 'string')
+    if( typeof unwindSpec === 'string' )
     {
-        if (!unwindSpec.startsWith('$') || unwindSpec.length <= 1)
+        if( !unwindSpec.startsWith( '$' ) || unwindSpec.length <= 1 )
         {
             return null;
         }
-        arrayPath = unwindSpec.slice(1);
+
+        arrayPath = unwindSpec.slice( 1 );
     }
-    else if (isPlainObject(unwindSpec))
+    else if( isPlainObject( unwindSpec ))
     {
-        if (
+        if(
             typeof unwindSpec.path !== 'string'
-            || !unwindSpec.path.startsWith('$')
+            || !unwindSpec.path.startsWith( '$' )
             || unwindSpec.path.length <= 1
             || unwindSpec.preserveNullAndEmptyArrays === true
         )
         {
             return null;
         }
-        arrayPath = unwindSpec.path.slice(1);
-        if (typeof unwindSpec.includeArrayIndex === 'string')
+
+        arrayPath = unwindSpec.path.slice( 1 );
+
+        if( typeof unwindSpec.includeArrayIndex === 'string' )
         {
             indexField = unwindSpec.includeArrayIndex;
         }
@@ -71,8 +139,9 @@ export function proveUnwindPrefilter(
         return null;
     }
 
-    const summary = analyzeStage(matchStage);
-    if (
+    const summary = analyzeStage( matchStage );
+
+    if(
         summary.malformed
         || summary.unknown
         || summary.determinism !== 'deterministic'
@@ -81,12 +150,21 @@ export function proveUnwindPrefilter(
         return null;
     }
 
-    if (indexField !== undefined)
+    if( context?.strictErrors )
+    {
+        if( !isStageProvenErrorFree( unwindStage ) || !isStageProvenErrorFree( matchStage ))
+        {
+            return null;
+        }
+    }
+
+    if( indexField !== undefined )
     {
         const prefixIndex = indexField + '.';
-        for (const key of Object.keys(matchSpec))
+
+        for( const key of Object.keys( matchSpec ))
         {
-            if (key === indexField || key.startsWith(prefixIndex))
+            if( key === indexField || key.startsWith( prefixIndex ))
             {
                 return null;
             }
@@ -94,36 +172,46 @@ export function proveUnwindPrefilter(
     }
 
     const prefix = arrayPath + '.';
-    const elemMatchFilter: Record<string, any> = {};
+    const dottedPredicates: Record<string, any> = {};
     let matchingFieldCount = 0;
 
-    for (const [key, val] of Object.entries(matchSpec))
+    for( const [ key, val ] of Object.entries( matchSpec ))
     {
-        if (key.startsWith(prefix))
+        if( key.startsWith( prefix ))
         {
-            if (isUnsupportedPrefilterValue(val))
+            if( !isQualifyingPrefilterValue( val ))
             {
                 return null;
             }
-            const subKey = key.slice(prefix.length);
-            elemMatchFilter[subKey] = deepClone(val);
+
+            dottedPredicates[ key ] = deepClone( val );
             matchingFieldCount++;
         }
     }
 
-    if (matchingFieldCount === 0)
+    if( matchingFieldCount === 0 )
     {
         return null;
     }
 
+    const escapeBranch =
+    {
+        [ arrayPath ]: {
+            $elemMatch: {
+                $type: 'array'
+            }
+        }
+    };
+
     return {
         prefilterStage: {
             $match: {
-                [arrayPath]: {
-                    $elemMatch: elemMatchFilter,
-                },
-            },
+                $or: [
+                    dottedPredicates,
+                    escapeBranch
+                ]
+            }
         },
-        arrayPath,
+        arrayPath
     };
 }

@@ -201,7 +201,7 @@ describe('optimizePipeline', () => {
         ], db);
     });
 
-    it('should optimize a simple match after $unwind with an early elemMatch prefilter', () => {
+    it('should optimize a simple match after $unwind with an early superset prefilter', () => {
         const data = [
             { _id: 1, items: [{ status: 'active' }, { status: 'inactive' }] },
             { _id: 2, items: [{ status: 'inactive' }] }
@@ -211,7 +211,14 @@ describe('optimizePipeline', () => {
             { $match: { 'items.status': 'active' } }
         ];
         verifyPipelineEquivalence(data, pipeline, [
-            { $match: { items: { $elemMatch: { status: 'active' } } } },
+            {
+                $match: {
+                    $or: [
+                        { 'items.status': 'active' },
+                        { items: { $elemMatch: { $type: 'array' } } }
+                    ]
+                }
+            },
             { $unwind: '$items' },
             { $match: { 'items.status': 'active' } }
         ]);

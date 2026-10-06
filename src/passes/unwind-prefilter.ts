@@ -1,30 +1,27 @@
+import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
 import { PipelinePass } from './types.js';
 import { proveUnwindPrefilter } from './unwind-proofs.js';
 import { structuralFingerprint } from '../utils.js';
 
 function hasPrefilter(
-    matchSpec: any,
-    arrayPath: string,
-    expectedCondition: any,
+    matchSpec           : any,
+    prefilterMatchSpec  : any
 ): boolean
 {
-    if (!matchSpec || typeof matchSpec !== 'object')
+    if( !matchSpec || typeof matchSpec !== 'object' )
     {
         return false;
     }
 
-    if (matchSpec[arrayPath] !== undefined)
+    if( structuralFingerprint( matchSpec ) === structuralFingerprint( prefilterMatchSpec ))
     {
-        return (
-            structuralFingerprint(matchSpec[arrayPath])
-            === structuralFingerprint(expectedCondition)
-        );
+        return true;
     }
 
-    if (Array.isArray(matchSpec.$and))
+    if( Array.isArray( matchSpec.$and ))
     {
-        return matchSpec.$and.some((clause: any) =>
-            hasPrefilter(clause, arrayPath, expectedCondition),
+        return matchSpec.$and.some(( clause: any ) =>
+            hasPrefilter( clause, prefilterMatchSpec )
         );
     }
 
@@ -33,11 +30,11 @@ function hasPrefilter(
 
 function isPipelineLookupForPath( stage: unknown, path: string ): boolean
 {
-    if( !stage || typeof stage !== 'object' || Array.isArray( stage ) ){ return false }
+    if( !stage || typeof stage !== 'object' || Array.isArray( stage )){ return false }
 
     const lookup = ( stage as Record<string, unknown> ).$lookup;
 
-    if( !lookup || typeof lookup !== 'object' || Array.isArray( lookup ) ){ return false }
+    if( !lookup || typeof lookup !== 'object' || Array.isArray( lookup )){ return false }
 
     const lookupObj = lookup as Record<string, unknown>;
 
@@ -49,18 +46,20 @@ export class UnwindPrefilterPass implements PipelinePass
     readonly name       = 'unwind-prefilter';
     readonly stageTypes = [ '$unwind' ] as const;
 
-    execute(pipeline: any[]): any[]
+    execute( pipeline: any[], context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {
         const result: any[] = [];
 
-        for (let i = 0; i < pipeline.length; i++)
+        for( let i = 0; i < pipeline.length; i++ )
         {
-            const currentStage = pipeline[i];
-            if (i + 1 < pipeline.length)
+            const currentStage = pipeline[ i ];
+
+            if( i + 1 < pipeline.length )
             {
-                const nextStage = pipeline[i + 1];
-                const proof = proveUnwindPrefilter(currentStage, nextStage);
-                if (proof)
+                const nextStage = pipeline[ i + 1 ];
+                const proof = proveUnwindPrefilter( currentStage, nextStage, context );
+
+                if( proof )
                 {
                     const prevStage = result.length > 0 ? result[ result.length - 1 ] : undefined;
 
@@ -76,8 +75,7 @@ export class UnwindPrefilterPass implements PipelinePass
                             {
                                 if( hasPrefilter(
                                     candidate.$match,
-                                    proof.arrayPath,
-                                    proof.prefilterStage.$match[ proof.arrayPath ],
+                                    proof.prefilterStage.$match
                                 ))
                                 {
                                     alreadyPresent = true;
@@ -94,9 +92,10 @@ export class UnwindPrefilterPass implements PipelinePass
                 }
             }
 
-            result.push(currentStage);
+            result.push( currentStage );
         }
 
         return result;
     }
 }
+

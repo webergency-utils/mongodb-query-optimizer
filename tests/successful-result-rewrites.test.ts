@@ -837,14 +837,21 @@ describe('high-ROI aggregation optimization passes end-to-end rewrites', () =>
         ]);
     });
 
-    it('synthesizes $elemMatch prefilter before $unwind while preserving downstream match', () =>
+    it('synthesizes superset prefilter before $unwind while preserving downstream match', () =>
     {
         const pipeline = [
             { $unwind: '$items' },
             { $match: { 'items.price': { $gt: 50 } } },
         ];
         expect(optimizePipeline(pipeline)).toEqual([
-            { $match: { items: { $elemMatch: { price: { $gt: 50 } } } } },
+            {
+                $match: {
+                    $or: [
+                        { 'items.price': { $gt: 50 } },
+                        { items: { $elemMatch: { $type: 'array' } } },
+                    ],
+                },
+            },
             { $unwind: '$items' },
             { $match: { 'items.price': { $gt: 50 } } },
         ]);

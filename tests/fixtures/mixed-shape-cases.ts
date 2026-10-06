@@ -112,7 +112,7 @@ export const mixedShapeDifferentialCases: readonly MixedShapeDifferentialCase[] 
         expectedOriginalOutcome: 'success',
     },
 
-    // AE3: Unwound field is an object, not an array (known bug in unwind-prefilter until U10)
+    // AE3: Unwound field is an object, not an array
     {
         id: 'mixed-shape-ae3-object-unwind',
         description: 'AE3: Unwound field is an object, not an array',
@@ -123,21 +123,20 @@ export const mixedShapeDifferentialCases: readonly MixedShapeDifferentialCase[] 
                 documents: [
                     { _id: 1, items: { score: 5 } },
                     { _id: 2, items: [ { score: 5 } ] },
-                    { _id: 3, items: [ { score: 10 } ] },
-                ],
-            },
+                    { _id: 3, items: [ { score: 10 } ] }
+                ]
+            }
         },
         pipeline: [
             { $unwind: '$items' },
             { $match: { 'items.score': 5 } },
-            { $sort: { _id: 1 } },
+            { $sort: { _id: 1 } }
         ],
         observation: 'ordered-bson',
-        expectedOriginalOutcome: 'success',
-        knownBugModes: [ 'default', 'strictFieldOrder', 'strictErrors' ],
+        expectedOriginalOutcome: 'success'
     },
 
-    // AE4: Unwound array holds scalars and predicate matches missing fields (known bug in unwind-prefilter until U10)
+    // AE4: Unwound array holds scalars and predicate matches missing fields
     {
         id: 'mixed-shape-ae4-scalar-array-exists',
         description: 'AE4: Unwound array holds scalars and predicate matches missing properties',
@@ -147,18 +146,17 @@ export const mixedShapeDifferentialCases: readonly MixedShapeDifferentialCase[] 
             main: {
                 documents: [
                     { _id: 1, items: [ 1, 2 ] },
-                    { _id: 2, items: [ { score: 10 } ] },
-                ],
-            },
+                    { _id: 2, items: [ { score: 10 } ] }
+                ]
+            }
         },
         pipeline: [
             { $unwind: '$items' },
             { $match: { 'items.score': { $exists: false } } },
-            { $sort: { _id: 1 } },
+            { $sort: { _id: 1 } }
         ],
         observation: 'ordered-bson',
-        expectedOriginalOutcome: 'success',
-        knownBugModes: [ 'default', 'strictFieldOrder', 'strictErrors' ],
+        expectedOriginalOutcome: 'success'
     },
 
     // AE5: Original fails on a row that $limit would drop

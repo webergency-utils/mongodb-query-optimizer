@@ -185,6 +185,16 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'u9-generated-top-level-unwind-prefilter',
         'u9-generated-nested-unwind-prefilter',
         'feat-unwind-prefilter-oracle',
+        {
+            status: 'active',
+            proofRecheckNote: 'Proof audited: shape-tolerant superset prefilter avoiding $elemMatch on unwound root; dotted path handles objects and scalar arrays; escape branch covers nested arrays; qualifying predicates forbid missing/null matches; preserved across strict modes for error-free stages.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-ae3-object-unwind',
+                strictFieldOrder: 'mixed-shape-ae3-object-unwind',
+                strictErrors: 'mixed-shape-ae4-scalar-array-exists'
+            },
+            strictModeBehavior: 'preserved'
+        }
     ),
     evidence(
         'redundant-sort-elimination',

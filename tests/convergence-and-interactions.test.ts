@@ -446,8 +446,15 @@ describe('production pipeline copy semantics', () =>
         expect(optimized4).toEqual([
             {
                 $match: {
+                    $and: [
+                        {
+                            $or: [
+                                { 'items.qty': { $gt: 0 } },
+                                { items: { $elemMatch: { $type: 'array' } } },
+                            ],
+                        },
+                    ],
                     tenant: 'org-1',
-                    items: { $elemMatch: { qty: { $gt: 0 } } },
                 },
             },
             { $unwind: '$items' },
