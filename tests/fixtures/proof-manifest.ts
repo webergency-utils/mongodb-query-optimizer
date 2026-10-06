@@ -362,6 +362,16 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'u9-generated-top-level-adjacent-project-merging',
         'u9-generated-nested-adjacent-project-merging',
         'u6-project-resurrection-empty-output-barrier',
+        {
+            status: 'active',
+            proofRecheckNote: 'Proof audited: merges adjacent pure flag projections (inclusion and exclusion) without resurrection or empty projections; pure projections are error-free and preserve document field order.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-adjacent-project-merging',
+                strictFieldOrder: 'mixed-shape-adjacent-project-merging',
+                strictErrors: 'mixed-shape-adjacent-project-merging'
+            },
+            strictModeBehavior: 'preserved'
+        }
     ),
     evidence(
         'adjacent-add-field-merging',

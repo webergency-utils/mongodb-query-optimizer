@@ -385,6 +385,20 @@ describe('adjacent simple project merging proofs', () =>
             { $project: { first: 1 } },
         ]);
     });
+
+    it('accepts guarantee context in execute', () =>
+    {
+        const pipeline = [
+            { $project: { a: 1, b: 1 } },
+            { $project: { a: 1 } },
+        ];
+        expect(new AdjacentProjectMergingPass().execute(pipeline, {
+            strictFieldOrder: true,
+            strictErrors: true,
+        })).toEqual([
+            { $project: { a: 1 } },
+        ]);
+    });
 });
 
 describe('exact dead add-field pruning proofs', () =>

@@ -1,29 +1,30 @@
-import { PipelinePass } from './types';
+import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
+import { PipelinePass } from './types.js';
 import {
-    proveAdjacentProjectMerge,
-} from './projection-proofs';
+    proveAdjacentProjectMerge
+} from './projection-proofs.js';
 
 export class AdjacentProjectMergingPass implements PipelinePass
 {
     readonly name       = 'adjacent-project-merging';
     readonly stageTypes = [ '$project' ] as const;
 
-    execute(pipeline: any[]): any[]
+    execute( pipeline: any[], _context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {
-        const result = [...pipeline];
+        const result = [ ...pipeline ];
 
-        for (let index = 1; index < result.length; index++)
+        for( let index = 1; index < result.length; index++ )
         {
             const proof = proveAdjacentProjectMerge(
                 result[index - 1],
-                result[index],
+                result[index]
             );
-            if (!proof)
+            if( !proof )
             {
                 continue;
             }
 
-            result.splice(index - 1, 2, proof.mergedStage);
+            result.splice( index - 1, 2, proof.mergedStage );
             return result;
         }
 

@@ -435,4 +435,24 @@ export const mixedShapeDifferentialCases: readonly MixedShapeDifferentialCase[] 
         observation: 'ordered-bson',
         expectedOriginalOutcome: 'success',
     },
+
+    // Polymorphic adjacent project merging
+    {
+        id: 'mixed-shape-adjacent-project-merging',
+        description: 'adjacent-project-merging merges consecutive pure flag projections over polymorphic documents',
+        passId: 'adjacent-project-merging',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: standardMixedShapeDocs,
+            },
+        },
+        pipeline: [
+            { $sort: { _id: 1 } },
+            { $project: { _id: 1, status: 1, val: 1 } },
+            { $project: { _id: 1, val: 1 } },
+        ],
+        observation: 'ordered-bson',
+        expectedOriginalOutcome: 'success',
+    },
 ];

@@ -76,6 +76,7 @@ const activePipelineTransformationIds: readonly PipelineTransformationId[] = Obj
     'add-field-pushdown',
     'top-k-pushdown',
     'unused-field-pruning',
+    'adjacent-project-merging',
     'lookup-delay'
 ]);
 
