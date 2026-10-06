@@ -9,7 +9,8 @@ import {
  */
 export class ComplexProjectionDeferralPass implements PipelinePass
 {
-    name = 'complex-projection-deferral';
+    readonly name       = 'complex-projection-deferral';
+    readonly stageTypes = [ '$addFields', '$set' ] as const;
 
     execute(pipeline: any[]): any[]
     {

@@ -12,25 +12,36 @@ from './projection-proofs';
  */
 export class SortProjectCommutePass implements PipelinePass
 {
-    name = 'sort-project-commute';
+    readonly name       = 'sort-project-commute';
+    readonly stageTypes = [ '$project', '$sort' ] as const;
 
-    execute( pipeline: any[] )
+    execute( pipeline: any[] ): any[]
     {
+        let changed = false;
         const result = [ ...pipeline ];
 
-        for( let index = 0; index < result.length - 1; index++ )
+        for( let index = 1; index < result.length; index++ )
         {
-            if( !proveSimpleProjectAdvanceAcrossSort( result[ index ], result[ index + 1 ] ) ){ continue }
+            let currentIndex = index;
 
-            [ result[ index ], result[ index + 1 ] ] =
-            [
-                result[ index + 1 ],
-                result[ index ]
-            ];
+            while( currentIndex > 0 )
+            {
+                if( !proveSimpleProjectAdvanceAcrossSort(
+                    result[ currentIndex - 1 ],
+                    result[ currentIndex ]
+                ))
+                {
+                    break;
+                }
 
-            return result;
+                const previousStage = result[ currentIndex - 1 ];
+                result[ currentIndex - 1 ] = result[ currentIndex ];
+                result[ currentIndex ] = previousStage;
+                currentIndex--;
+                changed = true;
+            }
         }
 
-        return result;
+        return changed ? result : pipeline;
     }
 }

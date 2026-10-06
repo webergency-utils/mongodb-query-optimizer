@@ -13,7 +13,7 @@ function isProjectionObject(value: unknown): value is Record<string, unknown>
     return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function isValidProjectionPath(path: string): boolean
+export function isValidProjectionPath(path: string): boolean
 {
     return path.length > 0
         && !path.startsWith('$')

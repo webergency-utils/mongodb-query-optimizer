@@ -1,5 +1,10 @@
-import { isFilterRewriteSafe } from './analyzer/filters';
-import { structuralFingerprint } from './utils';
+import { isFilterContradiction, isFilterRewriteSafe } from './analyzer/filters';
+import {
+    isEmptyObject,
+    isOperatorSubdocument,
+    isPlainObject,
+    structuralFingerprint,
+} from './utils';
 
 type FilterDocument = Record<string, any>;
 
@@ -48,32 +53,7 @@ export interface FilterRule
     apply(filter: FilterDocument): any;
 }
 
-function isPlainObject(value: any): value is FilterDocument
-{
-    if (!value || typeof value !== 'object' || Array.isArray(value))
-    {
-        return false;
-    }
-
-    const prototype = Object.getPrototypeOf(value);
-    return prototype === Object.prototype || prototype === null;
-}
-
-function isOperatorSubdocument(value: any): value is FilterDocument
-{
-    if (!isPlainObject(value))
-    {
-        return false;
-    }
-
-    const keys = Object.keys(value);
-    return keys.length > 0 && keys.every((key) => key.startsWith('$'));
-}
-
-function isEmptyFilter(value: any): boolean
-{
-    return isPlainObject(value) && Object.keys(value).length === 0;
-}
+const isEmptyFilter = isEmptyObject;
 
 function isSafeImplicitEqualityValue(value: any): boolean
 {
@@ -232,86 +212,105 @@ const flattenDisjunctionsRule: FilterRule = {
 
 const simplifyConjunctionIdentitiesRule: FilterRule = {
     id: 'simplify-conjunction-identities',
-    apply(filter)
+    apply( filter )
     {
         const conditions = filter.$and;
-        if (
-            !Array.isArray(conditions)
+
+        if(
+            !Array.isArray( conditions )
             || conditions.length === 0
-            || !isFilterRewriteSafe(filter)
+            || !isFilterRewriteSafe( filter )
         )
         {
             return filter;
         }
 
-        const remaining = conditions.filter((condition) => !isEmptyFilter(condition));
-        const isOnlyCondition = Object.keys(filter).length === 1;
+        const contradiction = conditions.find(( condition ) => isFilterContradiction( condition ));
 
-        if (isOnlyCondition && remaining.length === 0)
+        if( contradiction )
+        {
+            return contradiction;
+        }
+
+        const remaining = conditions.filter(( condition ) => !isEmptyFilter( condition ));
+        const isOnlyCondition = Object.keys( filter ).length === 1;
+
+        if( isOnlyCondition && remaining.length === 0 )
         {
             return {};
         }
 
-        if (isOnlyCondition && remaining.length === 1)
+        if( isOnlyCondition && remaining.length === 1 )
         {
-            return remaining[0];
+            return remaining[ 0 ];
         }
 
-        if (remaining.length === 0)
+        if( remaining.length === 0 )
         {
             const { $and: _removed, ...rest } = filter;
+
             return rest;
         }
 
         return remaining.length === conditions.length
             ? filter
             : { ...filter, $and: remaining };
-    },
+    }
 };
 
-const simplifyDisjunctionIdentitiesRule: FilterRule = {
+const simplifyDisjunctionIdentitiesRule: FilterRule =
+{
     id: 'simplify-disjunction-identities',
-    apply(filter)
+    apply( filter )
     {
         const conditions = filter.$or;
-        if (
-            !Array.isArray(conditions)
+
+        if(
+            !Array.isArray( conditions )
             || conditions.length === 0
-            || !isFilterRewriteSafe(filter)
+            || !isFilterRewriteSafe( filter )
         )
         {
             return filter;
         }
 
-                if( conditions.some(( condition ) => isEmptyFilter( condition )))
-                {
-                        const { $or: _removed, ...rest } = filter;
+        if( conditions.some(( condition ) => isEmptyFilter( condition )))
+        {
+            const { $or: _removed, ...rest } = filter;
 
-                        return rest;
-                }
+            return rest;
+        }
 
-                const seen = new Set<string>();
-                const unique: any[] = [];
+        const nonContradictory = conditions.filter(( condition ) => !isFilterContradiction( condition ));
 
-                for( const condition of conditions )
-                {
-                        const fingerprint = structuralFingerprint( condition );
+        if( nonContradictory.length === 0 )
+        {
+            return conditions[ 0 ];
+        }
 
-                        if( !seen.has( fingerprint ))
-                        {
-                                seen.add( fingerprint );
-                                unique.push( condition );
-                        }
-                }
+        const targetConditions = nonContradictory;
+        const seen = new Set<string>();
+        const unique: any[] = [];
 
-                const isOnlyCondition = Object.keys( filter ).length === 1;
+        for( const condition of targetConditions )
+        {
+            const fingerprint = structuralFingerprint( condition );
 
-                if( isOnlyCondition && unique.length === 1 ){ return unique[0] }
+            if( !seen.has( fingerprint ))
+            {
+                seen.add( fingerprint );
+                unique.push( condition );
+            }
+        }
 
-                return unique.length === conditions.length
-                        ? filter
-                        : { ...filter, $or: unique };
-    },
+        const isOnlyCondition = Object.keys( filter ).length === 1;
+
+        if( isOnlyCondition && unique.length === 1 ){ return unique[ 0 ] }
+
+        return unique.length === conditions.length
+            ? filter
+            : { ...filter, $or: unique };
+    }
 };
 
 const deduplicateConjunctionsRule: FilterRule = {

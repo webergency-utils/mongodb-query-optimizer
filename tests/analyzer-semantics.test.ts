@@ -765,6 +765,18 @@ describe('public stage adapter', () =>
         expect(graphLookupInfo.usedFields.has('active')).toBe(true);
         expect(graphLookupInfo.usedFields.has('dept')).toBe(true);
 
+        const graphLookupNoDepth = getStageInfo({
+            $graphLookup: {
+                from: 'employees',
+                startWith: '$managerId',
+                connectFromField: 'reportsTo',
+                connectToField: 'name',
+                as: 'chain',
+            },
+        }, 2);
+        expect(graphLookupNoDepth.producedFields.has('chain')).toBe(true);
+        expect(graphLookupNoDepth.usedFields.has('managerId')).toBe(true);
+
         // $project
         const projectInclusion = getStageInfo({
             $project: {
@@ -777,6 +789,15 @@ describe('public stage adapter', () =>
         expect(projectInclusion.producedFields.has('name')).toBe(true);
         expect(projectInclusion.usedFields.has('first')).toBe(true);
         expect(projectInclusion.usedFields.has('role')).toBe(true);
+
+        const projectExplicitId = getStageInfo({
+            $project: {
+                _id: 1,
+                name: 1,
+            },
+        }, 3);
+        expect(projectExplicitId.producedFields.has('_id')).toBe(true);
+        expect(projectExplicitId.usedFields.has('_id')).toBe(true);
 
         const projectExclusion = getStageInfo({
             $project: {
@@ -813,6 +834,15 @@ describe('public stage adapter', () =>
         expect(addFieldsInfo.modifiedFields.has('tax')).toBe(true);
         expect(addFieldsInfo.modifiedFields.has('sameField')).toBe(false);
 
+        const setInfo = getStageInfo({
+            $set: {
+                flag: true,
+                alias: '$alias',
+            },
+        }, 9);
+        expect(setInfo.producedFields.has('flag')).toBe(true);
+        expect(setInfo.modifiedFields.has('alias')).toBe(false);
+
         const unsetInfo = getStageInfo({ $unset: ['temp', 'cache'] }, 10);
         expect(unsetInfo.removedFields.has('temp')).toBe(true);
         expect(unsetInfo.removedFields.has('cache')).toBe(true);
@@ -830,6 +860,11 @@ describe('public stage adapter', () =>
         }, 13);
         expect(unwindObj.producedFields.has('items')).toBe(true);
         expect(unwindObj.producedFields.has('itemIndex')).toBe(true);
+
+        const unwindNoIndex = getStageInfo({
+            $unwind: { path: '$items' },
+        }, 13);
+        expect(unwindNoIndex.producedFields.has('items')).toBe(true);
 
         // $count, $sortByCount
         const countInfo = getStageInfo({ $count: 'totalDocs' }, 14);

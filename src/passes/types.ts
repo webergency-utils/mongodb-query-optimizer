@@ -1,4 +1,6 @@
-export interface PipelinePass {
-    name: string;
-    execute(pipeline: any[]): any[];
+export interface PipelinePass
+{
+    readonly name        : string;
+    readonly stageTypes? : readonly string[];
+    execute( pipeline: any[] ): any[];
 }

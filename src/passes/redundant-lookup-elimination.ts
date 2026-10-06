@@ -9,7 +9,8 @@ import {
  */
 export class RedundantLookupEliminationPass implements PipelinePass
 {
-    name = 'redundant-lookup-elimination';
+    readonly name       = 'redundant-lookup-elimination';
+    readonly stageTypes = [ '$lookup' ] as const;
 
     execute(pipeline: any[]): any[]
     {

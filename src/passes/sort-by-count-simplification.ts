@@ -3,7 +3,8 @@ import { proveSortByCountSimplification } from './sort-by-count-proofs.js';
 
 export class SortByCountSimplificationPass implements PipelinePass
 {
-    name = 'sort-by-count-simplification';
+    readonly name       = 'sort-by-count-simplification';
+    readonly stageTypes = [ '$sortByCount', '$group' ] as const;
 
     execute( pipeline: any[] ): any[]
     {

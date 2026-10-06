@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { optimizeFilter, optimizePipeline } from '../src/index.js';
+import { optimizePipelineWithCandidateProfile } from '../src/passes/registry.js';
 import { runMockPipeline } from './helpers/mock-engine.js';
 
 describe( 'End-to-End Complex Query Suite', () =>
@@ -1093,6 +1094,106 @@ describe( 'End-to-End Complex Query Suite', () =>
             [
                 { _id: 'ACC-A', totalAmount: 650 },
                 { _id: 'ACC-B', totalAmount: 900 }
+            ]);
+        });
+    });
+
+    // -------------------------------------------------------------------------
+    // 11. Covered-Index Synthesis & High-Throughput Aggregation
+    // -------------------------------------------------------------------------
+    describe( 'Covered-Index Synthesis & High-Throughput Aggregation', () =>
+    {
+        const telemetryDataset =
+        [
+            {
+                _id: 'tel-1',
+                deviceId: 'dev-alpha',
+                sensor: 'temperature',
+                reading: 72.4,
+                rawPayload: '0xDEADBEEFCAFE',
+                batteryLevel: 98,
+                location: { lat: 37.77, lon: -122.41 },
+                firmware: 'v2.1.0'
+            },
+            {
+                _id: 'tel-2',
+                deviceId: 'dev-alpha',
+                sensor: 'temperature',
+                reading: 73.1,
+                rawPayload: '0xDEADBEEFBABE',
+                batteryLevel: 97,
+                location: { lat: 37.77, lon: -122.41 },
+                firmware: 'v2.1.0'
+            },
+            {
+                _id: 'tel-3',
+                deviceId: 'dev-beta',
+                sensor: 'humidity',
+                reading: 45.0,
+                rawPayload: '0xDEADBEEFFEED',
+                batteryLevel: 82,
+                location: { lat: 40.71, lon: -74.00 },
+                firmware: 'v1.8.4'
+            },
+            {
+                _id: 'tel-4',
+                deviceId: 'dev-beta',
+                sensor: 'temperature',
+                reading: 68.9,
+                rawPayload: '0xDEADBEEFF00D',
+                batteryLevel: 81,
+                location: { lat: 40.71, lon: -74.00 },
+                firmware: 'v1.8.4'
+            }
+        ];
+
+        it( 'synthesizes minimal leading projection stripping _id and unread payload for covered query execution', () =>
+        {
+            const pipeline =
+            [
+                { $match: { sensor: 'temperature' } },
+                { $sort: { reading: -1 } },
+                {
+                    $group: {
+                        _id: '$deviceId',
+                        maxReading: { $max: '$reading' }
+                    }
+                }
+            ];
+
+            const optimized = optimizePipelineWithCandidateProfile(
+                pipeline,
+                [ 'covered-projection-synthesis' ]
+            );
+
+            // Synthesized projection sits right after $match and before $sort
+            expect( optimized ).toEqual(
+            [
+                { $match: { sensor: 'temperature' } },
+                {
+                    $project: {
+                        _id: 0,
+                        deviceId: 1,
+                        reading: 1
+                    }
+                },
+                { $sort: { reading: -1 } },
+                {
+                    $group: {
+                        _id: '$deviceId',
+                        maxReading: { $max: '$reading' }
+                    }
+                }
+            ]);
+
+            const rawResult = runMockPipeline( telemetryDataset, pipeline );
+            const optimizedResult = runMockPipeline( telemetryDataset, optimized );
+
+            expect( optimizedResult ).toEqual( rawResult );
+            expect( optimizedResult ).toEqual(
+            [
+                { _id: 'dev-alpha', maxReading: 73.1 },
+                { _id: 'dev-beta', maxReading: 68.9 }
             ]);
         });
     });

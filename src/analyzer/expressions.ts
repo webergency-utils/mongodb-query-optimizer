@@ -9,6 +9,7 @@ import {
     joinDeterminism,
     joinErrors,
 } from './semantics';
+import { isPlainObject } from '../utils.js';
 
 const BUILTIN_NON_DOCUMENT_VARIABLES = new Set([
     'CLUSTER_TIME',
@@ -303,17 +304,6 @@ function mergeExpressionSummary(
     );
     target.errors = joinErrors(target.errors, source.errors);
     target.unknown ||= source.unknown;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown>
-{
-    if (value === null || typeof value !== 'object' || Array.isArray(value))
-    {
-        return false;
-    }
-
-    const prototype = Object.getPrototypeOf(value);
-    return prototype === Object.prototype || prototype === null;
 }
 
 function hasExactArrayArity(operand: unknown, arity: number): boolean

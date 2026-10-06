@@ -1,109 +1,194 @@
-import {
+import
+{
     StageInfo,
-    StageAnalyzerAdapter,
-    StageSemantics,
-} from './types';
+    StageSemantics
+}
+from './types';
 import { analyzeStage } from './semantics';
-import { MatchAnalyzer } from './stages/match';
-import { ProjectAnalyzer } from './stages/project';
-import { GroupAnalyzer } from './stages/group';
-import { LookupAnalyzer, GraphLookupAnalyzer } from './stages/lookup';
-import {
-    SortAnalyzer,
-    LimitSkipSampleAnalyzer,
-    AddFieldsSetAnalyzer,
-    UnsetAnalyzer,
-    UnwindAnalyzer,
-    CountAnalyzer,
-    SortByCountAnalyzer,
-    ReplaceRootAnalyzer,
-    ReplaceWithAnalyzer,
-    FacetAnalyzer,
-    BucketAnalyzer,
-    BucketAutoAnalyzer,
-    SetWindowFieldsAnalyzer,
-    DensifyAnalyzer,
-    FillAnalyzer,
-    DocumentsAnalyzer,
-    UnionWithAnalyzer
-} from './stages/standard';
+import { isPlainObject } from '../utils';
 
-const REGISTRY: Record<string, StageAnalyzerAdapter> = {
-    '$match': MatchAnalyzer,
-    '$project': ProjectAnalyzer,
-    '$group': GroupAnalyzer,
-    '$lookup': LookupAnalyzer,
-    '$graphLookup': GraphLookupAnalyzer,
-    '$sort': SortAnalyzer,
-    '$limit': LimitSkipSampleAnalyzer,
-    '$skip': LimitSkipSampleAnalyzer,
-    '$sample': LimitSkipSampleAnalyzer,
-    '$addFields': AddFieldsSetAnalyzer,
-    '$set': AddFieldsSetAnalyzer,
-    '$unset': UnsetAnalyzer,
-    '$unwind': UnwindAnalyzer,
-    '$count': CountAnalyzer,
-    '$sortByCount': SortByCountAnalyzer,
-    '$replaceRoot': ReplaceRootAnalyzer,
-    '$replaceWith': ReplaceWithAnalyzer,
-    '$facet': FacetAnalyzer,
-    '$bucket': BucketAnalyzer,
-    '$bucketAuto': BucketAutoAnalyzer,
-    '$setWindowFields': SetWindowFieldsAnalyzer,
-    '$densify': DensifyAnalyzer,
-    '$fill': FillAnalyzer,
-    '$documents': DocumentsAnalyzer,
-    '$unionWith': UnionWithAnalyzer,
-};
+const KNOWN_STAGE_OPERATORS = new Set([
+    '$match',
+    '$project',
+    '$group',
+    '$lookup',
+    '$graphLookup',
+    '$sort',
+    '$limit',
+    '$skip',
+    '$sample',
+    '$addFields',
+    '$set',
+    '$unset',
+    '$unwind',
+    '$count',
+    '$sortByCount',
+    '$replaceRoot',
+    '$replaceWith',
+    '$facet',
+    '$bucket',
+    '$bucketAuto',
+    '$setWindowFields',
+    '$densify',
+    '$fill',
+    '$documents',
+    '$unionWith'
+]);
 
-function conservativeStageInfo(semantics: StageSemantics): StageInfo
+const DESTRUCTIVE_OPERATORS = new Set([
+    '$group',
+    '$count',
+    '$sortByCount',
+    '$replaceRoot',
+    '$replaceWith',
+    '$facet',
+    '$bucket',
+    '$bucketAuto',
+    '$documents'
+]);
+
+const ALTERS_COUNT_OPERATORS = new Set([
+    '$match',
+    '$limit',
+    '$skip',
+    '$sample',
+    '$unwind',
+    '$group',
+    '$count',
+    '$sortByCount',
+    '$facet',
+    '$bucket',
+    '$bucketAuto',
+    '$setWindowFields',
+    '$densify',
+    '$unionWith',
+    '$documents',
+    '$fill'
+]);
+
+function conservativeStageInfo( semantics: StageSemantics ): StageInfo
 {
     return {
         index: semantics.index,
         stage: semantics.stage,
         operator: semantics.operator,
-        usedFields: new Set(['*']),
-        producedFields: new Set(['*']),
-        modifiedFields: new Set(['*']),
+        usedFields: new Set([ '*' ]),
+        producedFields: new Set([ '*' ]),
+        modifiedFields: new Set([ '*' ]),
         removedFields: new Set(),
         isDestructive: true,
         altersCount: true,
-        isUnknown: true,
+        isUnknown: true
     };
 }
 
-function toStageInfo(semantics: StageSemantics): StageInfo
+function toStageInfo( semantics: StageSemantics ): StageInfo
 {
-    const adapter = REGISTRY[semantics.operator];
-    if (!adapter || semantics.malformed)
+    if( semantics.malformed || !KNOWN_STAGE_OPERATORS.has( semantics.operator ))
     {
-        return conservativeStageInfo(semantics);
+        return conservativeStageInfo( semantics );
     }
 
-    const info: StageInfo = {
+    const val = ( semantics.stage as Record<string, any> )[ semantics.operator ];
+
+    const isDestructive = semantics.operator === '$project'
+        ? ( semantics.projection?.mode === 'inclusion' || semantics.projection?.mode === 'mixed' )
+        : DESTRUCTIVE_OPERATORS.has( semantics.operator );
+
+    const altersCount = ALTERS_COUNT_OPERATORS.has( semantics.operator );
+
+    const usedFields = new Set( semantics.dependencies.local );
+    usedFields.delete( '*' );
+
+    const producedFields = new Set( semantics.writes );
+    producedFields.delete( '?' );
+
+    const modifiedFields = new Set( semantics.modifies );
+    modifiedFields.delete( '?' );
+
+    const removedFields = new Set( semantics.removes );
+    removedFields.delete( '?' );
+
+    if( semantics.operator === '$project' )
+    {
+        if( semantics.projection?.mode === 'exclusion' )
+        {
+            usedFields.clear();
+            producedFields.clear();
+            modifiedFields.clear();
+        }
+        else if( !( '_id' in val ))
+        {
+            usedFields.delete( '_id' );
+            producedFields.delete( '_id' );
+        }
+    }
+    else if( semantics.operator === '$graphLookup' )
+    {
+        usedFields.clear();
+        for( const f of semantics.dependencies.local )
+        {
+            usedFields.add( f );
+        }
+        usedFields.add( val.connectToField );
+        for( const f of semantics.dependencies.foreign )
+        {
+            if( f !== val.connectFromField && f !== val.connectToField )
+            {
+                usedFields.add( f );
+            }
+        }
+        producedFields.clear();
+        modifiedFields.clear();
+        producedFields.add( val.as );
+        modifiedFields.add( val.as );
+        if( typeof val.depthField === 'string' )
+        {
+            producedFields.add( val.depthField );
+            modifiedFields.add( val.depthField );
+        }
+    }
+    else if( semantics.operator === '$addFields' || semantics.operator === '$set' )
+    {
+        for( const [ k, v ] of Object.entries( val ))
+        {
+            if( v === '$' + k )
+            {
+                modifiedFields.delete( k );
+            }
+        }
+    }
+    else if( semantics.operator === '$unwind' )
+    {
+        if( isPlainObject( val ) && typeof val.includeArrayIndex === 'string' )
+        {
+            producedFields.add( val.includeArrayIndex );
+            modifiedFields.add( val.includeArrayIndex );
+        }
+    }
+    else if( semantics.operator === '$unionWith' )
+    {
+        producedFields.add( '*' );
+        modifiedFields.add( '*' );
+    }
+
+    return {
         index: semantics.index,
         stage: semantics.stage,
         operator: semantics.operator,
-        usedFields: new Set(),
-        producedFields: new Set(),
-        modifiedFields: new Set(),
-        removedFields: new Set(),
-        isDestructive: false,
-        altersCount: false,
-        isUnknown: false,
+        usedFields,
+        producedFields,
+        modifiedFields,
+        removedFields,
+        isDestructive,
+        altersCount,
+        isUnknown: false
     };
-
-    const value = (
-        semantics.stage as Record<string, unknown>
-    )[semantics.operator];
-    adapter.analyze(value, info, getStageInfo);
-
-    return info;
 }
 
-export function getStageInfo(stage: any, index: number): StageInfo
+export function getStageInfo( stage: any, index: number ): StageInfo
 {
-    return toStageInfo(analyzeStage(stage, index));
+    return toStageInfo( analyzeStage( stage, index ));
 }
 
 export { analyzePipeline, analyzeStage } from './semantics';

@@ -55,6 +55,7 @@ const EXPECTED_ACTIVE_PIPELINE_IDS = [
 const EXPECTED_CONTAINED_PIPELINE_IDS = [
     'stage-priority-reorder',
     'redundant-projection-elimination',
+    'covered-projection-synthesis',
 ] as const;
 
 function expectUnique(values: readonly string[]): void

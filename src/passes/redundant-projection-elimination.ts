@@ -10,7 +10,8 @@ import { PipelinePass } from './types';
  */
 export class RedundantProjectionEliminationPass implements PipelinePass
 {
-    name = 'redundant-projection-elimination';
+    readonly name       = 'redundant-projection-elimination';
+    readonly stageTypes = [ '$project' ] as const;
 
     execute( pipeline: any[] ): any[]
     {

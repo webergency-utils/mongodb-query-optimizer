@@ -1,18 +1,9 @@
-import { deepClone } from '../utils.js';
+import { deepClone, isPlainObject } from '../utils.js';
+import { getStageSpec } from './helpers.js';
 
 export interface GroupFilterPushdownProof {
     prefilterStage: { $match: Record<string, any> };
     postfilterStage: { $match: Record<string, any> } | null;
-}
-
-function isPlainObject(value: unknown): value is Record<string, any>
-{
-    if (!value || typeof value !== 'object' || Array.isArray(value))
-    {
-        return false;
-    }
-    const proto = Object.getPrototypeOf(value);
-    return proto === Object.prototype || proto === null;
 }
 
 function conditionRejectsNull(condition: unknown): boolean
@@ -40,27 +31,10 @@ export function proveGroupFilterPushdown(
     matchStage: unknown,
 ): GroupFilterPushdownProof | null
 {
-    if (!isPlainObject(groupStage) || !isPlainObject(matchStage))
-    {
-        return null;
-    }
+    const groupSpec = getStageSpec<Record<string, any>>( groupStage, '$group' );
+    const matchSpec = getStageSpec<Record<string, any>>( matchStage, '$match' );
 
-    const groupKeys = Object.keys(groupStage);
-    if (groupKeys.length !== 1 || groupKeys[0] !== '$group')
-    {
-        return null;
-    }
-
-    const matchKeys = Object.keys(matchStage);
-    if (matchKeys.length !== 1 || matchKeys[0] !== '$match')
-    {
-        return null;
-    }
-
-    const groupSpec = groupStage.$group;
-    const matchSpec = matchStage.$match;
-
-    if (!isPlainObject(groupSpec) || !isPlainObject(matchSpec) || !('_id' in groupSpec))
+    if (!groupSpec || !matchSpec || !('_id' in groupSpec))
     {
         return null;
     }

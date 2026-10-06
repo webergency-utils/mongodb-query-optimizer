@@ -4,31 +4,13 @@ import {
     withCandidateFilterRuleProfile,
 } from './filter-rule-registry';
 import { isFilterRewriteSafe } from './analyzer/filters';
-import { structuralFingerprint } from './utils';
+import {
+    isPlainObject,
+    isOperatorSubdocument,
+    structuralFingerprint,
+} from './utils';
 
 const DEFAULT_FILTER_SWEEP_BUDGET = 32;
-
-function isPlainObject(value: any): value is Record<string, any>
-{
-    if (!value || typeof value !== 'object' || Array.isArray(value))
-    {
-        return false;
-    }
-
-    const prototype = Object.getPrototypeOf(value);
-    return prototype === Object.prototype || prototype === null;
-}
-
-function isOperatorSubdocument(value: any): value is Record<string, any>
-{
-    if (!isPlainObject(value))
-    {
-        return false;
-    }
-
-    const keys = Object.keys(value);
-    return keys.length > 0 && keys.every((key) => key.startsWith('$'));
-}
 
 function optimizeOperatorChildren(
     operatorDocument: Record<string, any>,
@@ -59,6 +41,151 @@ function optimizeOperatorChildren(
     return result;
 }
 
+function simplifyFieldIntervals(
+    operatorDocument: Record<string, any>
+): Record<string, any>
+{
+    const keys = Object.keys( operatorDocument );
+    const hasRanges = keys.some(( k ) => k === '$gt' || k === '$gte' || k === '$lt' || k === '$lte' );
+
+    if( !hasRanges ){ return operatorDocument }
+
+    let gt: number | undefined;
+    let gte: number | undefined;
+    let lt: number | undefined;
+    let lte: number | undefined;
+
+    if( typeof operatorDocument.$gt === 'number' && Number.isFinite( operatorDocument.$gt ))
+    {
+        gt = operatorDocument.$gt;
+    }
+
+    if( typeof operatorDocument.$gte === 'number' && Number.isFinite( operatorDocument.$gte ))
+    {
+        gte = operatorDocument.$gte;
+    }
+
+    if( typeof operatorDocument.$lt === 'number' && Number.isFinite( operatorDocument.$lt ))
+    {
+        lt = operatorDocument.$lt;
+    }
+
+    if( typeof operatorDocument.$lte === 'number' && Number.isFinite( operatorDocument.$lte ))
+    {
+        lte = operatorDocument.$lte;
+    }
+
+    if( gt === undefined && gte === undefined && lt === undefined && lte === undefined )
+    {
+        return operatorDocument;
+    }
+
+    let finalLower: { val: number; strict: boolean } | undefined;
+
+    if( gt !== undefined && gte !== undefined )
+    {
+        finalLower = ( gt >= gte )
+            ? { val: gt, strict: true }
+            : { val: gte, strict: false };
+    }
+    else if( gt !== undefined )
+    {
+        finalLower = { val: gt, strict: true };
+    }
+    else if( gte !== undefined )
+    {
+        finalLower = { val: gte, strict: false };
+    }
+
+    let finalUpper: { val: number; strict: boolean } | undefined;
+
+    if( lt !== undefined && lte !== undefined )
+    {
+        finalUpper = ( lt <= lte )
+            ? { val: lt, strict: true }
+            : { val: lte, strict: false };
+    }
+    else if( lt !== undefined )
+    {
+        finalUpper = { val: lt, strict: true };
+    }
+    else if( lte !== undefined )
+    {
+        finalUpper = { val: lte, strict: false };
+    }
+
+    if( finalLower !== undefined && finalUpper !== undefined )
+    {
+        const isContradiction =
+            finalLower.val > finalUpper.val
+            || ( finalLower.val === finalUpper.val && ( finalLower.strict || finalUpper.strict ));
+
+        if( isContradiction )
+        {
+            return { $in: [] };
+        }
+
+        if( finalLower.val === finalUpper.val && !finalLower.strict && !finalUpper.strict )
+        {
+            const { $gt: _1, $gte: _2, $lt: _3, $lte: _4, ...rest } = operatorDocument;
+
+            return { ...rest, $eq: finalLower.val };
+        }
+    }
+
+    if( typeof operatorDocument.$eq === 'number' && Number.isFinite( operatorDocument.$eq ))
+    {
+        const eqVal = operatorDocument.$eq;
+
+        if( finalLower !== undefined )
+        {
+            const invalid = finalLower.strict ? eqVal <= finalLower.val : eqVal < finalLower.val;
+
+            if( invalid ){ return { $in: [] } }
+        }
+
+        if( finalUpper !== undefined )
+        {
+            const invalid = finalUpper.strict ? eqVal >= finalUpper.val : eqVal > finalUpper.val;
+
+            if( invalid ){ return { $in: [] } }
+        }
+
+        const { $gt: _1, $gte: _2, $lt: _3, $lte: _4, ...rest } = operatorDocument;
+
+        return rest;
+    }
+
+    let changed = false;
+    const result: Record<string, any> = { ...operatorDocument };
+
+    if( gt !== undefined && ( finalLower === undefined || !finalLower.strict || finalLower.val !== gt ))
+    {
+        delete result.$gt;
+        changed = true;
+    }
+
+    if( gte !== undefined && ( finalLower === undefined || finalLower.strict || finalLower.val !== gte ))
+    {
+        delete result.$gte;
+        changed = true;
+    }
+
+    if( lt !== undefined && ( finalUpper === undefined || !finalUpper.strict || finalUpper.val !== lt ))
+    {
+        delete result.$lt;
+        changed = true;
+    }
+
+    if( lte !== undefined && ( finalUpper === undefined || finalUpper.strict || finalUpper.val !== lte ))
+    {
+        delete result.$lte;
+        changed = true;
+    }
+
+    return changed ? result : operatorDocument;
+}
+
 function applyFilterDocumentSweep(
     filter: Record<string, any>,
     rules: readonly FilterRule[],
@@ -84,6 +211,12 @@ function applyFilterDocumentSweep(
         else if (!key.startsWith('$') && isOperatorSubdocument(value))
         {
             optimizedValue = optimizeOperatorChildren(value, rules);
+            optimizedValue = simplifyFieldIntervals(optimizedValue);
+
+            if (Array.isArray(optimizedValue.$in) && optimizedValue.$in.length === 0)
+            {
+                return { [key]: { $in: [] } };
+            }
         }
 
         if (optimizedValue !== value)

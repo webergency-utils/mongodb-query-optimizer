@@ -33,7 +33,8 @@ function hasPrefilter(
 
 export class UnwindPrefilterPass implements PipelinePass
 {
-    name = 'unwind-prefilter';
+    readonly name       = 'unwind-prefilter';
+    readonly stageTypes = [ '$unwind' ] as const;
 
     execute(pipeline: any[]): any[]
     {

@@ -11,6 +11,7 @@ import {
     joinDeterminism,
     joinErrors,
 } from './semantics';
+import { isPlainObject } from '../utils.js';
 
 const LOGICAL_OPERATORS = new Set(['$and', '$or', '$nor']);
 
@@ -62,17 +63,6 @@ function emptyFilterSummary(): FilterSummary
         unknown: false,
         malformed: false,
     };
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown>
-{
-    if (value === null || typeof value !== 'object' || Array.isArray(value))
-    {
-        return false;
-    }
-
-    const prototype = Object.getPrototypeOf(value);
-    return prototype === Object.prototype || prototype === null;
 }
 
 const REWRITE_SAFE_COMPARISON_OPERATORS = new Set([
@@ -599,4 +589,22 @@ export function isFilterRewriteSafe(
         && isPlainObject(filter)
         && isRewriteSafeFilterObject(filter)
     );
+}
+
+export function isFilterContradiction( filter: unknown ): boolean
+{
+    if( !isPlainObject( filter )){ return false }
+
+    for( const [ key, value ] of Object.entries( filter ))
+    {
+        if( !key.startsWith( '$' ))
+        {
+            if( isPlainObject( value ) && Array.isArray( value.$in ) && value.$in.length === 0 )
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
 }

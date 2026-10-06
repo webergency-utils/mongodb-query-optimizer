@@ -5,7 +5,8 @@ import {
 
 export class AdjacentAddFieldMergingPass implements PipelinePass
 {
-    name = 'adjacent-add-field-merging';
+    readonly name       = 'adjacent-add-field-merging';
+    readonly stageTypes = [ '$addFields', '$set' ] as const;
 
     execute(pipeline: any[]): any[]
     {

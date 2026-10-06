@@ -1,33 +1,42 @@
 import { PipelinePass } from './types';
-import {
-    proveLimitAdvanceAcrossStage,
-} from './movement-proofs';
+import
+{
+    proveLimitAdvanceAcrossStage
+}
+from './movement-proofs';
 
 export class LimitAdvancePass implements PipelinePass
 {
-    name = 'limit-advance';
+    readonly name       = 'limit-advance';
+    readonly stageTypes = [ '$limit', '$skip' ] as const;
 
-    execute(pipeline: any[]): any[]
+    execute( pipeline: any[] ): any[]
     {
-        const result = [...pipeline];
+        let changed = false;
+        const result = [ ...pipeline ];
 
-        for (let index = 1; index < result.length; index++)
+        for( let index = 1; index < result.length; index++ )
         {
-            if (!proveLimitAdvanceAcrossStage(
-                result[index - 1],
-                result[index],
-            ))
-            {
-                continue;
-            }
+            let currentIndex = index;
 
-            [result[index - 1], result[index]] = [
-                result[index],
-                result[index - 1],
-            ];
-            return result;
+            while( currentIndex > 0 )
+            {
+                if( !proveLimitAdvanceAcrossStage(
+                    result[ currentIndex - 1 ],
+                    result[ currentIndex ]
+                ))
+                {
+                    break;
+                }
+
+                const previousStage = result[ currentIndex - 1 ];
+                result[ currentIndex - 1 ] = result[ currentIndex ];
+                result[ currentIndex ] = previousStage;
+                currentIndex--;
+                changed = true;
+            }
         }
 
-        return result;
+        return changed ? result : pipeline;
     }
 }

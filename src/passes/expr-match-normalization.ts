@@ -1,19 +1,11 @@
 import { PipelinePass } from './types.js';
 import { proveExprToNativeMatch } from './expr-normalization-proofs.js';
-
-function isPlainObject(value: unknown): value is Record<string, any>
-{
-    if (!value || typeof value !== 'object' || Array.isArray(value))
-    {
-        return false;
-    }
-    const proto = Object.getPrototypeOf(value);
-    return proto === Object.prototype || proto === null;
-}
+import { isMatchStage } from './helpers.js';
 
 export class ExprMatchNormalizationPass implements PipelinePass
 {
-    name = 'expr-match-normalization';
+    readonly name       = 'expr-match-normalization';
+    readonly stageTypes = [ '$match' ] as const;
 
     execute(pipeline: any[]): any[]
     {
@@ -21,13 +13,7 @@ export class ExprMatchNormalizationPass implements PipelinePass
 
         for (const stage of pipeline)
         {
-            if (
-                isPlainObject(stage)
-                && Object.keys(stage).length === 1
-                && '$match' in stage
-                && isPlainObject(stage.$match)
-                && '$expr' in stage.$match
-            )
+            if (isMatchStage(stage) && '$expr' in stage.$match)
             {
                 const normalized = proveExprToNativeMatch(stage.$match.$expr);
                 if (normalized)

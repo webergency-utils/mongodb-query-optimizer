@@ -4,7 +4,8 @@ import { structuralFingerprint } from '../utils.js';
 
 export class BucketFilterPushdownPass implements PipelinePass
 {
-    name = 'bucket-filter-pushdown';
+    readonly name       = 'bucket-filter-pushdown';
+    readonly stageTypes = [ '$bucket' ] as const;
 
     execute( pipeline: any[] ): any[]
     {

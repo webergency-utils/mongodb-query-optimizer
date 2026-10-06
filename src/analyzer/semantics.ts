@@ -20,6 +20,7 @@ import {
 } from './expressions';
 import { analyzeFilter } from './filters';
 import { analyzeProjection } from './projections';
+import { isPlainObject } from '../utils.js';
 
 export function joinCardinality(
     left: CardinalityEffect,
@@ -159,17 +160,6 @@ export function joinErrors(
     }
 
     return 'none-known';
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown>
-{
-    if (value === null || typeof value !== 'object' || Array.isArray(value))
-    {
-        return false;
-    }
-
-    const prototype = Object.getPrototypeOf(value);
-    return prototype === Object.prototype || prototype === null;
 }
 
 function scopeProvenance(scope: 'local' | 'foreign'): StreamProvenance

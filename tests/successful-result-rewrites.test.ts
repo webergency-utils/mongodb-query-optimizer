@@ -415,7 +415,7 @@ describe('lookup delay proofs', () =>
 
 describe('lookup delay pass', () =>
 {
-    it('swaps one adjacent pair and stops', () =>
+    it('delays lookup maximally across safe downstream stages in a single pass', () =>
     {
         const pipeline = [
             lookup(),
@@ -425,8 +425,8 @@ describe('lookup delay pass', () =>
 
         expect(new LookupDelayPass().execute(pipeline)).toEqual([
             { $sort: { score: -1 } },
-            lookup(),
             { $limit: 1 },
+            lookup(),
         ]);
         expect(optimizeWith(pipeline, ['lookup-delay'])).toEqual([
             { $sort: { score: -1 } },
@@ -477,7 +477,7 @@ describe('sort-project commute proofs', () =>
 
 describe('sort-project commute pass', () =>
 {
-    it('swaps one adjacent pair and leaves later pairs', () =>
+    it('commutes adjacent sort-project pairs greedily across the pipeline in a single pass', () =>
     {
         const pipeline = [
             { $sort: { age: 1 } },
@@ -489,9 +489,9 @@ describe('sort-project commute pass', () =>
 
         expect(new SortProjectCommutePass().execute(pipeline)).toEqual([
             { $project: { name: 1, age: 1 } },
+            { $project: { name: 1, age: 1 } },
             { $sort: { age: 1 } },
             { $sort: { name: 1 } },
-            { $project: { name: 1, age: 1 } },
         ]);
         expect(pipeline).toEqual(snapshot);
         expect(optimizeWith(

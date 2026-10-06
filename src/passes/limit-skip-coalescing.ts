@@ -119,7 +119,8 @@ export function proveLimitSkipCoalescing(
 
 export class LimitSkipCoalescingPass implements PipelinePass
 {
-    name = 'limit-skip-coalescing';
+    readonly name       = 'limit-skip-coalescing';
+    readonly stageTypes = [ '$limit', '$skip' ] as const;
 
     execute(pipeline: any[]): any[]
     {

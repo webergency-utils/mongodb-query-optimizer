@@ -1,32 +1,41 @@
 import { PipelinePass } from './types';
-import {
-    proveMatchPushdownAcrossStage,
-} from './movement-proofs';
+import
+{
+    proveMatchPushdownAcrossStage
+}
+from './movement-proofs';
 
 export class MatchPushdownPass implements PipelinePass
 {
-    name = 'match-pushdown';
+    readonly name       = 'match-pushdown';
+    readonly stageTypes = [ '$match' ] as const;
 
-    execute(pipeline: any[]): any[]
+    execute( pipeline: any[] ): any[]
     {
-        const result = [...pipeline];
+        let changed = false;
+        const result = [ ...pipeline ];
 
-        for (let index = 1; index < result.length; index++)
+        for( let index = 1; index < result.length; index++ )
         {
-            const proof = proveMatchPushdownAcrossStage(
-                result[index - 1],
-                result[index],
-            );
-            if (!proof)
-            {
-                continue;
-            }
+            let currentIndex = index;
 
-            result[index] = result[index - 1];
-            result[index - 1] = proof.matchStage;
-            return result;
+            while( currentIndex > 0 )
+            {
+                const proof = proveMatchPushdownAcrossStage(
+                    result[ currentIndex - 1 ],
+                    result[ currentIndex ]
+                );
+
+                if( !proof ){ break }
+
+                const previousStage = result[ currentIndex - 1 ];
+                result[ currentIndex - 1 ] = proof.matchStage;
+                result[ currentIndex ] = previousStage;
+                currentIndex--;
+                changed = true;
+            }
         }
 
-        return result;
+        return changed ? result : pipeline;
     }
 }

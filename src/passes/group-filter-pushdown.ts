@@ -4,7 +4,8 @@ import { structuralFingerprint } from '../utils.js';
 
 export class GroupFilterPushdownPass implements PipelinePass
 {
-    name = 'group-filter-pushdown';
+    readonly name       = 'group-filter-pushdown';
+    readonly stageTypes = [ '$group' ] as const;
 
     execute(pipeline: any[]): any[]
     {

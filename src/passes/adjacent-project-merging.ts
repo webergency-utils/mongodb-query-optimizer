@@ -5,7 +5,8 @@ import {
 
 export class AdjacentProjectMergingPass implements PipelinePass
 {
-    name = 'adjacent-project-merging';
+    readonly name       = 'adjacent-project-merging';
+    readonly stageTypes = [ '$project' ] as const;
 
     execute(pipeline: any[]): any[]
     {

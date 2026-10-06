@@ -1,5 +1,6 @@
 import { analyzeStage } from '../analyzer/semantics.js';
-import { deepClone, structuralFingerprint } from '../utils.js';
+import { deepClone, isPlainObject, structuralFingerprint } from '../utils.js';
+import { getSingleStageEntry, getStageSpec } from './helpers.js';
 
 const ALLOWED_HOIST_OPERATORS = new Set([
     '$match',
@@ -14,30 +15,15 @@ export interface FacetPrefixHoistingProof {
     simplifiedFacet: any;
 }
 
-function isPlainObject(value: unknown): value is Record<string, any>
-{
-    if (!value || typeof value !== 'object' || Array.isArray(value))
-    {
-        return false;
-    }
-    const proto = Object.getPrototypeOf(value);
-    return proto === Object.prototype || proto === null;
-}
-
 function isEligibleHoistStage(stage: unknown): boolean
 {
-    if (!isPlainObject(stage))
+    const entry = getSingleStageEntry( stage );
+    if( !entry )
     {
         return false;
     }
 
-    const keys = Object.keys(stage);
-    if (keys.length !== 1)
-    {
-        return false;
-    }
-
-    const operator = keys[0]!;
+    const operator = entry[0];
     if (!ALLOWED_HOIST_OPERATORS.has(operator))
     {
         return false;
@@ -63,19 +49,8 @@ export function proveFacetPrefixHoisting(
     stage: unknown,
 ): FacetPrefixHoistingProof | null
 {
-    if (!isPlainObject(stage))
-    {
-        return null;
-    }
-
-    const stageKeys = Object.keys(stage);
-    if (stageKeys.length !== 1 || stageKeys[0] !== '$facet')
-    {
-        return null;
-    }
-
-    const facetSpec = stage.$facet;
-    if (!isPlainObject(facetSpec))
+    const facetSpec = getStageSpec<Record<string, any>>( stage, '$facet' );
+    if( !facetSpec )
     {
         return null;
     }

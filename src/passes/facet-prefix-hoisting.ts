@@ -3,7 +3,8 @@ import { proveFacetPrefixHoisting } from './facet-proofs.js';
 
 export class FacetPrefixHoistingPass implements PipelinePass
 {
-    name = 'facet-prefix-hoisting';
+    readonly name       = 'facet-prefix-hoisting';
+    readonly stageTypes = [ '$facet' ] as const;
 
     execute(pipeline: any[]): any[]
     {

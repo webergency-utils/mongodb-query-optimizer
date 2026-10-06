@@ -10,6 +10,8 @@ import {
     ScopedDependencies,
     StageSemantics,
 } from '../analyzer/types';
+import { isPlainObject } from '../utils.js';
+import { isMatchStage } from './helpers.js';
 
 const LOGICAL_FILTER_OPERATORS = new Set(['$and', '$or', '$nor']);
 const PASSIVE_LIMIT_OPERATORS = new Set([
@@ -35,28 +37,6 @@ export interface MatchPushdownProof
     readonly matchStage: {
         readonly $match: Record<string, unknown>;
     };
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown>
-{
-    if (value === null || typeof value !== 'object' || Array.isArray(value))
-    {
-        return false;
-    }
-
-    const prototype = Object.getPrototypeOf(value);
-    return prototype === Object.prototype || prototype === null;
-}
-
-function isMatchStage(stage: unknown): stage is {
-    readonly $match: Record<string, unknown>;
-}
-{
-    return (
-        isPlainObject(stage)
-        && Object.keys(stage).length === 1
-        && isPlainObject(stage.$match)
-    );
 }
 
 function hasAmbiguousPath(paths: Iterable<string>): boolean

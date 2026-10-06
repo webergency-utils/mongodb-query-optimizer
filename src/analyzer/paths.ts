@@ -195,3 +195,18 @@ export function findPathCollisions(paths: Iterable<string>): PathCollision[]
 
     return collisions;
 }
+
+export function isExactPath( path: string ): boolean
+{
+    return relatePaths( path, path ) === 'exact';
+}
+
+export function isExactTopLevelPath( path: string ): boolean
+{
+    return (
+        path.length > 0
+        && !path.startsWith( '$' )
+        && !path.includes( '.' )
+        && isExactPath( path )
+    );
+}

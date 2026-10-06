@@ -1,3 +1,4 @@
+import { isFilterContradiction } from '../analyzer/filters';
 import { withCandidateFilterRuleProfile } from '../filter-rule-registry';
 import { deepClone, structuralFingerprint } from '../utils';
 import { AdjacentAddFieldMergingPass } from './adjacent-addfield-merging';
@@ -5,6 +6,7 @@ import { AdjacentMatchMergingPass } from './adjacent-match-merging';
 import { AdjacentProjectMergingPass } from './adjacent-project-merging';
 import { BucketFilterPushdownPass } from './bucket-filter-pushdown';
 import { ComplexProjectionDeferralPass } from './complex-projection-deferral';
+import { CoveredProjectionSynthesisPass } from './covered-projection-synthesis';
 import { ExprMatchNormalizationPass } from './expr-match-normalization';
 import { FacetPrefixHoistingPass } from './facet-prefix-hoisting';
 import { FilterOptimizationPass } from './filter-optimization';
@@ -49,6 +51,7 @@ const registeredPipelineTransformationIds = Object.freeze([
     'facet-prefix-hoisting',
     'stage-priority-reorder',
     'redundant-projection-elimination',
+    'covered-projection-synthesis',
 ] as const);
 
 export type PipelineTransformationId =
@@ -79,6 +82,7 @@ const activePipelineTransformationIds: readonly PipelineTransformationId[] = Obj
 const containedPipelineTransformationIds: readonly PipelineTransformationId[] = Object.freeze([
     'stage-priority-reorder',
     'redundant-projection-elimination',
+    'covered-projection-synthesis',
 ]);
 
 export interface PipelineTransformationRegistryStatus
@@ -118,6 +122,7 @@ const candidatePipelineTransformationRegistry: Readonly<
     'adjacent-add-field-merging': () => new AdjacentAddFieldMergingPass(),
     'facet-prefix-hoisting': () => new FacetPrefixHoistingPass(),
     'redundant-projection-elimination': () => new RedundantProjectionEliminationPass(),
+    'covered-projection-synthesis': () => new CoveredProjectionSynthesisPass(),
 });
 
 const candidatePipelineProfile: readonly PipelineTransformationId[] =
@@ -165,12 +170,52 @@ export function getPipelineTransformationRegistryStatus(): PipelineTransformatio
     return pipelineTransformationRegistryStatus;
 }
 
+function collectStageTypes( pipeline: readonly any[] ): Set<string>
+{
+    const types = new Set<string>();
+
+    for( const stage of pipeline )
+    {
+        if( stage && typeof stage === 'object' && !Array.isArray( stage ))
+        {
+            for( const key of Object.keys( stage ))
+            {
+                if( key.startsWith( '$' ))
+                {
+                    types.add( key );
+                }
+            }
+        }
+    }
+
+    return types;
+}
+
+function pipelinesShallowEqual( a: readonly any[], b: readonly any[] ): boolean
+{
+    if( a === b ){ return true }
+    if( a.length !== b.length ){ return false }
+
+    for( let i = 0; i < a.length; i++ )
+    {
+        if( a[ i ] !== b[ i ] ){ return false }
+    }
+
+    return true;
+}
+
+interface SweepResult
+{
+    readonly pipeline : any[];
+    readonly modified : boolean;
+}
+
 function optimizeStageChildrenForSweep(
-    stage: any,
-    passes: readonly PipelinePass[],
+    stage  : any,
+    passes : readonly PipelinePass[]
 ): any
 {
-    if (!stage || typeof stage !== "object" || Array.isArray(stage))
+    if( !stage || typeof stage !== 'object' || Array.isArray( stage ))
     {
         return stage;
     }
@@ -178,75 +223,173 @@ function optimizeStageChildrenForSweep(
     let current = stage;
     const facet = current.$facet;
 
-    if (facet && typeof facet === "object")
+    if( facet && typeof facet === 'object' && !Array.isArray( facet ))
     {
+        let facetModified = false;
         const optimizedFacet: Record<string, any> = {};
 
-        for (const [name, subpipeline] of Object.entries(facet))
+        for( const [ name, subpipeline ] of Object.entries( facet ))
         {
-            optimizedFacet[name] = Array.isArray(subpipeline)
-                ? applyGlobalSweep(subpipeline, passes)
-                : subpipeline;
+            if( Array.isArray( subpipeline ))
+            {
+                const optimizedSub = applyGlobalSweep( subpipeline, passes );
+
+                if( !pipelinesShallowEqual( optimizedSub, subpipeline ))
+                {
+                    facetModified = true;
+                }
+
+                optimizedFacet[ name ] = optimizedSub;
+            }
+            else
+            {
+                optimizedFacet[ name ] = subpipeline;
+            }
         }
 
-        current = {
-            ...current,
-            $facet: optimizedFacet,
-        };
+        if( facetModified )
+        {
+            current = {
+                ...current,
+                $facet : optimizedFacet
+            };
+        }
     }
 
     const lookup = current.$lookup;
-    if (
+
+    if(
         lookup
-        && typeof lookup === "object"
-        && !Array.isArray(lookup)
-        && Array.isArray(lookup.pipeline)
+        && typeof lookup === 'object'
+        && !Array.isArray( lookup )
+        && Array.isArray( lookup.pipeline )
     )
     {
-        current = {
-            ...current,
-            $lookup: {
-                ...lookup,
-                pipeline: applyGlobalSweep(lookup.pipeline, passes),
-            },
-        };
+        const optimizedLookupPipeline = applyGlobalSweep( lookup.pipeline, passes );
+
+        if( !pipelinesShallowEqual( optimizedLookupPipeline, lookup.pipeline ))
+        {
+            current = {
+                ...current,
+                $lookup : {
+                    ...lookup,
+                    pipeline : optimizedLookupPipeline
+                }
+            };
+        }
     }
 
     const unionWith = current.$unionWith;
-    if (
+
+    if(
         unionWith
-        && typeof unionWith === "object"
-        && !Array.isArray(unionWith)
-        && Array.isArray(unionWith.pipeline)
+        && typeof unionWith === 'object'
+        && !Array.isArray( unionWith )
+        && Array.isArray( unionWith.pipeline )
     )
     {
-        current = {
-            ...current,
-            $unionWith: {
-                ...unionWith,
-                pipeline: applyGlobalSweep(unionWith.pipeline, passes),
-            },
-        };
+        const optimizedUnionPipeline = applyGlobalSweep( unionWith.pipeline, passes );
+
+        if( !pipelinesShallowEqual( optimizedUnionPipeline, unionWith.pipeline ))
+        {
+            current = {
+                ...current,
+                $unionWith : {
+                    ...unionWith,
+                    pipeline : optimizedUnionPipeline
+                }
+            };
+        }
     }
 
     return current;
 }
 
-function applyGlobalSweep(
-    pipeline: any[],
-    passes: readonly PipelinePass[],
-): any[]
+function applyGlobalSweepWithDirty(
+    pipeline : any[],
+    passes   : readonly PipelinePass[]
+): SweepResult
 {
-    let current = pipeline.map((stage) =>
-        optimizeStageChildrenForSweep(stage, passes),
-    );
+    let modified = false;
+    const childOptimized: any[] = [];
 
-    for (const pass of passes)
+    for( let i = 0; i < pipeline.length; i++ )
     {
-        current = pass.execute(current);
+        const origStage = pipeline[ i ];
+        const optStage = optimizeStageChildrenForSweep( origStage, passes );
+
+        if( optStage !== origStage )
+        {
+            modified = true;
+        }
+
+        childOptimized.push( optStage );
     }
 
-    return current;
+    let current = childOptimized;
+    let stageTypes = collectStageTypes( current );
+
+    for( const pass of passes )
+    {
+        if( pass.stageTypes && !pass.stageTypes.some(( t ) => stageTypes.has( t )))
+        {
+            continue;
+        }
+
+        const next = pass.execute( current );
+
+        if( !pipelinesShallowEqual( current, next ))
+        {
+            modified = true;
+            current = next;
+            stageTypes = collectStageTypes( current );
+        }
+    }
+
+    for( let i = 0; i < current.length; i++ )
+    {
+        const stage = current[ i ];
+
+        if( stage && typeof stage === 'object' && !Array.isArray( stage ) && stage.$match )
+        {
+            if( isFilterContradiction( stage.$match ) && !hasUnionWithAfter( current, i ))
+            {
+                if( current.length > i + 1 )
+                {
+                    current = current.slice( 0, i + 1 );
+                    modified = true;
+                }
+
+                break;
+            }
+        }
+    }
+
+    return {
+        pipeline : current,
+        modified
+    };
+}
+
+function hasUnionWithAfter( pipeline: readonly any[], fromIndex: number ): boolean
+{
+    for( let i = fromIndex + 1; i < pipeline.length; i++ )
+    {
+        if( pipeline[ i ] && typeof pipeline[ i ] === 'object' && '$unionWith' in pipeline[ i ] )
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function applyGlobalSweep(
+    pipeline : any[],
+    passes   : readonly PipelinePass[]
+): any[]
+{
+    return applyGlobalSweepWithDirty( pipeline, passes ).pipeline;
 }
 
 /**
@@ -254,47 +397,61 @@ function applyGlobalSweep(
  * The package root intentionally does not export it.
  */
 export function optimizePipelineWithPasses(
-    pipeline: any,
-    passes: readonly PipelinePass[],
-    sweepBudget = DEFAULT_GLOBAL_SWEEP_BUDGET,
+    pipeline    : any,
+    passes      : readonly PipelinePass[],
+    sweepBudget = DEFAULT_GLOBAL_SWEEP_BUDGET
 ): any
 {
-    if (!Array.isArray(pipeline))
+    if( !Array.isArray( pipeline ))
     {
         return pipeline;
     }
 
-    const pristine = deepClone(pipeline);
-    if (passes.length === 0)
+    const pristine = deepClone( pipeline );
+
+    if( passes.length === 0 )
     {
         return pristine;
     }
 
-    if (!Number.isSafeInteger(sweepBudget) || sweepBudget <= 0)
+    if( !Number.isSafeInteger( sweepBudget ) || sweepBudget <= 0 )
     {
         return pristine;
     }
 
-    let current = deepClone(pristine);
-    let currentFingerprint = structuralFingerprint(current);
-    const history = new Set<string>([currentFingerprint]);
+    let current = deepClone( pristine );
+    let currentFingerprint: string | null = null;
+    let history: Set<string> | null = null;
 
-    for (let sweep = 0; sweep < sweepBudget; sweep++)
+    for( let sweep = 0; sweep < sweepBudget; sweep++ )
     {
-        const next = applyGlobalSweep(current, passes);
-        const nextFingerprint = structuralFingerprint(next);
+        const sweepResult = applyGlobalSweepWithDirty( current, passes );
 
-        if (nextFingerprint === currentFingerprint)
+        if( !sweepResult.modified )
+        {
+            return sweepResult.pipeline;
+        }
+
+        if( currentFingerprint === null )
+        {
+            currentFingerprint = structuralFingerprint( current );
+            history = new Set<string>([ currentFingerprint ]);
+        }
+
+        const next = sweepResult.pipeline;
+        const nextFingerprint = structuralFingerprint( next );
+
+        if( nextFingerprint === currentFingerprint )
         {
             return next;
         }
 
-        if (history.has(nextFingerprint))
+        if( history!.has( nextFingerprint ))
         {
             return pristine;
         }
 
-        history.add(nextFingerprint);
+        history!.add( nextFingerprint );
         current = next;
         currentFingerprint = nextFingerprint;
     }

@@ -9,6 +9,7 @@ import {
     optimizeFilterWithRulesForTesting,
 } from '../src/filter-optimizer.js';
 import type { FilterRule } from '../src/filter-rule-registry.js';
+import { isFilterContradiction } from '../src/analyzer/filters.js';
 import {
     optimizeFilter,
     optimizePipeline,
@@ -792,5 +793,106 @@ describe('filter-bearing pipelines', () =>
             ['filter-optimization', 'adjacent-match-merging'],
             ['merge-conjunctions'],
         )).toEqual(dynamicMatches);
+    });
+
+    it('identifies filter contradictions across all branch variants', () =>
+    {
+        expect(isFilterContradiction(null)).toBe(false);
+        expect(isFilterContradiction(123)).toBe(false);
+        expect(isFilterContradiction({ $and: [] })).toBe(false);
+        expect(isFilterContradiction({ a: 1 })).toBe(false);
+        expect(isFilterContradiction({ a: { $gt: 5 } })).toBe(false);
+        expect(isFilterContradiction({ a: { $in: [1] } })).toBe(false);
+        expect(isFilterContradiction({ a: { $in: [] } })).toBe(true);
+    });
+
+    it('simplifies interval bounds via subsumption tightening and detects contradictions', () =>
+    {
+        expect(optimizeFilter({ age: { $gt: 50, $lt: 30 } })).toEqual({
+            age: { $in: [] },
+        });
+
+        expect(optimizeFilter({ age: { $gt: 30, $lt: 30 } })).toEqual({
+            age: { $in: [] },
+        });
+
+        expect(optimizeFilter({ age: { $gte: 50, $lte: 30 } })).toEqual({
+            age: { $in: [] },
+        });
+
+        expect(optimizeFilter({ age: { $gte: 30, $lte: 30 } })).toEqual({
+            age: 30,
+        });
+
+        expect(optimizeFilter({ age: { $gt: 10, $gte: 20 } })).toEqual({
+            age: { $gte: 20 },
+        });
+
+        expect(optimizeFilter({ age: { $gt: 20, $gte: 10 } })).toEqual({
+            age: { $gt: 20 },
+        });
+
+        expect(optimizeFilter({ age: { $gt: 10, $gte: 10 } })).toEqual({
+            age: { $gt: 10 },
+        });
+
+        expect(optimizeFilter({ age: { $lt: 50, $lte: 30 } })).toEqual({
+            age: { $lte: 30 },
+        });
+
+        expect(optimizeFilter({ age: { $lt: 30, $lte: 50 } })).toEqual({
+            age: { $lt: 30 },
+        });
+
+        expect(optimizeFilter({ age: { $lt: 30, $lte: 30 } })).toEqual({
+            age: { $lt: 30 },
+        });
+
+        expect(optimizeFilter({ age: { $eq: 25, $gt: 10, $lt: 50 } })).toEqual({
+            age: 25,
+        });
+
+        expect(optimizeFilter({ age: { $eq: 5, $gt: 10 } })).toEqual({
+            age: { $in: [] },
+        });
+
+        expect(optimizeFilter({ age: { $eq: 55, $lt: 30 } })).toEqual({
+            age: { $in: [] },
+        });
+
+        expect(optimizeFilter({ age: { $gt: 'a', $lt: 'z' } })).toEqual({
+            age: { $gt: 'a', $lt: 'z' },
+        });
+
+        expect(optimizeFilter({
+            $and: [
+                { age: { $gt: 50, $lt: 30 } },
+                { name: 'Alice' },
+            ],
+        })).toEqual({
+            age: { $in: [] },
+        });
+
+        expect(optimizeFilter({
+            $or: [
+                { age: { $gt: 50, $lt: 30 } },
+                { name: 'Alice' },
+            ],
+        })).toEqual({
+            name: 'Alice',
+        });
+    });
+
+    it('short-circuits pipelines on contradictory match filters', () =>
+    {
+        const pipeline = [
+            { $match: { age: { $gt: 50, $lt: 30 } } },
+            { $sort: { score: -1 } },
+            { $project: { name: 1 } },
+        ];
+
+        expect(optimizePipeline(pipeline)).toEqual([
+            { $match: { age: { $in: [] } } },
+        ]);
     });
 });

@@ -8,7 +8,8 @@ from './sort-proofs.js';
 
 export class RedundantSortEliminationPass implements PipelinePass
 {
-    name = 'redundant-sort-elimination';
+    readonly name       = 'redundant-sort-elimination';
+    readonly stageTypes = [ '$sort' ] as const;
 
     execute( pipeline: any[] ): any[]
     {

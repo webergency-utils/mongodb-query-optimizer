@@ -1,19 +1,10 @@
 import { analyzeStage } from '../analyzer/semantics.js';
-import { deepClone } from '../utils.js';
+import { deepClone, isPlainObject } from '../utils.js';
+import { getSingleStageEntry, getStageSpec } from './helpers.js';
 
 export interface UnwindPrefilterProof {
     prefilterStage: { $match: Record<string, any> };
     arrayPath: string;
-}
-
-function isPlainObject(value: unknown): value is Record<string, any>
-{
-    if (!value || typeof value !== 'object' || Array.isArray(value))
-    {
-        return false;
-    }
-    const proto = Object.getPrototypeOf(value);
-    return proto === Object.prototype || proto === null;
 }
 
 function isUnsupportedPrefilterValue(val: unknown): boolean
@@ -37,30 +28,15 @@ export function proveUnwindPrefilter(
     matchStage: unknown,
 ): UnwindPrefilterProof | null
 {
-    if (!isPlainObject(unwindStage) || !isPlainObject(matchStage))
+    const unwindEntry = getSingleStageEntry( unwindStage );
+    const matchSpec = getStageSpec<Record<string, any>>( matchStage, '$match' );
+
+    if (!unwindEntry || unwindEntry[0] !== '$unwind' || !matchSpec)
     {
         return null;
     }
 
-    const unwindKeys = Object.keys(unwindStage);
-    if (unwindKeys.length !== 1 || unwindKeys[0] !== '$unwind')
-    {
-        return null;
-    }
-
-    const matchKeys = Object.keys(matchStage);
-    if (matchKeys.length !== 1 || matchKeys[0] !== '$match')
-    {
-        return null;
-    }
-
-    const unwindSpec = unwindStage.$unwind;
-    const matchSpec = matchStage.$match;
-
-    if (!isPlainObject(matchSpec))
-    {
-        return null;
-    }
+    const unwindSpec = unwindEntry[1];
 
     let arrayPath: string;
     let indexField: string | undefined;

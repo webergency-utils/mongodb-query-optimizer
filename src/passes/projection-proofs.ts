@@ -1,5 +1,5 @@
 import { analyzeExpression } from '../analyzer/expressions';
-import { relatePaths } from '../analyzer/paths';
+import { isExactPath, isExactTopLevelPath, relatePaths } from '../analyzer/paths';
 import {
     analyzeProjection,
     projectionVisibility,
@@ -10,6 +10,8 @@ import {
     ProjectionSummary,
     StageSemantics,
 } from '../analyzer/types';
+import { isPlainObject } from '../utils.js';
+import { getSingleStageEntry } from './helpers.js';
 
 const ADD_FIELD_OPERATORS = new Set(['$addFields', '$set']);
 
@@ -43,43 +45,6 @@ export interface UnusedFieldPruningProof
 {
     readonly replacementStage: Record<string, Record<string, unknown>> | null;
     readonly removedFields: readonly string[];
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown>
-{
-    if (value === null || typeof value !== 'object' || Array.isArray(value))
-    {
-        return false;
-    }
-
-    const prototype = Object.getPrototypeOf(value);
-    return prototype === Object.prototype || prototype === null;
-}
-
-function getSingleStageEntry(stage: unknown): readonly [string, unknown] | null
-{
-    if (!isPlainObject(stage))
-    {
-        return null;
-    }
-
-    const entries = Object.entries(stage);
-    return entries.length === 1 ? entries[0]! : null;
-}
-
-function isExactPath(path: string): boolean
-{
-    return relatePaths(path, path) === 'exact';
-}
-
-function isExactTopLevelPath(path: string): boolean
-{
-    return (
-        path.length > 0
-        && !path.startsWith('$')
-        && !path.includes('.')
-        && isExactPath(path)
-    );
 }
 
 function hasOnlyKnownDependencyPaths(semantics: StageSemantics): boolean

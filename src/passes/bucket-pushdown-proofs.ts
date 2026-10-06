@@ -1,4 +1,5 @@
-import { deepClone } from '../utils.js';
+import { deepClone, isPlainObject } from '../utils.js';
+import { getStageSpec } from './helpers.js';
 
 export interface BucketFilterPushdownProof
 {
@@ -6,43 +7,15 @@ export interface BucketFilterPushdownProof
     postfilterStage: { $match: Record<string, any> } | null
 }
 
-function isPlainObject( value: unknown ): value is Record<string, any>
-{
-    if( !value || typeof value !== 'object' || Array.isArray( value ))
-    {
-        return false;
-    }
-    const proto = Object.getPrototypeOf( value );
-
-    return proto === Object.prototype || proto === null;
-}
-
 export function proveBucketFilterPushdown(
     bucketStage: unknown,
     matchStage: unknown
 ): BucketFilterPushdownProof | null
 {
-    if( !isPlainObject( bucketStage ) || !isPlainObject( matchStage ))
-    {
-        return null;
-    }
+    const bucketSpec = getStageSpec<Record<string, any>>( bucketStage, '$bucket' );
+    const matchSpec = getStageSpec<Record<string, any>>( matchStage, '$match' );
 
-    const bucketKeys = Object.keys( bucketStage );
-    if( bucketKeys.length !== 1 || bucketKeys[0] !== '$bucket' )
-    {
-        return null;
-    }
-
-    const matchKeys = Object.keys( matchStage );
-    if( matchKeys.length !== 1 || matchKeys[0] !== '$match' )
-    {
-        return null;
-    }
-
-    const bucketSpec = bucketStage.$bucket;
-    const matchSpec = matchStage.$match;
-
-    if( !isPlainObject( bucketSpec ) || !isPlainObject( matchSpec ))
+    if( !bucketSpec || !matchSpec )
     {
         return null;
     }

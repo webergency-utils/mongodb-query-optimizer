@@ -3,17 +3,15 @@ import { isMatchStage } from './helpers';
 import { optimizeFilter } from '../filter-optimizer';
 import { isFilterRewriteSafe } from '../analyzer/filters';
 
-function isMergeableMatchStage(stage: any): boolean
+function isMergeableMatchStage( stage: any ): boolean
 {
-    return (
-        isMatchStage(stage)
-        && Object.keys(stage).length === 1
-        && isFilterRewriteSafe(stage.$match)
-    );
+    return isMatchStage( stage ) && isFilterRewriteSafe( stage.$match );
 }
 
-export class AdjacentMatchMergingPass implements PipelinePass {
-    name = 'adjacent-match-merging';
+export class AdjacentMatchMergingPass implements PipelinePass
+{
+    readonly name       = 'adjacent-match-merging';
+    readonly stageTypes = [ '$match' ] as const;
     execute(pipeline: any[]): any[] {
         const result: any[] = [];
         let index = 0;

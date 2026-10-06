@@ -42,10 +42,27 @@ export function isEqual(a: any, b: any): boolean {
     return false;
 }
 
-function isPlainObject(val: any): boolean {
-    if (!val || typeof val !== 'object') return false;
-    const proto = Object.getPrototypeOf(val);
+export function isPlainObject<T = Record<string, any>>( val: unknown ): val is T
+{
+    if( val === null || typeof val !== 'object' || Array.isArray( val )){ return false }
+
+    const proto = Object.getPrototypeOf( val );
+
     return proto === Object.prototype || proto === null;
+}
+
+export function isEmptyObject( val: unknown ): boolean
+{
+    return isPlainObject( val ) && Object.keys( val ).length === 0;
+}
+
+export function isOperatorSubdocument( val: unknown ): boolean
+{
+    if( !isPlainObject( val )){ return false }
+
+    const keys = Object.keys( val );
+
+    return keys.length > 0 && keys.every(( key ) => key.startsWith( '$' ));
 }
 
 function isExoticObject(val: any): boolean {

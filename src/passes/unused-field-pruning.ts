@@ -5,7 +5,8 @@ import {
 
 export class UnusedFieldPruningPass implements PipelinePass
 {
-    name = 'unused-field-pruning';
+    readonly name       = 'unused-field-pruning';
+    readonly stageTypes = [ '$addFields', '$set', '$project', '$unset' ] as const;
 
     execute(pipeline: any[]): any[]
     {

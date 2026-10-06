@@ -1,7 +1,9 @@
 import { PipelinePass } from './types';
-import {
-    proveLookupDelayAcrossStage,
-} from './movement-proofs';
+import
+{
+    proveLookupDelayAcrossStage
+}
+from './movement-proofs';
 
 /**
  * Delays simple equality lookups past match, sort, limit, and skip when the
@@ -9,26 +11,36 @@ import {
  */
 export class LookupDelayPass implements PipelinePass
 {
-    name = 'lookup-delay';
+    readonly name       = 'lookup-delay';
+    readonly stageTypes = [ '$lookup' ] as const;
 
-    execute(pipeline: any[]): any[]
+    execute( pipeline: any[] ): any[]
     {
-        const result = [...pipeline];
+        let changed = false;
+        const result = [ ...pipeline ];
 
-        for (let index = 0; index < result.length - 1; index++)
+        for( let index = result.length - 2; index >= 0; index-- )
         {
-            if (!proveLookupDelayAcrossStage(result[index], result[index + 1]))
-            {
-                continue;
-            }
+            let currentIndex = index;
 
-            [result[index], result[index + 1]] = [
-                result[index + 1],
-                result[index],
-            ];
-            return result;
+            while( currentIndex < result.length - 1 )
+            {
+                if( !proveLookupDelayAcrossStage(
+                    result[ currentIndex ],
+                    result[ currentIndex + 1 ]
+                ))
+                {
+                    break;
+                }
+
+                const nextStage = result[ currentIndex + 1 ];
+                result[ currentIndex + 1 ] = result[ currentIndex ];
+                result[ currentIndex ] = nextStage;
+                currentIndex++;
+                changed = true;
+            }
         }
 
-        return result;
+        return changed ? result : pipeline;
     }
 }

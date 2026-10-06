@@ -1,47 +1,20 @@
-import { deepClone } from '../utils.js';
+import { deepClone, isEmptyObject, isPlainObject } from '../utils.js';
+import { getStageSpec } from './helpers.js';
 
 export interface SortByCountSimplificationProof
 {
     sortByCountStage: { $sortByCount: any }
 }
 
-function isPlainObject( value: unknown ): value is Record<string, any>
-{
-    if( !value || typeof value !== 'object' || Array.isArray( value ))
-    {
-        return false;
-    }
-    const proto = Object.getPrototypeOf( value );
-
-    return proto === Object.prototype || proto === null;
-}
-
 export function proveSortByCountSimplification(
-    currentStage: unknown,
-    nextStage: unknown
+    currentStage : unknown,
+    nextStage    : unknown
 ): SortByCountSimplificationProof | null
 {
-    if( !isPlainObject( currentStage ) || !isPlainObject( nextStage ))
-    {
-        return null;
-    }
+    const groupSpec = getStageSpec<Record<string, any>>( currentStage, '$group' );
+    const sortSpec = getStageSpec<Record<string, any>>( nextStage, '$sort' );
 
-    const currentKeys = Object.keys( currentStage );
-    if( currentKeys.length !== 1 || currentKeys[0] !== '$group' )
-    {
-        return null;
-    }
-
-    const nextKeys = Object.keys( nextStage );
-    if( nextKeys.length !== 1 || nextKeys[0] !== '$sort' )
-    {
-        return null;
-    }
-
-    const groupSpec = currentStage.$group;
-    const sortSpec = nextStage.$sort;
-
-    if( !isPlainObject( groupSpec ) || !isPlainObject( sortSpec ))
+    if( !groupSpec || !sortSpec )
     {
         return null;
     }
@@ -52,7 +25,7 @@ export function proveSortByCountSimplification(
         return null;
     }
 
-    if( !('_id' in groupSpec) || !('count' in groupSpec ))
+    if( !( '_id' in groupSpec ) || !( 'count' in groupSpec ))
     {
         return null;
     }
@@ -66,8 +39,7 @@ export function proveSortByCountSimplification(
     const isSumOne = countAcc.$sum === 1;
     const isCountEmpty = (
         '$count' in countAcc
-        && isPlainObject( countAcc.$count )
-        && Object.keys( countAcc.$count ).length === 0
+        && isEmptyObject( countAcc.$count )
     );
 
     if( !isSumOne && !isCountEmpty )
@@ -87,8 +59,8 @@ export function proveSortByCountSimplification(
     }
 
     return {
-        sortByCountStage: {
-            $sortByCount: deepClone( groupSpec._id )
+        sortByCountStage : {
+            $sortByCount : deepClone( groupSpec._id )
         }
     };
 }
