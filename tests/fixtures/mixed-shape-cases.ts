@@ -360,4 +360,33 @@ export const mixedShapeDifferentialCases: readonly MixedShapeDifferentialCase[] 
         observation: 'ordered-bson',
         expectedOriginalOutcome: 'success',
     },
+
+    // Polymorphic bucket filter pushdown
+    {
+        id: 'mixed-shape-bucket-filter-pushdown',
+        description: 'bucket-filter-pushdown with numeric boundaries and default',
+        passId: 'bucket-filter-pushdown',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, val: 25 },
+                    { _id: 2, val: 75 },
+                    { _id: 3, val: 150 },
+                ],
+            },
+        },
+        pipeline: [
+            {
+                $bucket: {
+                    groupBy: '$val',
+                    boundaries: [ 0, 50, 100 ],
+                    default: 'other',
+                },
+            },
+            { $match: { _id: 0 } },
+        ],
+        observation: 'ordered-bson',
+        expectedOriginalOutcome: 'success',
+    },
 ];

@@ -107,6 +107,7 @@ describe('explicit immutable transformation registries', () =>
 
         expect(status.active).toEqual([
             'group-filter-pushdown',
+            'bucket-filter-pushdown',
             'unwind-prefilter',
             'match-pushdown',
             'limit-advance',

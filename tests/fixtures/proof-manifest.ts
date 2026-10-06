@@ -192,6 +192,16 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'u9-generated-top-level-bucket-filter-pushdown',
         'u9-generated-nested-bucket-filter-pushdown',
         'feat-bucket-filter-pushdown-oracle',
+        {
+            status: 'active',
+            proofRecheckNote: 'Proof audited: converts _id bucket equality/in conditions into $gte/$lt range prefilters; validates boundaries monotonicity and primitive types; constrained under strictErrors when bucket stage lacks default.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-bucket-filter-pushdown',
+                strictFieldOrder: 'mixed-shape-bucket-filter-pushdown',
+                strictErrors: 'mixed-shape-bucket-filter-pushdown'
+            },
+            strictModeBehavior: 'constrained'
+        }
     ),
     evidence(
         'unwind-prefilter',

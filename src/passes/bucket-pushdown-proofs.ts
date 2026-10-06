@@ -1,4 +1,6 @@
+import { GuaranteeContext } from '../guarantees.js';
 import { deepClone, isPlainObject } from '../utils.js';
+import { isStageProvenErrorFree } from './guarantee-guards.js';
 import { getStageSpec } from './helpers.js';
 
 export interface BucketFilterPushdownProof
@@ -9,9 +11,15 @@ export interface BucketFilterPushdownProof
 
 export function proveBucketFilterPushdown(
     bucketStage: unknown,
-    matchStage: unknown
+    matchStage: unknown,
+    context?: GuaranteeContext
 ): BucketFilterPushdownProof | null
 {
+    if( context?.strictErrors && !isStageProvenErrorFree( bucketStage ))
+    {
+        return null;
+    }
+
     const bucketSpec = getStageSpec<Record<string, any>>( bucketStage, '$bucket' );
     const matchSpec = getStageSpec<Record<string, any>>( matchStage, '$match' );
 

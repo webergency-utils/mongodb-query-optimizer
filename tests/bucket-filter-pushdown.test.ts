@@ -343,4 +343,21 @@ describe( 'BucketFilterPushdownPass execution and parity', () =>
             }
         ]);
     });
+
+    it( 'blocks pushing down filter when bucket stage lacks default under strictErrors', () =>
+    {
+        const pipeline =
+        [
+            {
+                $bucket: {
+                    groupBy: '$year',
+                    boundaries: [ 1990, 2000, 2010, 2020 ]
+                }
+            },
+            { $match: { _id: 1990 } }
+        ];
+
+        const result = pass.execute( pipeline, { strictFieldOrder: false, strictErrors: true } );
+        expect( result ).toEqual( pipeline );
+    });
 });

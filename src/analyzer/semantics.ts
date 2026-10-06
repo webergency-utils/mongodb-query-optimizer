@@ -1034,6 +1034,10 @@ function analyzeBucketStage(
     stage.cardinality = "collapses";
     stage.order = "destroys";
     stage.provenance = "generated";
+    if (stage.operator === "$bucket" && !("default" in value))
+    {
+        stage.errors = joinErrors(stage.errors, "may-error");
+    }
 }
 
 function analyzeWindowStage(
