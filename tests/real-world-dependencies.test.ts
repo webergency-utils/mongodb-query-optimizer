@@ -10,6 +10,7 @@ import {
     optimizePipelineWithCandidateProfile,
     type PipelineTransformationId
 } from '../src/passes/registry.js';
+import { optimizePipeline as optimizePipelineProduction } from '../src/index.js';
 import { structuralFingerprint } from '../src/utils.js';
 import { MIXED_SHAPE_CATALOG } from './fixtures/mixed-shapes.js';
 import {
@@ -161,5 +162,81 @@ describe( 'Real-world corpus fixtures and dependencies', () =>
         }
 
         expect( affectingPasses ).toEqual( [] );
+    } );
+
+    it( 'produces the success-criterion shape under the production profile in default mode', () =>
+    {
+        const fixtureTestQuery = JSON.parse(
+            fs.readFileSync( path.resolve( __dirname, 'fixtures/real-world/test-query.json' ), 'utf8' )
+        );
+
+        const optimized = optimizePipelineProduction( fixtureTestQuery );
+        const stageNames = optimized.map( ( stage: Record<string, unknown> ) => Object.keys( stage )[0] );
+
+        expect( stageNames ).toEqual(
+        [
+            '$match',
+            '$addFields',
+            '$sort',
+            '$limit',
+            '$lookup',
+            '$lookup',
+            '$addFields'
+        ] );
+    } );
+
+    it( 'keeps $lookup before $addFields under strictFieldOrder in production profile', () =>
+    {
+        const fixtureTestQuery = JSON.parse(
+            fs.readFileSync( path.resolve( __dirname, 'fixtures/real-world/test-query.json' ), 'utf8' )
+        );
+
+        const optimized = optimizePipelineProduction( fixtureTestQuery, { strictFieldOrder: true } );
+        const stageNames = optimized.map( ( stage: Record<string, unknown> ) => Object.keys( stage )[0] );
+
+        expect( stageNames ).toEqual(
+        [
+            '$match',
+            '$lookup',
+            '$lookup',
+            '$addFields',
+            '$sort',
+            '$limit'
+        ] );
+    } );
+
+    it( 'does not hoist sort/limit across $function under strictErrors in production profile', () =>
+    {
+        const fixtureTestQuery = JSON.parse(
+            fs.readFileSync( path.resolve( __dirname, 'fixtures/real-world/test-query.json' ), 'utf8' )
+        );
+
+        const optimized = optimizePipelineProduction( fixtureTestQuery, { strictErrors: true } );
+        const stageNames = optimized.map( ( stage: Record<string, unknown> ) => Object.keys( stage )[0] );
+
+        expect( stageNames ).toEqual(
+        [
+            '$match',
+            '$lookup',
+            '$lookup',
+            '$addFields',
+            '$sort',
+            '$limit'
+        ] );
+    } );
+
+    it( 'leaves test.full.query unchanged under production profile in all three modes', () =>
+    {
+        const fixtureTestFullQuery = JSON.parse(
+            fs.readFileSync( path.resolve( __dirname, 'fixtures/real-world/test-full-query.json' ), 'utf8' )
+        );
+
+        const defaultOptimized = optimizePipelineProduction( fixtureTestFullQuery );
+        const strictOrderOptimized = optimizePipelineProduction( fixtureTestFullQuery, { strictFieldOrder: true } );
+        const strictErrorsOptimized = optimizePipelineProduction( fixtureTestFullQuery, { strictErrors: true } );
+
+        expect( defaultOptimized ).toEqual( fixtureTestFullQuery );
+        expect( strictOrderOptimized ).toEqual( fixtureTestFullQuery );
+        expect( strictErrorsOptimized ).toEqual( fixtureTestFullQuery );
     } );
 } );

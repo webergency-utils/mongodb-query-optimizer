@@ -282,6 +282,16 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'u9-generated-top-level-lookup-delay',
         'u9-generated-nested-lookup-delay',
         'u7-lookup-delay-match-error-timing-barrier',
+        {
+            status: 'active',
+            proofRecheckNote: 'Proof audited: delays simple equality lookups past sort, limit, skip, and match; alias movement respects strictFieldOrder when crossing field-adding stages; sub-pipeline and crossed stage error checks enforce strictErrors.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-lookup-delay',
+                strictFieldOrder: 'mixed-shape-lookup-delay',
+                strictErrors: 'mixed-shape-lookup-delay'
+            },
+            strictModeBehavior: 'constrained'
+        }
     ),
     evidence(
         'redundant-lookup-elimination',

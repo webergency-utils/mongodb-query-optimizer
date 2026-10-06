@@ -66,7 +66,8 @@ export type PipelineTransformationId =
 
 const activePipelineTransformationIds: readonly PipelineTransformationId[] = Object.freeze([
     'add-field-pushdown',
-    'top-k-pushdown'
+    'top-k-pushdown',
+    'lookup-delay'
 ]);
 
 const containedPipelineTransformationIds: readonly PipelineTransformationId[] = Object.freeze([

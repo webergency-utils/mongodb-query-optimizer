@@ -105,7 +105,11 @@ describe('explicit immutable transformation registries', () =>
     {
         const status = getPipelineTransformationRegistryStatus();
 
-        expect(status.active).toEqual(['add-field-pushdown', 'top-k-pushdown']);
+        expect(status.active).toEqual([
+            'add-field-pushdown',
+            'top-k-pushdown',
+            'lookup-delay'
+        ]);
         expect(status.contained).toEqual(EXPECTED_CONTAINED_PIPELINE_IDS);
         expect(status.registered).toEqual(REGISTERED_PIPELINE_IDS);
         expectUnique(status.registered);

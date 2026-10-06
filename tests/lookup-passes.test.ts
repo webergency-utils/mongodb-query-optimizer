@@ -281,6 +281,10 @@ describe('lookup delay proofs', () =>
             makeLookup(),
             { $limit: '1' },
         )).toBe(false);
+        expect(proveLookupDelayAcrossStage(
+            makeLookup(),
+            { $match: { info: { a: 1, b: 2 } } },
+        )).toBe(false);
     });
 
     it('accepts alias-independent match, sort, limit, and skip', () =>
@@ -571,6 +575,106 @@ describe('lookup delay', () =>
         };
         const pipeline = [makeLookup(), matchStage];
         expect(optimizeLookups(pipeline)).toEqual([matchStage, makeLookup()]);
+    });
+
+    it('refuses delaying lookup past error-prone match under strictErrors', () =>
+    {
+        const matchStage = {
+            $match: {
+                $expr: { $gt: [{ $divide: [1, '$zero'] }, 0] },
+            },
+        };
+        const pipeline = [makeLookup(), matchStage];
+        expect(optimizePipelineWithCandidateProfile(
+            pipeline,
+            LOOKUP_DELAY,
+            undefined,
+            { strictErrors: true }
+        )).toEqual(pipeline);
+    });
+
+    it('refuses delaying lookup with error-prone subpipeline under strictErrors', () =>
+    {
+        const lookupWithError = {
+            $lookup: {
+                from: 'orders',
+                localField: 'customerId',
+                foreignField: 'customerId',
+                as: 'orders',
+                pipeline: [
+                    { $addFields: { parsed: { $toInt: '$str' } } }
+                ]
+            }
+        };
+        const sortStage = { $sort: { score: -1 } };
+        const pipeline = [lookupWithError, sortStage];
+        expect(optimizePipelineWithCandidateProfile(
+            pipeline,
+            LOOKUP_DELAY,
+            undefined,
+            { strictErrors: true }
+        )).toEqual(pipeline);
+    });
+
+    it('refuses delaying lookup in a $merge pipeline when following match may error', () =>
+    {
+        const matchStage = {
+            $match: {
+                $expr: { $gt: [{ $divide: [1, '$zero'] }, 0] },
+            },
+        };
+        const pipeline = [
+            makeLookup(),
+            matchStage,
+            { $merge: { into: 'output' } }
+        ];
+        expect(optimizePipelineWithCandidateProfile(
+            pipeline,
+            LOOKUP_DELAY,
+            undefined
+        )).toEqual(pipeline);
+    });
+
+    it('refuses delaying lookup past a match that reads field order', () =>
+    {
+        const matchStage = {
+            $match: {
+                $expr: {
+                    $eq: [
+                        { $objectToArray: '$$ROOT' },
+                        []
+                    ]
+                }
+            }
+        };
+        const pipeline = [makeLookup(), matchStage];
+        expect(optimizePipelineWithCandidateProfile(
+            pipeline,
+            LOOKUP_DELAY,
+            undefined
+        )).toEqual(pipeline);
+    });
+
+    it('refuses subpipeline pushdown under strictErrors when lookup has error-prone subpipeline', () =>
+    {
+        const lookup = {
+            $lookup: {
+                from: 'orders',
+                as: 'orders',
+                pipeline: [
+                    { $addFields: { parsed: { $toInt: '$str' } } }
+                ]
+            }
+        };
+        const unwind = { $unwind: '$orders' };
+        const match = {
+            $match: {
+                'orders.status': 'active'
+            }
+        };
+        expect(new LookupDelayPass().execute([lookup, unwind, match], { strictErrors: true, strictFieldOrder: false })).toEqual([lookup, unwind, match]);
+        const defaultOptimized = new LookupDelayPass().execute([lookup, unwind, match]);
+        expect(defaultOptimized).toHaveLength(2);
     });
 
     it('never delays graph lookup or a lookup paired with unwind', () =>

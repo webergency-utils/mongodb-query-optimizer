@@ -1,11 +1,12 @@
 import { PipelinePass } from './types';
+import { GuaranteeContext, DEFAULT_GUARANTEE_CONTEXT } from '../guarantees.js';
 import
 {
     proveLookupDelayAcrossStage,
     proveLookupMatchSplit,
     proveLookupSubpipelinePushdown,
 }
-from './movement-proofs';
+from './movement-proofs.js';
 
 /**
  * Delays simple equality lookups past match, sort, limit, and skip when the
@@ -16,7 +17,7 @@ export class LookupDelayPass implements PipelinePass
     readonly name       = 'lookup-delay';
     readonly stageTypes = [ '$lookup' ] as const;
 
-    execute( pipeline: any[] ): any[]
+    execute( pipeline: any[], context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {
         let changed = false;
         const result = [ ...pipeline ];
@@ -29,7 +30,9 @@ export class LookupDelayPass implements PipelinePass
             {
                 if( proveLookupDelayAcrossStage(
                     result[ currentIndex ],
-                    result[ currentIndex + 1 ]
+                    result[ currentIndex + 1 ],
+                    context,
+                    result.slice( currentIndex + 2 )
                 ))
                 {
                     const nextStage = result[ currentIndex + 1 ];
@@ -42,7 +45,9 @@ export class LookupDelayPass implements PipelinePass
 
                 const splitProof = proveLookupMatchSplit(
                     result[ currentIndex ],
-                    result[ currentIndex + 1 ]
+                    result[ currentIndex + 1 ],
+                    context,
+                    result.slice( currentIndex + 2 )
                 );
 
                 if( splitProof )
@@ -59,7 +64,8 @@ export class LookupDelayPass implements PipelinePass
                     const subProof = proveLookupSubpipelinePushdown(
                         result[ currentIndex ],
                         result[ currentIndex + 1 ],
-                        result[ currentIndex + 2 ]
+                        result[ currentIndex + 2 ],
+                        context
                     );
 
                     if( subProof )
@@ -82,7 +88,8 @@ export class LookupDelayPass implements PipelinePass
                     const subProofB = proveLookupSubpipelinePushdown(
                         result[ currentIndex ],
                         result[ currentIndex + 2 ],
-                        result[ currentIndex + 1 ]
+                        result[ currentIndex + 1 ],
+                        context
                     );
 
                     if( subProofB )

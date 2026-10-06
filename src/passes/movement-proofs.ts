@@ -16,6 +16,14 @@ import {
     decomposeFilterIntoConjuncts,
     isMatchStage,
 } from './helpers.js';
+import { GuaranteeContext, DEFAULT_GUARANTEE_CONTEXT } from '../guarantees.js';
+import
+{
+    canMoveStageAcrossStage,
+    isStageProvenErrorFree,
+    stageReadsFieldOrder,
+}
+from './guarantee-guards.js';
 
 const LOGICAL_FILTER_OPERATORS = new Set(['$and', '$or', '$nor']);
 const PASSIVE_LIMIT_OPERATORS = new Set([
@@ -837,59 +845,65 @@ function isSimpleEqualityLookup(stage: unknown): stage is {
     );
 }
 
-function isSafeLimitOrSkipSummary(stage: StageSemantics): boolean
-{
-    return (
-        (stage.operator === "$limit" || stage.operator === "$skip")
-        && stage.cardinality === "filters"
-        && stage.order === "preserves"
-        && stage.observable.cardinality === "filters"
-        && stage.observable.order === "preserves"
-        && isDeterministicErrorFree(stage)
-        && hasNoChildUncertainty(stage)
-        && hasKnownLocalProvenance(stage)
-        && !hasAmbiguousStagePaths(stage)
-    );
-}
-
 /**
  * Delays a simple equality lookup past an adjacent row-preserving or
  * row-reducing stage when the follower does not read the alias. Lookup
  * execution errors are treated as out of scope for this proof.
  */
 export function proveLookupDelayAcrossStage(
-    lookupStage: unknown,
-    followingStage: unknown,
+    lookupStage        : unknown,
+    followingStage     : unknown,
+    context            : GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT,
+    downstreamPipeline : readonly unknown[] = []
 ): boolean
 {
-    if (!isSimpleEqualityLookup(lookupStage))
+    if( !isSimpleEqualityLookup( lookupStage ))
     {
         return false;
     }
 
     const alias = lookupStage.$lookup.as;
-    const following = analyzeStage(followingStage);
-    if (
-        !arePathsDisjoint(following.dependencies.local, [alias])
-        || !arePathsDisjoint(following.writes, [alias])
-        || !arePathsDisjoint(following.modifies, [alias])
-        || !arePathsDisjoint(following.removes, [alias])
+    const following = analyzeStage( followingStage );
+    if(
+        !arePathsDisjoint( following.dependencies.local, [ alias ] )
+        || !arePathsDisjoint( following.writes, [ alias ] )
+        || !arePathsDisjoint( following.modifies, [ alias ] )
+        || !arePathsDisjoint( following.removes, [ alias ] )
     )
     {
         return false;
     }
 
-    if (following.operator === "$sort")
+    if( following.operator === '$sort' )
     {
-        return isSafeSortStage(following);
+        if( !isSafeSortStage( following ))
+        {
+            return false;
+        }
+    }
+    else if( following.operator === '$match' )
+    {
+        if( !isSafeMatchSummary( following ))
+        {
+            return false;
+        }
+    }
+    else if( following.operator !== '$limit' && following.operator !== '$skip' )
+    {
+        return false;
     }
 
-    if (following.operator === "$limit" || following.operator === "$skip")
+    if( stageReadsFieldOrder( followingStage ))
     {
-        return isSafeLimitOrSkipSummary(following);
+        return false;
     }
 
-    return following.operator === "$match" && isSafeMatchSummary(following);
+    if( !canMoveStageAcrossStage( lookupStage, followingStage, 'later', context, downstreamPipeline ))
+    {
+        return false;
+    }
+
+    return true;
 }
 
 /**
@@ -931,8 +945,10 @@ export interface SubpipelinePushdownProof
 }
 
 export function proveLookupMatchSplit(
-    lookupStage: unknown,
-    followingStage: unknown
+    lookupStage        : unknown,
+    followingStage     : unknown,
+    context            : GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT,
+    downstreamPipeline : readonly unknown[] = []
 ): LookupMatchSplitProof | null
 {
     if( !isSimpleEqualityLookup( lookupStage ))
@@ -998,9 +1014,10 @@ export function proveLookupMatchSplit(
 }
 
 export function proveLookupSubpipelinePushdown(
-    lookupStage: unknown,
-    unwindStage: unknown,
-    matchStage: unknown
+    lookupStage : unknown,
+    unwindStage : unknown,
+    matchStage  : unknown,
+    context     : GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT
 ): SubpipelinePushdownProof | null
 {
     if(
@@ -1008,6 +1025,11 @@ export function proveLookupSubpipelinePushdown(
         || Object.keys( lookupStage ).length !== 1
         || !isPlainObject( lookupStage.$lookup )
     )
+    {
+        return null;
+    }
+
+    if( context.strictErrors && !isStageProvenErrorFree( lookupStage ))
     {
         return null;
     }

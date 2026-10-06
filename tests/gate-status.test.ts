@@ -7,7 +7,8 @@ import {
     optimizePipeline
 } from '../src/index.js';
 import {
-    getPipelineTransformationRegistryStatus
+    getPipelineTransformationRegistryStatus,
+    optimizePipelineWithCandidateProfile
 } from '../src/passes/registry.js';
 import {
     filterProofManifest,
@@ -22,7 +23,7 @@ import {
 
 describe( 'Activation gate status and guard invariants', () =>
 {
-    it( 'returns a deep clone equal to input for optimizePipeline when production active list is empty', () =>
+    it( 'returns a deep clone equal to input for optimizePipeline when candidate profile is empty', () =>
     {
         const pipeline =
         [
@@ -32,11 +33,15 @@ describe( 'Activation gate status and guard invariants', () =>
             { $limit: 10 }
         ];
 
-        const optimized = optimizePipeline( pipeline );
+        const optimized = optimizePipelineWithCandidateProfile( pipeline, [] );
 
         expect( optimized ).toEqual( pipeline );
         expect( optimized ).not.toBe( pipeline );
         expect( optimized[0] ).not.toBe( pipeline[0] );
+
+        // Production optimizePipeline does not apply inactive passes like adjacent-match-merging
+        const inactivePipeline = [ { $match: { a: 1 } }, { $match: { b: 2 } } ];
+        expect( optimizePipeline( inactivePipeline ) ).toEqual( inactivePipeline );
     } );
 
     it( 'returns a clone equal to input for optimizeFilter when production active list is empty', () =>
