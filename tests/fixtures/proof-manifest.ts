@@ -430,6 +430,16 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'u9-generated-top-level-sort-project-commute',
         'u9-generated-nested-sort-project-commute',
         'u5-sort-project-retained-keys',
+        {
+            status: 'active',
+            proofRecheckNote: 'Proof audited: moves simple flag project before adjacent sort when every sort key stays visible; pure flag projections are error-free and preserve document field order.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-sort-project-commute',
+                strictFieldOrder: 'mixed-shape-sort-project-commute',
+                strictErrors: 'mixed-shape-sort-project-commute',
+            },
+            strictModeBehavior: 'preserved',
+        },
     ),
     evidence(
         'complex-projection-deferral',

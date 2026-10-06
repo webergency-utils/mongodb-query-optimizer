@@ -508,4 +508,23 @@ export const mixedShapeDifferentialCases: readonly MixedShapeDifferentialCase[] 
         observation: 'ordered-bson',
         expectedOriginalOutcome: 'success',
     },
+
+    // Polymorphic sort project commute
+    {
+        id: 'mixed-shape-sort-project-commute',
+        description: 'sort-project-commute advances simple project before sort over polymorphic documents',
+        passId: 'sort-project-commute',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: standardMixedShapeDocs,
+            },
+        },
+        pipeline: [
+            { $sort: { _id: 1, val: 1 } },
+            { $project: { _id: 1, val: 1, status: 1 } },
+        ],
+        observation: 'ordered-bson',
+        expectedOriginalOutcome: 'success',
+    },
 ];

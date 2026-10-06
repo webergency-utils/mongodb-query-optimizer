@@ -79,7 +79,8 @@ const activePipelineTransformationIds: readonly PipelineTransformationId[] = Obj
     'adjacent-project-merging',
     'adjacent-add-field-merging',
     'lookup-delay',
-    'redundant-lookup-elimination'
+    'redundant-lookup-elimination',
+    'sort-project-commute'
 ]);
 
 const containedPipelineTransformationIds: readonly PipelineTransformationId[] = Object.freeze([

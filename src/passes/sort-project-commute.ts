@@ -1,9 +1,10 @@
-import { PipelinePass } from './types';
+import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
+import { PipelinePass } from './types.js';
 import
 {
     proveSimpleProjectAdvanceAcrossSort
 }
-from './projection-proofs';
+from './projection-proofs.js';
 
 /**
  * Moves a simple flag project before an adjacent sort when every sort key
@@ -15,7 +16,7 @@ export class SortProjectCommutePass implements PipelinePass
     readonly name       = 'sort-project-commute';
     readonly stageTypes = [ '$project', '$sort' ] as const;
 
-    execute( pipeline: any[] ): any[]
+    execute( pipeline: any[], _context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {
         let changed = false;
         const result = [ ...pipeline ];
