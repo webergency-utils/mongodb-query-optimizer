@@ -1,48 +1,106 @@
-# Constraints
+# Correctness Constraints & Guarantees
 
-These constraints bound what `optimizeFilter` and `optimizePipeline` may change.
+These constraints define the formal correctness guarantees and boundary conditions that govern `@webergency-utils/mongodb-query-optimizer`.
 
-## Lookup execution
+---
 
-`$lookup` cannot fail.
+## 1. Core Equivalence Guarantee (R1)
 
-Missing `from`, authorization failures, BSON size limits, and other join execution errors are out of scope. If a lookup does fail, that failed execution is a different result from a successful pipeline. The optimizer therefore does not preserve lookup error occurrence or timing.
+Under MongoDB semantics, any optimized query filter or aggregation pipeline produced by this package must preserve exact document stream equivalence with the original form:
 
-Under this constraint, a simple equality `$lookup` may move past an adjacent `$match`, `$sort`, `$limit`, or `$skip` that does not read, write, modify, or remove the lookup alias.
+1. **Membership**: The set of documents returned by the optimized query or pipeline is identical to the original.
+2. **Multiplicity**: The count and duplicate multiplicity of documents match exactly across all pipeline stages.
+3. **Field Presence & Values**: All projected, computed, joined, or grouped field values match original values across all BSON data types (scalars, objects, arrays, dates, ObjectIds, binary, nulls, and missing fields).
+4. **Observable Order**: Deterministic sort orders are strictly preserved. When an explicit `$sort` is present, the final sequence of documents is preserved.
 
-A no-failure constraint on other stages would waive error occurrence, error text, and error timing the same way. That still does not license generic pipeline reordering.
+---
 
-## Generic reordering
+## 2. Field Order Guarantee (R2)
 
-Stages do not have a global safe order.
+- **Default Mode (`strictFieldOrder: false`)**:
+  - In MongoDB and JSON, document field order within a BSON document is generally considered relaxed. However, certain operations (such as composite key equality or hashing) may be sensitive to key order.
+  - In default mode, transformations may reorder adjacent fields (e.g. hoisting a computed sort key ahead of a `$lookup` join) when it improves query execution speed.
+- **Strict Mode (`strictFieldOrder: true`)**:
+  - Every transformation must preserve the exact byte-level BSON key order of every document in the stream.
+  - Passes that would change field order (such as `add-field-pushdown` moving fields past `$lookup`, or `lookup-delay` moving joined arrays relative to other fields) automatically step aside and preserve the original stage structure.
 
-Assuming stages do not fail, or treating a failure as a different result, only removes error-observability obligations. Adjacent swaps must still preserve the successful document stream: membership, multiplicity, field presence, field values, and observable order.
+---
 
-Generic priority reordering fails that obligation. The same `$addFields` then `$unset` leaks `transient` if swapped. `$addFields` then an inclusion `$project` keeps a computed field that the original pipeline dropped. `$lookup` then `$project: { name: 1 }` drops the alias if delayed, or drops the join key if the project moves first. `$unwind` or `$group` next to `$limit` changes which rows exist. `$sort` then `$project` can change order when the sort key is not kept.
+## 3. Error Observability Guarantee (R3, R6)
 
-Those are successful-result differences, not a different error for the same pipeline. A preferred stage list, priority bubble, or `canSwap` heuristic is not a proof of that.
+- **Default Mode (`strictErrors: false`)**:
+  - In read-only analytics queries, if an unselected or dropped document would trigger a runtime evaluation error in a partial expression (e.g. `$toInt` on a string, `$divide` by zero, or `$arrayElemAt` on a non-array), the optimizer may allow selective filters or `$limit` stages to discard that row earlier.
+  - As a result, a query that would have failed due to an error on an irrelevant row may succeed under optimization.
+- **Strict Mode (`strictErrors: true`)**:
+  - Error occurrence, error timing, and error conditions are strictly preserved.
+  - No filter or limit may be advanced past an expression that is not proven error-free (`errors !== 'none-known'`).
+  - Partial functions, type conversions, division, string slicing, and user-defined JavaScript (`$function`, `$accumulator`) act as strict barriers against stage reordering or dead-code elimination.
 
-Enabled pair-specific rewrites that preserve successful results:
+---
 
-- Dead `$addFields` / `$set` writes killed by a later `$unset`, overwrite, or simple `$project` when every stage in between does not observe those writes. A read of the write, an exclusion `$project` (it depends on `*`), `$$ROOT` / `$$CURRENT`, `$facet` / `$lookup`, and unknown stages still block.
-- Simple equality `$lookup` removed when the next stage discards the alias
-- `$sort` then simple `$project` swapped when every sort key stays visible
-- Deterministic `$addFields` / `$set` delayed past `$sort` when the sort keys do not overlap the writes
+## 4. Write-Path Safety & Side-Effect Protection (R5)
 
-`$unwind` or `$group` next to `$limit` still cannot move: they change which rows exist. Generic `stage-priority-reorder` stays contained.
+Pipelines that perform collection writes or external side effects must never risk partial writes, altered write timing, or masked runtime errors:
 
-## Contained Passes & Scheduler Invariants
+- **Automatic Strict Errors**: Any aggregation pipeline containing write stages (`$out` or `$merge`) automatically elevates to `strictErrors: true`.
+- **Barrier Containment**: Write stages act as impenetrable optimization barriers. No stage may commute past `$out` or `$merge`.
+- **Write-Path Advice**: For update and delete filters (such as `updateOne`, `updateMany`, `deleteOne`, `deleteMany` in Mongoose or native drivers), callers are strongly advised to specify `{ strictErrors: true }` to guarantee identical match criteria and avoid unintended side-effect elimination.
 
-The optimizer registry distinguishes active (proven sound across all BSON types and multikey arrays) from contained transformations:
+---
+
+## 5. Polymorphic Schema Safety (R4)
+
+MongoDB is inherently schema-flexible. Collections frequently contain polymorphic documents where a single field path may hold different BSON types across documents:
+- A field may be a scalar in some documents, an array in others, an object, or missing entirely.
+- Transformations must **never assume homogeneous types**:
+  - In `unwind-prefilter`, unwinding `$items` must account for documents where `items` is an object or scalar, as well as nested arrays (`items: [[{ ... }]]`). The injected prefilter uses a shape-safe `$or` guard rather than a naive `$elemMatch`.
+  - In `top-k-pushdown`, sort keys that are arrays in some documents and scalars in others follow MongoDB's BSON type comparison ordering without assuming scalar comparisons.
+  - Grouping keys and join keys must safely handle missing, null, or heterogeneously-typed values without crashing or producing invalid syntax.
+
+---
+
+## 6. Lookup Execution & Join Safety
+
+Unlike unconstrained generic query rewrites:
+- A simple `$lookup` cannot be unconditionally moved or eliminated.
+- **`lookup-delay`**: Delays `$lookup` execution past non-dependent filter and sort stages only when:
+  1. The filter or sort does not reference the lookup's target `as` alias.
+  2. The join alias is not required for document ordering.
+  3. Under `strictErrors: true`, the lookup subpipeline is proven error-free.
+  4. Under `strictFieldOrder: true`, delaying the lookup does not alter the relative order of fields in the resulting document.
+- **`redundant-lookup-elimination`**: Eliminates a `$lookup` stage only when downstream stages (`$project`, `$unset`) definitively discard the join alias without any intermediate stage reading it, and the lookup subpipeline cannot throw errors under the active error policy.
+
+---
+
+## 7. Configuration Options API (R7)
+
+Both public optimizer entry points accept an optional `OptimizerOptions` configuration object:
+
+```typescript
+export interface OptimizerOptions
+{
+    readonly strictFieldOrder?: boolean;
+    readonly strictErrors?: boolean;
+}
+```
+
+| Option | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `strictFieldOrder` | `boolean` | `false` | When `true`, preserves exact BSON document key ordering across all stages. |
+| `strictErrors` | `boolean` | `false` | When `true`, preserves exact runtime error occurrence and timing. Automatically enabled for pipelines with `$out` or `$merge`. |
+
+---
+
+## 8. Contained Passes & Registry Invariants (R10–R14)
+
+The optimizer registry distinguishes between **active** transformations (mathematically verified, accompanied by formal proof manifests, and verified across all BSON types in differential testing) and **contained / inactive** transformations:
 
 1. **`stage-priority-reorder` (Contained)**:
    - Stages in a MongoDB aggregation pipeline do not form a total-order lattice.
-   - A priority bubble sort (`STAGE_ORDER`) assumes stages can be commuted toward a global canonical order.
-   - In practice, pairwise swaps without domain-specific path and cardinality proofs cause silent document divergence (e.g. leaking temporary fields, altering document count across `$limit`, changing sort stability).
-   - Pipeline reordering must remain pairwise and proof-driven (e.g. `match-pushdown`, `sort-project-commute`, `lookup-delay`).
-
+   - Pairwise stage commutation must remain strictly proof-driven. Global priority bubble reordering is permanently contained.
 2. **`redundant-projection-elimination` (Contained)**:
-   - Eliminating an arbitrary `$project` stage across non-adjacent stages requires schema knowledge: in MongoDB, projection is lossy unless every field in the incoming stream is explicitly accounted for.
-   - Empty projections (`{ $project: {} }`) are invalid MongoDB syntax and trigger server errors; removing them would mask developer bugs.
-   - Adjacent identical or subsumable simple projections are already safely coalesced by the active `adjacent-project-merging` pass.
-   - Standalone elimination remains safely contained until schema-aware typing or full-stream path reachability proofs are supplied.
+   - Arbitrary projection removal without full schema knowledge is lossy in MongoDB. It remains contained until schema-aware typing is available.
+3. **`expr-match-normalization` (Inactive in Production)**:
+   - Normalizing `$expr` comparisons to top-level query operators requires rigorous array traversal safety guarantees to avoid changing match semantics over multikey arrays. It is held inactive in production pending complete array-path proofs.
+4. **`filter-optimization` & `adjacent-match-merging` (Inactive in Production)**:
+   - Boolean simplification rules for query filters are held inactive in production until every sub-rule is verified against multikey array semantics and short-circuit error behavior.

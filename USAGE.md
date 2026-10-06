@@ -72,8 +72,8 @@ import { optimizeFilter, optimizePipeline } from '@webergency-utils/mongodb-quer
 
 export function queryOptimizerPlugin(schema: Schema): void
 {
-    // Optimize find and count operations
-    schema.pre(['find', 'findOne', 'countDocuments', 'deleteMany', 'updateMany'], function ()
+    // Optimize read queries (find and count operations)
+    schema.pre(['find', 'findOne', 'countDocuments'], function ()
     {
         const currentFilter = this.getFilter();
         if (currentFilter && Object.keys(currentFilter).length > 0)
@@ -82,7 +82,17 @@ export function queryOptimizerPlugin(schema: Schema): void
         }
     });
 
-    // Optimize aggregate pipelines
+    // Optimize write mutations with strict error safety to guarantee identical mutation semantics
+    schema.pre(['deleteOne', 'deleteMany', 'updateOne', 'updateMany'], function ()
+    {
+        const currentFilter = this.getFilter();
+        if (currentFilter && Object.keys(currentFilter).length > 0)
+        {
+            this.setQuery(optimizeFilter(currentFilter, { strictErrors: true }));
+        }
+    });
+
+    // Optimize aggregate pipelines (write stages like $out and $merge automatically enforce strictErrors)
     schema.pre('aggregate', function ()
     {
         const pipeline = this.pipeline();
@@ -144,22 +154,29 @@ const hoisted = optimizePipeline(facetedPipeline);
 
 ### Pattern B: `$unwind` Pre-filtering
 
-When filtering on nested array items after an `$unwind`, documents with empty or missing arrays still undergo expensive memory unwinding unless pre-filtered:
+When filtering on subfields of unwound array elements after an `$unwind`, documents with non-matching elements or empty arrays still undergo expensive memory unwinding unless pre-filtered:
 
 ```typescript
 const pipeline = [
-    { $unwind: { path: '$tags', preserveNullAndEmptyArrays: false } },
-    { $match: { tags: 'featured' } }
+    { $unwind: { path: '$items', preserveNullAndEmptyArrays: false } },
+    { $match: { 'items.status': 'in_stock' } }
 ];
 
 const optimized = optimizePipeline(pipeline);
 
-// Result: Injects an $elemMatch pre-filter before $unwind to discard documents
-// without matching tags before array expansion:
+// Result: Injects a shape-safe pre-filter before $unwind to discard non-matching documents
+// while safely preserving polymorphic documents (e.g. where items is an object) and nested arrays:
 // [
-//   { $match: { tags: { $elemMatch: { $eq: 'featured' } } } },
-//   { $unwind: { path: '$tags', preserveNullAndEmptyArrays: false } },
-//   { $match: { tags: 'featured' } }
+//   {
+//     $match: {
+//       $or: [
+//         { 'items.status': 'in_stock' },
+//         { items: { $elemMatch: { $type: 'array' } } }
+//       ]
+//     }
+//   },
+//   { $unwind: { path: '$items', preserveNullAndEmptyArrays: false } },
+//   { $match: { 'items.status': 'in_stock' } }
 // ]
 ```
 
@@ -196,7 +213,7 @@ const optimized = optimizePipeline(pipeline);
 
 ## 4. AST Stage Introspection
 
-You can use the built-in analyzer `getStageInfo` to inspect what fields a stage reads or writes:
+You can use the built-in analyzer `getStageInfo` to inspect what fields a stage reads or creates:
 
 ```typescript
 import { getStageInfo } from '@webergency-utils/mongodb-query-optimizer';
@@ -210,7 +227,43 @@ const info = getStageInfo({
     }
 });
 
-console.log(info.reads);  // Set { 'inventory.warehouseId' }
-console.log(info.writes); // Set { 'warehouseDetails' }
-console.log(info.isPure); // true
+console.log(info.usedFields);     // Set { 'inventory.warehouseId' }
+console.log(info.producedFields); // Set { 'warehouseDetails' }
+console.log(info.isDestructive);  // false
 ```
+
+---
+
+## 5. Optimizer Options & Write-Path Guarantees
+
+Both `optimizePipeline` and `optimizeFilter` accept an optional `OptimizerOptions` configuration object:
+
+```typescript
+import {
+    optimizePipeline,
+    optimizeFilter,
+    type OptimizerOptions
+} from '@webergency-utils/mongodb-query-optimizer';
+
+// 1. Strict Field Order Mode
+// Guarantees exact BSON document key ordering byte-for-byte:
+const strictOrderPipeline = optimizePipeline(pipeline, {
+    strictFieldOrder: true
+});
+
+// 2. Strict Error Mode
+// Preserves runtime error occurrence, timing, and conditions:
+const strictErrorPipeline = optimizePipeline(pipeline, {
+    strictErrors: true
+});
+
+// 3. Combined Strict Mode
+const fullyStrictPipeline = optimizePipeline(pipeline, {
+    strictFieldOrder: true,
+    strictErrors: true
+});
+```
+
+### Write-Path Recommendations
+- **Aggregation Pipelines with `$out` or `$merge`**: Write stages automatically enforce `strictErrors: true` internally to prevent altering partial writes or suppressing runtime errors.
+- **Update and Delete Filters**: When passing query filters to destructive operations (`updateOne`, `updateMany`, `deleteOne`, `deleteMany`), always pass `{ strictErrors: true }` to guarantee that error-prone filter expressions are evaluated with identical safety semantics.

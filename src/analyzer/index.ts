@@ -186,7 +186,7 @@ function toStageInfo( semantics: StageSemantics ): StageInfo
     };
 }
 
-export function getStageInfo( stage: any, index: number ): StageInfo
+export function getStageInfo( stage: any, index: number = 0 ): StageInfo
 {
     return toStageInfo( analyzeStage( stage, index ));
 }

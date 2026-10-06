@@ -85,7 +85,7 @@ The optimizer evaluates queries and aggregation pipelines purely as Abstract Syn
                  │
                  ▼
       ┌──────────────────────┐
-      │  Proof-Guarded Pass  │ (19 active pipeline passes, 8 filter rules, synthesis)
+      │  Proof-Guarded Pass  │ (18 active pipeline passes, rigorous correctness proofs)
       └──────────┬───────────┘
                  │
                  ▼
@@ -97,41 +97,31 @@ The optimizer evaluates queries and aggregation pipelines purely as Abstract Syn
      Optimized Pipeline / Filter
 ```
 
-### Active Pipeline Transformations
-1. `expr-match-normalization`: Converts trivial `$expr` comparisons to indexable top-level query operators.
-2. `filter-optimization`: Applies Boolean algebra normalization to `$match` expressions.
-3. `adjacent-match-merging`: Collapses consecutive `$match` stages into a single stage.
-4. `group-filter-pushdown`: Pushes post-`$group` filters before `$group` when grouping by 1-to-1 deterministic keys.
-5. `bucket-filter-pushdown`: Pushes selective pre-filters before `$bucket` and `$bucketAuto` stages.
-6. `unwind-prefilter`: Injects selective `$elemMatch` before `$unwind` to discard empty arrays early.
-7. `redundant-sort-elimination`: Collapses consecutive `$sort` stages where the latter completely supersedes the earlier.
-8. `sort-by-count-simplification`: Converts verbose `$group` + `$sort` count patterns into canonical `$sortByCount`.
-9. `limit-skip-coalescing`: Combines adjacent `$limit` and `$skip` stages into minimal offsets and counts.
-10. `match-pushdown`: Moves filter stages ahead of expensive joins and projections.
-11. `limit-advance`: Advances `$limit` ahead of non-cardinality altering stages.
+### Active Pipeline Transformations (Production Registry)
+1. `add-field-pushdown`: Decomposes `$addFields`/`$set` and safely pushes sort/match-dependent expressions before `$lookup`.
+2. `top-k-pushdown`: Advances `$sort` and `$limit` slices ahead of 1:1 compute stages while respecting error guards.
+3. `lookup-delay`: Delays `$lookup` joins past non-dependent filter and sort stages.
+4. `unwind-prefilter`: Injects shape-safe `$or` prefilters before `$unwind` to discard non-matching documents without dropping polymorphic types or nested arrays.
+5. `match-pushdown`: Moves selective filter stages ahead of joins and projections.
+6. `limit-advance`: Advances `$limit` ahead of non-cardinality altering projections and stages.
+7. `group-filter-pushdown`: Pushes post-`$group` filters before `$group` when grouping by 1-to-1 deterministic keys.
+8. `bucket-filter-pushdown`: Pushes selective pre-filters before `$bucket` and `$bucketAuto` stages.
+9. `redundant-sort-elimination`: Collapses consecutive `$sort` stages where the latter supersedes the earlier.
+10. `sort-by-count-simplification`: Converts verbose `$group` + `$sort` count patterns into canonical `$sortByCount`.
+11. `limit-skip-coalescing`: Combines adjacent `$limit` and `$skip` stages into minimal offsets and counts.
 12. `unused-field-pruning`: Strips dead fields created in `$addFields`/`$set` when later stages discard them.
 13. `adjacent-project-merging`: Fuses consecutive `$project` stages into a single specification.
 14. `adjacent-add-field-merging`: Merges adjacent `$addFields` or `$set` stages.
-15. `lookup-delay`: Delays `$lookup` execution past non-dependent filter and sort stages.
-16. `redundant-lookup-elimination`: Drops unused `$lookup` joins whose aliases are discarded.
-17. `sort-project-commute`: Commutes `$sort` ahead of `$project` when sort fields are retained.
-18. `complex-projection-deferral`: Pushes complex computed fields downstream past selective filters.
-19. `facet-prefix-hoisting`: Extracts identical prefix stages shared across all branches of a `$facet`.
+15. `redundant-lookup-elimination`: Drops unused `$lookup` joins whose aliases are discarded downstream.
+16. `sort-project-commute`: Commutes `$sort` ahead of `$project` when all sort keys remain visible.
+17. `complex-projection-deferral`: Pushes complex computed fields downstream past selective filters.
+18. `facet-prefix-hoisting`: Extracts identical prefix stages shared across all branches of a `$facet`.
 
-### Covered-Projection Synthesis & Advanced Passes
-- `covered-projection-synthesis`: Computes the transitive closure of all downstream field references and synthesizes minimal covering `$project` boundaries before memory-heavy or projection-sensitive stages (`$group`, `$sort`, `$unwind`), shedding unreferenced document payload bytes early.
-- `redundant-projection-elimination`: Eliminates identity `$project` stages that duplicate incoming stream semantics.
-- `stage-priority-reorder`: Topological canonicalization ensuring deterministic stage ordering.
-
-### Active Filter Normalization Rules
-- `simplify-equality`: Normalizes explicit `{ field: { $eq: value } }` to `{ field: value }`.
-- `simplify-singleton-in`: Deduplicates `$in` arrays and simplifies singleton sets to scalar equality.
-- `flatten-conjunctions`: Flattens nested `$and` arrays.
-- `flatten-disjunctions`: Flattens nested `$or` arrays.
-- `simplify-conjunction-identities`: Eliminates empty filter documents `{}` from conjunctions.
-- `simplify-disjunction-identities`: Eliminates duplicate `$or` branches and match-all branches.
-- `deduplicate-conjunctions`: Strips structurally identical conditions in `$and`.
-- `merge-conjunctions`: Merges non-conflicting field conditions in `$and` into a single subdocument while honoring MongoDB multikey array semantics.
+### Inactive & Contained Passes
+- `expr-match-normalization`: Inactive in production pending array traversal safety proofs across multikey arrays.
+- `filter-optimization` & `adjacent-match-merging`: Inactive in production pending full formal verification of filter rules under multikey array and short-circuit evaluation semantics.
+- `stage-priority-reorder`: Contained; aggregation pipeline stages do not form a total-order lattice.
+- `redundant-projection-elimination`: Contained; lossy without complete schema knowledge.
 
 ### Performance & Zero-Cost Architecture
 
@@ -163,12 +153,15 @@ In MongoDB, `{ tags: { $gt: 5, $lt: 10 } }` requires a single array element to s
 
 ## API Reference
 
-### `optimizePipeline<T = any>(pipeline: any[]): T[]`
+### `optimizePipeline<T = any>(pipeline: any[], options?: OptimizerOptions): T[]`
 
-Optimizes an array of MongoDB aggregation pipeline stages.
+Optimizes an array of MongoDB aggregation pipeline stages with formal equivalence guarantees.
 
 #### Parameters
 - `pipeline` (`any[]`, required): The MongoDB aggregation pipeline to optimize.
+- `options` (`OptimizerOptions`, optional): Configuration options controlling strictness:
+  - `strictFieldOrder` (`boolean`, default: `false`): When `true`, preserves exact byte-for-byte BSON document key order.
+  - `strictErrors` (`boolean`, default: `false`): When `true`, preserves runtime error occurrence and evaluation timing. Note: pipelines containing write stages (`$out`, `$merge`) automatically elevate to `strictErrors: true`.
 
 #### Returns
 - `T[]`: A new, optimized aggregation pipeline array. The original input array is never mutated.
@@ -192,12 +185,15 @@ const optimized = optimizePipeline(pipeline);
 
 ---
 
-### `optimizeFilter<T = any>(filter: any): T`
+### `optimizeFilter<T = any>(filter: any, options?: OptimizerOptions): T`
 
 Normalizes and simplifies a MongoDB query filter document.
 
 #### Parameters
 - `filter` (`any`, required): The query filter to normalize.
+- `options` (`OptimizerOptions`, optional): Configuration options controlling strictness:
+  - `strictFieldOrder` (`boolean`, default: `false`): Preserves exact BSON document key ordering.
+  - `strictErrors` (`boolean`, default: `false`): Preserves runtime error conditions. (Recommended for `updateOne`, `updateMany`, `deleteOne`, `deleteMany` filters).
 
 #### Returns
 - `T`: The simplified filter document. If no optimizations apply, a clean structurally equivalent filter is returned.
@@ -221,7 +217,7 @@ const optimized = optimizeFilter(filter);
 
 ### `getStageInfo(stage: any, index?: number): StageInfo`
 
-Analyzes an aggregation stage and returns structural metadata, read/write path sets, and purity flags.
+Analyzes an aggregation stage and returns structural metadata and field dependencies.
 
 #### Parameters
 - `stage` (`any`, required): An aggregation pipeline stage object (e.g. `{ $project: { name: 1 } }`).
@@ -230,9 +226,12 @@ Analyzes an aggregation stage and returns structural metadata, read/write path s
 #### Returns
 - `StageInfo`: An object containing:
   - `operator`: The stage operator string (e.g. `'$match'`, `'$project'`).
-  - `reads`: Set of field paths read by the stage.
-  - `writes`: Set of field paths written by the stage.
-  - `isPure`: Whether the stage is deterministic and free of non-deterministic operators (`$rand`, `$function`).
+  - `usedFields`: Set of field paths read/referenced by the stage.
+  - `producedFields`: Set of field paths created by the stage.
+  - `modifiedFields`: Set of field paths modified by the stage.
+  - `removedFields`: Set of field paths removed by the stage.
+  - `isDestructive`: Whether the stage replaces document structure (e.g. `$group`, `$project`).
+  - `altersCount`: Whether the stage changes document cardinality.
 
 #### Code Example
 ```typescript
@@ -240,10 +239,10 @@ import { getStageInfo } from '@webergency-utils/mongodb-query-optimizer';
 
 const info = getStageInfo({ $project: { fullName: { $concat: ['$firstName', ' ', '$lastName'] } } });
 
-console.log(info.operator); // '$project'
-console.log(info.reads);    // Set { 'firstName', 'lastName' }
-console.log(info.writes);   // Set { 'fullName' }
-console.log(info.isPure);   // true
+console.log(info.operator);       // '$project'
+console.log(info.usedFields);     // Set { 'firstName', 'lastName' }
+console.log(info.producedFields); // Set { 'fullName' }
+console.log(info.isDestructive);  // true
 ```
 
 ## Troubleshooting
