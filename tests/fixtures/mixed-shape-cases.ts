@@ -389,4 +389,28 @@ export const mixedShapeDifferentialCases: readonly MixedShapeDifferentialCase[] 
         observation: 'ordered-bson',
         expectedOriginalOutcome: 'success',
     },
+
+    // Polymorphic sort-by-count simplification
+    {
+        id: 'mixed-shape-sort-by-count-simplification',
+        description: 'sort-by-count-simplification collapses group + sort over polymorphic val field',
+        passId: 'sort-by-count-simplification',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: standardMixedShapeDocs,
+            },
+        },
+        pipeline: [
+            {
+                $group: {
+                    _id: '$status',
+                    count: { $sum: 1 },
+                },
+            },
+            { $sort: { count: -1 } },
+        ],
+        observation: 'multiset',
+        expectedOriginalOutcome: 'success',
+    },
 ];

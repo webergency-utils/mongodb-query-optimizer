@@ -110,6 +110,7 @@ describe('explicit immutable transformation registries', () =>
             'bucket-filter-pushdown',
             'unwind-prefilter',
             'redundant-sort-elimination',
+            'sort-by-count-simplification',
             'match-pushdown',
             'limit-advance',
             'add-field-pushdown',

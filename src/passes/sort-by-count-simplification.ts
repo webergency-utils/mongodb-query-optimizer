@@ -1,3 +1,4 @@
+import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
 import { PipelinePass } from './types.js';
 import { proveSortByCountSimplification } from './sort-by-count-proofs.js';
 
@@ -6,7 +7,7 @@ export class SortByCountSimplificationPass implements PipelinePass
     readonly name       = 'sort-by-count-simplification';
     readonly stageTypes = [ '$sortByCount', '$group' ] as const;
 
-    execute( pipeline: any[] ): any[]
+    execute( pipeline: any[], _context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {
         const result: any[] = [];
 

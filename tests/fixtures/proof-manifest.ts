@@ -243,6 +243,16 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'u9-generated-top-level-sort-by-count-simplification',
         'u9-generated-nested-sort-by-count-simplification',
         'feat-sort-by-count-simplification-oracle',
+        {
+            status: 'active',
+            proofRecheckNote: 'Proof audited: collapses exact pattern { $group: { _id: expr, count: { $sum: 1 } } }, { $sort: { count: -1 } } to native MongoDB $sortByCount alias. Preserves exact field order (_id, count) and error characteristics across all types.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-sort-by-count-simplification',
+                strictFieldOrder: 'mixed-shape-sort-by-count-simplification',
+                strictErrors: 'mixed-shape-sort-by-count-simplification'
+            },
+            strictModeBehavior: 'preserved'
+        }
     ),
     evidence(
         'limit-skip-coalescing',

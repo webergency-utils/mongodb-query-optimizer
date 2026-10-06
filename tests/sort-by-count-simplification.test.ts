@@ -167,4 +167,20 @@ describe( 'SortByCountSimplificationPass execution and parity', () =>
             { $sortByCount: '$tag' }
         ]);
     });
+
+    it( 'accepts guarantee context in execute', () =>
+    {
+        const pipeline =
+        [
+            { $group: { _id: '$tag', count: { $sum: 1 } } },
+            { $sort: { count: -1 } }
+        ];
+
+        const optimized = pass.execute( pipeline, { strictFieldOrder: true, strictErrors: true } );
+
+        expect( optimized ).toEqual(
+        [
+            { $sortByCount: '$tag' }
+        ]);
+    });
 });
