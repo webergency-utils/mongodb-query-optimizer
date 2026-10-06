@@ -102,7 +102,7 @@ const interactionDescriptors: readonly InteractionDescriptor[] = Object.freeze([
     },
 ]);
 
-function seededRandom(seed: number): () => number
+export function seededRandom(seed: number): () => number
 {
     let state = seed >>> 0;
 
