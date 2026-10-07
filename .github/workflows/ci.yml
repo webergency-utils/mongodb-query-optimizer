@@ -7,8 +7,7 @@ on:
       - main
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: read-all
 
 jobs:
   quality:
@@ -28,7 +27,11 @@ jobs:
       - name: Run unit tests
         run: npm test
       - name: Run coverage
-        run: npm run test:coverage
+        run: npm run coverage
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Build package
         run: npm run build
 

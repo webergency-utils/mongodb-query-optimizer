@@ -131,3 +131,7 @@ dist
 .pnp.*
 .DS_Store
 .npmrc
+test*.query
+test.*.query
+scripts/
+dist-fuzz

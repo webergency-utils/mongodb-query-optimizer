@@ -2,40 +2,45 @@
   "name": "@webergency-utils/mongodb-query-optimizer",
   "version": "0.0.1",
   "description": "Deterministic, zero-dependency MongoDB query and aggregation pipeline optimizer with formal correctness proofs.",
-  "license": "MIT",
+  "type": "module",
   "author": "radixxko",
-  "main": "dist/index.js",
-  "module": "dist/index.mjs",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.js"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     }
   },
   "files": [
-    "dist",
-    "USAGE.md",
-    "SUPPORT.md",
-    "README.md"
+    "dist/**/*"
   ],
-  "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
-  },
   "scripts": {
-    "clean": "rm -rf ./dist/* node_modules && npm ci",
-    "commit": "node -e \"const version = require('./package.json').version.trim(); require('child_process').execSync('git add . && git commit -m \\\"Version ' + version + '\\\"');\"",
-    "build": "tsup",
+    "clean": "rm -rf ./dist/*",
+    "build": "npm run clean && tsup",
     "typecheck:source": "tsc --noEmit -p tsconfig.json",
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json",
     "typecheck": "npm run typecheck:source && npm run typecheck:tests",
     "test": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
     "test:all": "npm run typecheck && npm test && npm run test:integration && npm run test:coverage && npm run build",
-    "test:coverage": "vitest run --project unit --coverage",
+    "coverage": "vitest run --project unit --coverage",
+    "test:coverage": "npm run coverage",
+    "fuzz": "jazzer fuzz_index.cjs",
     "optimize": "tsx scripts/optimize.ts",
-    "version": "npm run build && npm publish && npm run commit && git push"
+    "commit": "node -e \"const version = require('./package.json').version.trim(); require('child_process').execSync('git add . && git commit -m \\\"Version ' + version + '\\\"');\"",
+    "version": "npm run build && npm publish --access public && npm run commit && git push"
   },
   "repository": {
     "type": "git",
@@ -46,12 +51,13 @@
   },
   "homepage": "https://github.com/webergency-utils/mongodb-query-optimizer#readme",
   "devDependencies": {
-    "@types/node": "^25.9.1",
-    "@vitest/coverage-v8": "^4.1.6",
+    "@jazzer.js/core": "^4.0.0",
+    "@types/node": "^26.0.0",
+    "@vitest/coverage-v8": "^4.1.9",
     "mongodb": "7.6.0",
     "tsup": "^8.5.1",
-    "tsx": "^4.0.0",
-    "typescript": "^6.0.3",
-    "vitest": "^4.1.6"
+    "tsx": "^4.19.3",
+    "typescript": "~5.7.0",
+    "vitest": "^4.1.9"
   }
 }

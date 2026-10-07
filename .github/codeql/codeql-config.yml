@@ -1,0 +1,5 @@
+name: MongoDB Query Optimizer CodeQL config
+
+paths-ignore:
+  - 'tests/**'
+  - 'scripts/**'
