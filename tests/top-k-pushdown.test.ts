@@ -438,13 +438,13 @@ describe( 'TopKPushdownPass execution and mock verification', () =>
             expect( isExpressionCompletelyDeterministic( { $function: { body: 'return performance.now();', args: [] } } )).toBe( false );
 
             // $function under strictErrors
-            expect( isExpressionCompletelyDeterministic( { $function: { body: 'return a + b;', args: [ '$a', '$b' ] } }, true )).toBe( false );
+            expect( isExpressionCompletelyDeterministic( { $function: { body: 'return a + b;', args: [ '$a', '$b' ], lang: 'js' } }, true )).toBe( false );
 
             // $function args validity
-            expect( isExpressionCompletelyDeterministic( { $function: { body: 'return 1;', args: [ '$$ROOT' ] } } )).toBe( false );
-            expect( isExpressionCompletelyDeterministic( { $function: { body: 'return 1;', args: [ '$$NOW' ] } } )).toBe( false );
-            expect( isExpressionCompletelyDeterministic( { $function: { body: 'return 1;', args: [ { $rand: {} } ] } } )).toBe( false );
-            expect( isExpressionCompletelyDeterministic( { $function: { body: 'return 1;', args: [ '$a' ] } } )).toBe( true );
+            expect( isExpressionCompletelyDeterministic( { $function: { body: 'return 1;', args: [ '$$ROOT' ], lang: 'js' } } )).toBe( false );
+            expect( isExpressionCompletelyDeterministic( { $function: { body: 'return 1;', args: [ '$$NOW' ], lang: 'js' } } )).toBe( false );
+            expect( isExpressionCompletelyDeterministic( { $function: { body: 'return 1;', args: [ { $rand: {} } ], lang: 'js' } } )).toBe( false );
+            expect( isExpressionCompletelyDeterministic( { $function: { body: 'return 1;', args: [ '$a' ], lang: 'js' } } )).toBe( true );
         });
 
         it( 'collects expression dependencies correctly', () =>

@@ -643,5 +643,11 @@ function heuristicTopKHardeningCases(): MixedShapeDifferentialCase[]
             { $sort: { a: 1, b: 1 } },
             { $limit: 3 },
         ] ),
+        topKCase( 'mixed-shape-heuristic-top-k-nested-function', 'Heuristic Top-K hoists a deterministic $function nested inside another expression', [
+            lookup,
+            { $addFields: { n: { $add: [ { $function: { body: 'function( t ) { return t.length; }', args: [ '$tags' ], lang: 'js' } }, 0 ] } } },
+            { $sort: { n: -1, _id: 1 } },
+            { $limit: 2 },
+        ] ),
     ];
 }

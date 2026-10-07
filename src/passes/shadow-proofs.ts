@@ -59,61 +59,90 @@ function stageTouchesPaths( stage: unknown, paths: Iterable<string> ): boolean
         || !arePathsDisjoint( semantics.removes, required );
 }
 
+/**
+ * Best-effort denylist for JavaScript in `$function` bodies whose result can differ between two
+ * evaluations of the same arguments: clocks, randomness, identifiers, global or receiver state,
+ * dynamic code and timers. This is not a sandbox; see CONSTRAINTS.md.
+ */
+const NON_DETERMINISTIC_FUNCTION_BODY =
+    /\b(Date|crypto|performance|ObjectId|UUID|globalThis|this|eval|Function|setTimeout|setInterval|setImmediate)\b|\bMath\s*(\.\s*random\b|\[)/;
+
+function isAcceptableFunctionSpec( spec: unknown ): boolean
+{
+    return isPlainObject( spec )
+        && spec.lang === 'js'
+        && typeof spec.body === 'string'
+        && Array.isArray( spec.args )
+        && !NON_DETERMINISTIC_FUNCTION_BODY.test( spec.body );
+}
+
+/**
+ * Visits every `$function` node outside `$literal` subtrees. Returns false as soon as the
+ * visitor rejects one.
+ */
+function everyFunctionCall( value: unknown, visit: ( spec: unknown ) => boolean ): boolean
+{
+    if( Array.isArray( value ))
+    {
+        return value.every(( entry ) => everyFunctionCall( entry, visit ));
+    }
+
+    if( !isPlainObject( value ) || '$literal' in value )
+    {
+        return true;
+    }
+
+    return Object.entries( value ).every(( [ key, nested ] ) =>
+    {
+        return key === '$function'
+            ? visit( nested ) && everyFunctionCall(( nested as Record<string, unknown> ).args, visit )
+            : everyFunctionCall( nested, visit );
+    });
+}
+
+/**
+ * Replaces each `$function` node with the array of its arguments, so the normal expression
+ * analyzer sees exactly what the call reads while argument variable scope (`$$this` inside
+ * `$map`, `$let` variables) is preserved. `$literal` subtrees are left untouched.
+ */
+function substituteFunctionCalls( value: unknown ): unknown
+{
+    if( Array.isArray( value ))
+    {
+        return value.map( substituteFunctionCalls );
+    }
+
+    if( !isPlainObject( value ) || '$literal' in value )
+    {
+        return value;
+    }
+
+    if( '$function' in value )
+    {
+        const args = isPlainObject( value.$function ) ? value.$function.args : undefined;
+
+        return Array.isArray( args ) ? args.map( substituteFunctionCalls ) : [];
+    }
+
+    return Object.fromEntries( Object.entries( value ).map(( [ key, nested ] ) => [ key, substituteFunctionCalls( nested ) ] ));
+}
+
 export function isExpressionCompletelyDeterministic( expr: unknown, strictErrors: boolean = false ): boolean
 {
-    if( typeof expr === 'string' && /\$\$(NOW|CLUSTER_TIME)\b/.test( expr ))
+    if( /\$\$(NOW|CLUSTER_TIME)\b/.test( String( JSON.stringify( expr ))))
     {
         return false;
     }
 
-    if( expr && typeof expr === 'object' && /\$\$(NOW|CLUSTER_TIME)\b/.test( JSON.stringify( expr ) ))
+    // User code can throw, and substitution would hide that from the error analysis.
+    const functionsAcceptable = everyFunctionCall( expr, ( spec ) => !strictErrors && isAcceptableFunctionSpec( spec ));
+
+    if( !functionsAcceptable )
     {
         return false;
     }
 
-    if( expr && typeof expr === 'object' && !Array.isArray( expr ))
-    {
-        const obj = expr as Record<string, unknown>;
-
-        if( '$function' in obj && isPlainObject( obj.$function ))
-        {
-            if( strictErrors )
-            {
-                return false;
-            }
-
-            const fnObj = obj.$function as Record<string, unknown>;
-
-            if( typeof fnObj.body !== 'string' || !Array.isArray( fnObj.args ))
-            {
-                return false;
-            }
-
-            if( /\b(Date|Math\.random|crypto|performance\.now)\b/.test( fnObj.body ))
-            {
-                return false;
-            }
-
-            for( const arg of fnObj.args )
-            {
-                const argSummary = analyzeExpression( arg );
-
-                if(
-                    argSummary.unknown
-                    || argSummary.dependencies.unknown
-                    || argSummary.dependencies.local.has( '*' )
-                    || argSummary.determinism !== 'deterministic'
-                )
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-    }
-
-    const summary = analyzeExpression( expr );
+    const summary = analyzeExpression( substituteFunctionCalls( expr ));
 
     if(
         summary.unknown
@@ -125,51 +154,12 @@ export function isExpressionCompletelyDeterministic( expr: unknown, strictErrors
         return false;
     }
 
-    if( strictErrors && summary.errors !== 'none-known' )
-    {
-        return false;
-    }
-
-    return true;
+    return !strictErrors || summary.errors === 'none-known';
 }
 
 export function collectExpressionDependencies( expr: unknown ): Set<string>
 {
-    const deps = new Set<string>();
-
-    if( expr && typeof expr === 'object' && !Array.isArray( expr ))
-    {
-        const obj = expr as Record<string, unknown>;
-
-        if( '$function' in obj && isPlainObject( obj.$function ))
-        {
-            const fnObj = obj.$function as Record<string, unknown>;
-
-            if( Array.isArray( fnObj.args ))
-            {
-                for( const arg of fnObj.args )
-                {
-                    const s = analyzeExpression( arg );
-
-                    for( const p of s.dependencies.local )
-                    {
-                        deps.add( p );
-                    }
-                }
-            }
-
-            return deps;
-        }
-    }
-
-    const summary = analyzeExpression( expr );
-
-    for( const p of summary.dependencies.local )
-    {
-        deps.add( p );
-    }
-
-    return deps;
+    return new Set( analyzeExpression( substituteFunctionCalls( expr )).dependencies.local );
 }
 
 /**
