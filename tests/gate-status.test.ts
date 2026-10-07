@@ -39,8 +39,8 @@ describe( 'Activation gate status and guard invariants', () =>
         expect( optimized ).not.toBe( pipeline );
         expect( optimized[0] ).not.toBe( pipeline[0] );
 
-        // Production optimizePipeline does not apply inactive passes like adjacent-match-merging
-        const inactivePipeline = [ { $match: { a: 1 } }, { $match: { b: 2 } } ];
+        // Production optimizePipeline does not apply inactive passes like expr-match-normalization
+        const inactivePipeline = [ { $match: { $expr: { $eq: [ '$a', 1 ] } } } ];
         expect( optimizePipeline( inactivePipeline ) ).toEqual( inactivePipeline );
     } );
 

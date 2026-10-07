@@ -26,6 +26,7 @@ export default defineConfig({
         "src/passes/expression-simplification.ts": { branches: 100 },
         "src/passes/facet-prefix-hoisting.ts": { branches: 100 },
         "src/passes/facet-proofs.ts": { branches: 100 },
+        "src/passes/filter-optimization.ts": { branches: 100 },
         "src/passes/guarantee-guards.ts": { branches: 100 },
         "src/passes/group-filter-pushdown.ts": { branches: 100 },
         "src/passes/group-pushdown-proofs.ts": { branches: 100 },

@@ -224,8 +224,14 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'u9-generated-nested-filter-optimization',
         'pipeline-invalid-empty-logical-array-contained',
         {
-            status: 'inactive',
-            reason: 'Filter optimization pass delegates to the filter rule registry; inactive pending standalone filter rule gating across mixed-shape pipelines.'
+            status: 'active',
+            proofRecheckNote: 'Proof audited: recursively applies safe active filter rules across all $match stages; preserves multikey array semantics and field ordering; error fidelity guaranteed by isFilterRewriteSafe.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-match-pushdown',
+                strictFieldOrder: 'mixed-shape-match-pushdown',
+                strictErrors: 'mixed-shape-match-pushdown'
+            },
+            strictModeBehavior: 'preserved'
         }
     ),
     evidence(
@@ -235,8 +241,14 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'u9-generated-nested-adjacent-match-merging',
         'u4-pipeline-nested-facet-filters',
         {
-            status: 'inactive',
-            reason: 'Merging adjacent $match stages across multikey or dotted paths alters array element independent matching semantics; blocked by multikey traversal safety.'
+            status: 'active',
+            proofRecheckNote: 'Proof audited: merges adjacent $match stages into $and arrays without collapsing conditions on the same field into single subdocuments; preserves multikey array semantics and error fidelity.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-match-pushdown',
+                strictFieldOrder: 'mixed-shape-match-pushdown',
+                strictErrors: 'mixed-shape-match-pushdown'
+            },
+            strictModeBehavior: 'preserved'
         }
     ),
     evidence(

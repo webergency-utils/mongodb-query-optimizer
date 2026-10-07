@@ -59,6 +59,21 @@ export interface PipelineTemplate
 
 export const RANDOM_PIPELINE_TEMPLATES: readonly PipelineTemplate[] = Object.freeze([
     {
+        passId: 'filter-optimization',
+        buildPipeline: ( _random, _index ) => [
+            { $sort: { _id: 1 } },
+            { $match: { $and: [ {}, { status: 'active' } ] } }
+        ]
+    },
+    {
+        passId: 'adjacent-match-merging',
+        buildPipeline: ( _random, _index ) => [
+            { $sort: { _id: 1 } },
+            { $match: { status: 'active' } },
+            { $match: { score: { $gt: 10 } } }
+        ]
+    },
+    {
         passId: 'group-filter-pushdown',
         buildPipeline: ( _random, _index ) => [
             { $sort: { _id: 1 } },
