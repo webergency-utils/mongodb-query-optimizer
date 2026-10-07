@@ -329,6 +329,23 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         }
     ),
     evidence(
+        'heuristic-match-pushdown',
+        'feat-heuristic-match-pushdown-focused',
+        'u9-generated-top-level-heuristic-match-pushdown',
+        'u9-generated-nested-heuristic-match-pushdown',
+        'feat-heuristic-match-pushdown-oracle',
+        {
+            status: 'active',
+            proofRecheckNote: 'Proof audited: hoists deterministic computed-field filter conjuncts across costly stages ($lookup, $graphLookup, $function) using temporary shadow fields; unsets shadow fields before downstream readers; rejects dotted keys and __heuristic_ fields; constrained under strictErrors when crossed stage may error.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-heuristic-match-pushdown',
+                strictFieldOrder: 'mixed-shape-heuristic-match-pushdown',
+                strictErrors: 'mixed-shape-heuristic-match-pushdown'
+            },
+            strictModeBehavior: 'constrained'
+        }
+    ),
+    evidence(
         'limit-advance',
         'u5-limit-passive-top-level',
         'u9-generated-top-level-limit-advance',

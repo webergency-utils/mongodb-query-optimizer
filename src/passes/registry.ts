@@ -16,6 +16,7 @@ import { FilterOptimizationPass } from './filter-optimization';
 import { GroupFilterPushdownPass } from './group-filter-pushdown';
 import { LimitSkipCoalescingPass } from './limit-skip-coalescing';
 import { MatchPushdownPass } from './match-pushdown';
+import { HeuristicMatchPushdownPass } from './heuristic-match-pushdown';
 import {
     LimitAdvancePass,
     LookupDelayPass,
@@ -44,6 +45,7 @@ const registeredPipelineTransformationIds = Object.freeze([
     'sort-by-count-simplification',
     'limit-skip-coalescing',
     'match-pushdown',
+    'heuristic-match-pushdown',
     'limit-advance',
     'add-field-pushdown',
     'top-k-pushdown',
@@ -72,6 +74,7 @@ const activePipelineTransformationIds: readonly PipelineTransformationId[] = Obj
     'sort-by-count-simplification',
     'limit-skip-coalescing',
     'match-pushdown',
+    'heuristic-match-pushdown',
     'limit-advance',
     'add-field-pushdown',
     'top-k-pushdown',
@@ -118,6 +121,7 @@ const candidatePipelineTransformationRegistry: Readonly<
     'sort-by-count-simplification': () => new SortByCountSimplificationPass(),
     'limit-skip-coalescing': () => new LimitSkipCoalescingPass(),
     'match-pushdown': () => new MatchPushdownPass(),
+    'heuristic-match-pushdown': () => new HeuristicMatchPushdownPass(),
     'limit-advance': () => new LimitAdvancePass(),
     'add-field-pushdown': () => new AddFieldPushdownPass(),
     'top-k-pushdown': () => new TopKPushdownPass(),

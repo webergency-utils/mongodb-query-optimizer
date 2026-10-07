@@ -114,6 +114,15 @@ export const RANDOM_PIPELINE_TEMPLATES: readonly PipelineTemplate[] = Object.fre
         ]
     },
     {
+        passId: 'heuristic-match-pushdown',
+        buildPipeline: ( _random, _index ) => [
+            { $lookup: { from: 'foreign', localField: 'foreignId', foreignField: '_id', as: 'items' } },
+            { $addFields: { k: { $size: { $ifNull: [ '$items', [] ] } } } },
+            { $match: { k: { $gt: 0 } } },
+            { $sort: { _id: 1 } }
+        ]
+    },
+    {
         passId: 'limit-advance',
         buildPipeline: ( _random, _index ) => [
             { $project: { _id: 1, status: 1, score: 1 } },

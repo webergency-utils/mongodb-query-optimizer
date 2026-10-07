@@ -49,7 +49,7 @@ export function arePathsDisjoint(
     return true;
 }
 
-function stageTouchesPaths( stage: unknown, paths: Iterable<string> ): boolean
+export function stageTouchesPaths( stage: unknown, paths: Iterable<string> ): boolean
 {
     const semantics = analyzeStage( stage );
     const required = [ ...paths ];
@@ -283,7 +283,7 @@ export function findShadowTargetIndex(
             semantics.unknown
             || semantics.dependencies.unknown
             || semantics.order !== 'preserves'
-            || !isRangeCardinality( semantics.cardinality, allowFilters )
+            || !isPermittedRangeStage( semantics, allowFilters )
             || stageTouchesPaths( stage, requiredPaths )
             || ( context.strictErrors && !isStageProvenErrorFree( stage ))
         )
@@ -297,15 +297,15 @@ export function findShadowTargetIndex(
     return targetIndex < minProviderIndex ? targetIndex : null;
 }
 
-function isRangeCardinality( cardinality: string, allowFilters: boolean ): boolean
+function isPermittedRangeStage( semantics: { readonly cardinality: string; readonly operator: string }, allowFilters: boolean ): boolean
 {
-    return cardinality === 'preserves' || ( allowFilters && cardinality === 'filters' );
+    return semantics.cardinality === 'preserves' || ( allowFilters && semantics.operator === '$match' );
 }
 
 /**
  * Validates the whole range `[targetIndex, consumerIndex)` that the shadow rewrite spans:
  *
- * - every stage preserves order, and preserves cardinality (or only filters, when allowed);
+ * - every stage preserves order, and preserves cardinality (or is a $match, when allowed);
  * - under `strictErrors`, every stage is proven error-free, because the rewrite changes which
  *   documents reach those stages;
  * - per-key range rule: for each computed key, no stage in `[targetIndex, providerIndex)`
@@ -325,7 +325,7 @@ export function validateShadowRange(
     {
         const semantics = analyzeStage( pipeline[ i ] );
 
-        if( semantics.order !== 'preserves' || !isRangeCardinality( semantics.cardinality, allowFilters ))
+        if( semantics.order !== 'preserves' || !isPermittedRangeStage( semantics, allowFilters ))
         {
             return false;
         }

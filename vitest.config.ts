@@ -27,6 +27,7 @@ export default defineConfig({
         "src/passes/guarantee-guards.ts": { branches: 100 },
         "src/passes/group-filter-pushdown.ts": { branches: 100 },
         "src/passes/group-pushdown-proofs.ts": { branches: 100 },
+        "src/passes/heuristic-match-pushdown.ts": { branches: 100 },
         "src/passes/limit-skip-coalescing.ts": { branches: 100 },
         "src/passes/movement-proofs.ts": { branches: 100 },
         "src/passes/projection-proofs.ts": { branches: 100 },

@@ -7,7 +7,7 @@ import type { SemanticCase } from './semantic-cases.js';
 import { MIXED_SHAPE_CATALOG } from './mixed-shapes.js';
 
 export const GENERATED_INTERACTION_SEED = 0x5eed_2026;
-export const GENERATED_INTERACTION_CASE_COUNT = 50;
+export const GENERATED_INTERACTION_CASE_COUNT = 52;
 
 interface InteractionDescriptor
 {
@@ -30,6 +30,10 @@ const interactionDescriptors: readonly InteractionDescriptor[] = Object.freeze([
     },
     {
         pipelineId: 'match-pushdown',
+        filterId: 'flatten-disjunctions',
+    },
+    {
+        pipelineId: 'heuristic-match-pushdown',
         filterId: 'flatten-disjunctions',
     },
     {
@@ -280,6 +284,20 @@ function makeInteractionPipeline(
                     },
                 },
                 { $match: filter },
+                { $sort: { _id: 1 } },
+            ];
+        case 'heuristic-match-pushdown':
+            return [
+                {
+                    $lookup: {
+                        from: 'foreign',
+                        localField: 'foreignId',
+                        foreignField: '_id',
+                        as: 'joined',
+                    },
+                },
+                { $addFields: { k: { $size: { $ifNull: [ '$joined', [] ] } } } },
+                { $match: { $and: [ filter, { k: { $gte: 0 } } ] } },
                 { $sort: { _id: 1 } },
             ];
         case 'limit-advance':

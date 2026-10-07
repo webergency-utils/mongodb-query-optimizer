@@ -275,6 +275,37 @@ export const mixedShapeDifferentialCases: readonly MixedShapeDifferentialCase[] 
         expectedOriginalOutcome: 'success',
     },
 
+    {
+        id: 'mixed-shape-heuristic-match-pushdown',
+        description: 'heuristic-match-pushdown of computed field across costly lookup',
+        passId: 'heuristic-match-pushdown',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, rank: 1, val: 10, foreignId: 101 },
+                    { _id: 2, rank: 2, val: 20, foreignId: 102 },
+                    { _id: 3, rank: 3, val: 30, foreignId: 103 },
+                ],
+            },
+            foreign: {
+                documents: [
+                    { _id: 101, name: 'Item 101' },
+                    { _id: 102, name: 'Item 102' },
+                    { _id: 103, name: 'Item 103' },
+                ],
+            },
+        },
+        pipeline: [
+            { $lookup: { from: 'foreign', localField: 'foreignId', foreignField: '_id', as: 'extra' } },
+            { $addFields: { k: { $size: { $ifNull: [ '$extra', [] ] } } } },
+            { $match: { k: { $gt: 0 } } },
+            { $sort: { _id: 1 } },
+        ],
+        observation: 'ordered-bson',
+        expectedOriginalOutcome: 'success',
+    },
+
     // Polymorphic group filter pushdown
     {
         id: 'mixed-shape-group-filter-pushdown',

@@ -3129,6 +3129,66 @@ export const productionSemanticCases: readonly SemanticCase[] = [
         expectedEquivalent: true,
     },
     {
+        id: 'feat-heuristic-match-pushdown-focused',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, name: 'A', score: 10, foreignId: 101 },
+                    { _id: 2, name: 'B', score: 30, foreignId: 102 },
+                    { _id: 3, name: 'C', score: 20, foreignId: 103 },
+                ],
+            },
+            foreign: {
+                documents: [
+                    { _id: 101, title: 'F1' },
+                    { _id: 102, title: 'F2' },
+                    { _id: 103, title: 'F3' },
+                ],
+            },
+        },
+        pipeline: [
+            { $lookup: { from: 'foreign', localField: 'foreignId', foreignField: '_id', as: 'extra' } },
+            { $addFields: { k: { $size: { $ifNull: [ '$extra', [] ] } } } },
+            { $match: { k: { $gt: 0 } } },
+            { $sort: { _id: 1 } },
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: ['heuristic-match-pushdown'],
+        expectedEquivalent: true,
+    },
+    {
+        id: 'feat-heuristic-match-pushdown-oracle',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, name: 'A', score: 10, foreignId: 101 },
+                    { _id: 2, name: 'B', score: 30, foreignId: 102 },
+                    { _id: 3, name: 'C', score: 20, foreignId: 103 },
+                ],
+            },
+            foreign: {
+                documents: [
+                    { _id: 101, title: 'F1' },
+                    { _id: 102, title: 'F2' },
+                    { _id: 103, title: 'F3' },
+                ],
+            },
+        },
+        pipeline: [
+            { $lookup: { from: 'foreign', localField: 'foreignId', foreignField: '_id', as: 'extra' } },
+            { $addFields: { k: { $size: { $ifNull: [ '$extra', [] ] } } } },
+            { $match: { k: { $gt: 0 } } },
+            { $sort: { _id: 1 } },
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: ['heuristic-match-pushdown'],
+        expectedEquivalent: true,
+    },
+    {
         id: 'feat-add-field-pushdown-focused',
         kind: 'pipeline',
         mainCollectionId: 'main',

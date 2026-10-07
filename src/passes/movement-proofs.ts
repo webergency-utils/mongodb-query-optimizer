@@ -119,7 +119,7 @@ function hasNoChildUncertainty(stage: StageSemantics): boolean
     return stage.children.length === 0;
 }
 
-function isSafeMatchSummary(stage: StageSemantics): boolean
+export function isSafeMatchSummary(stage: StageSemantics): boolean
 {
     return (
         stage.operator === '$match'
@@ -419,7 +419,7 @@ function rewriteFieldCondition(
     return { value: result, changed };
 }
 
-function rewriteQueryDocument(
+export function rewriteQueryDocument(
     filter: Record<string, unknown>,
     aliases: ReadonlyMap<string, string>,
     elementRelative: boolean,
@@ -658,7 +658,7 @@ function proveDisjointMatchPushdown(
     };
 }
 
-function containsGetField( value: unknown ): boolean
+export function containsGetField( value: unknown ): boolean
 {
     if( Array.isArray( value ))
     {
