@@ -4,8 +4,11 @@ import
 {
     arePathsDisjoint,
     canTopKPushAcrossStage,
+    collectExpressionDependencies,
+    isExpressionCompletelyDeterministic,
     parseSafeSortKeys,
     parseTopKFollower,
+    proveHeuristicTopKPushdown,
     proveTopKPushdown,
 }
 from '../src/passes/top-k-proofs.js';
@@ -397,4 +400,288 @@ describe( 'TopKPushdownPass execution and mock verification', () =>
 
         expect( optimizedOutput ).toEqual( originalOutput );
     });
+
+    describe( 'heuristic shadow sort-pushdown proofs and pass execution', () =>
+    {
+        it( 'evaluates isExpressionCompletelyDeterministic across all branches', () =>
+        {
+            // Scalars and plain values
+            expect( isExpressionCompletelyDeterministic( 42 )).toBe( true );
+            expect( isExpressionCompletelyDeterministic( 'hello' )).toBe( true );
+            expect( isExpressionCompletelyDeterministic( '$field' )).toBe( true );
+
+            // Deterministic MQL
+            expect( isExpressionCompletelyDeterministic( { $size: '$tags' } )).toBe( true );
+            expect( isExpressionCompletelyDeterministic( { $add: [ '$a', '$b' ] } )).toBe( true );
+
+            // Volatile and non-deterministic MQL
+            expect( isExpressionCompletelyDeterministic( '$$NOW' )).toBe( false );
+            expect( isExpressionCompletelyDeterministic( '$$CLUSTER_TIME' )).toBe( false );
+            expect( isExpressionCompletelyDeterministic( { $rand: {} } )).toBe( false );
+            expect( isExpressionCompletelyDeterministic( { $eq: [ '$a', '$$NOW' ] } )).toBe( false );
+            expect( isExpressionCompletelyDeterministic( { $unknownOp: 1 } )).toBe( false );
+
+            // strictErrors constraint
+            expect( isExpressionCompletelyDeterministic( { $divide: [ '$a', '$b' ] }, true )).toBe( false );
+            expect( isExpressionCompletelyDeterministic( 42, true )).toBe( true );
+
+            // $function edge cases
+            expect( isExpressionCompletelyDeterministic( { $function: null } )).toBe( false );
+            expect( isExpressionCompletelyDeterministic( { $function: { body: 123, args: [] } } )).toBe( false );
+            expect( isExpressionCompletelyDeterministic( { $function: { body: 'return 1;', args: null } } )).toBe( false );
+
+            // Non-deterministic tokens in $function body
+            expect( isExpressionCompletelyDeterministic( { $function: { body: 'return Date.now();', args: [] } } )).toBe( false );
+            expect( isExpressionCompletelyDeterministic( { $function: { body: 'return new Date();', args: [] } } )).toBe( false );
+            expect( isExpressionCompletelyDeterministic( { $function: { body: 'return Math.random();', args: [] } } )).toBe( false );
+            expect( isExpressionCompletelyDeterministic( { $function: { body: 'return crypto.randomUUID();', args: [] } } )).toBe( false );
+            expect( isExpressionCompletelyDeterministic( { $function: { body: 'return performance.now();', args: [] } } )).toBe( false );
+
+            // $function under strictErrors
+            expect( isExpressionCompletelyDeterministic( { $function: { body: 'return a + b;', args: [ '$a', '$b' ] } }, true )).toBe( false );
+
+            // $function args validity
+            expect( isExpressionCompletelyDeterministic( { $function: { body: 'return 1;', args: [ '$$ROOT' ] } } )).toBe( false );
+            expect( isExpressionCompletelyDeterministic( { $function: { body: 'return 1;', args: [ '$$NOW' ] } } )).toBe( false );
+            expect( isExpressionCompletelyDeterministic( { $function: { body: 'return 1;', args: [ { $rand: {} } ] } } )).toBe( false );
+            expect( isExpressionCompletelyDeterministic( { $function: { body: 'return 1;', args: [ '$a' ] } } )).toBe( true );
+        });
+
+        it( 'collects expression dependencies correctly', () =>
+        {
+            expect( collectExpressionDependencies( '$user.name' )).toEqual( new Set([ 'user.name' ]) );
+            expect( collectExpressionDependencies( { $size: '$items' } )).toEqual( new Set([ 'items' ]) );
+
+            const fnDeps = collectExpressionDependencies({
+                $function: {
+                    body: 'return a + b;',
+                    args: [ '$user.id', '$score' ]
+                }
+            });
+            expect( fnDeps ).toEqual( new Set([ 'user.id', 'score' ]) );
+
+            const fnNoArgsDeps = collectExpressionDependencies({
+                $function: {
+                    body: 'return 1;',
+                    args: null
+                }
+            });
+            expect( fnNoArgsDeps ).toEqual( new Set() );
+        });
+
+        it( 'rejects heuristic top-k pushdown when boundary conditions are not satisfied', () =>
+        {
+            const context = resolvePipelineGuarantees( [], {} );
+
+            // sortIndex out of bounds
+            expect( proveHeuristicTopKPushdown( [], 0, context )).toBeNull();
+            expect( proveHeuristicTopKPushdown( [ { $sort: { a: 1 } } ], 2, context )).toBeNull();
+
+            // strictFieldOrder: true
+            const strictOrderContext = resolvePipelineGuarantees( [], { strictFieldOrder: true } );
+            expect( proveHeuristicTopKPushdown( [
+                { $addFields: { score: { $size: '$tags' } } },
+                { $sort: { score: 1 } },
+                { $limit: 10 }
+            ], 1, strictOrderContext )).toBeNull();
+
+            // Missing or invalid follower
+            expect( proveHeuristicTopKPushdown( [
+                { $addFields: { score: { $size: '$tags' } } },
+                { $sort: { score: 1 } }
+            ], 1, context )).toBeNull();
+
+            // Downstream reads field order
+            expect( proveHeuristicTopKPushdown( [
+                { $addFields: { score: { $size: '$tags' } } },
+                { $sort: { score: 1 } },
+                { $limit: 10 },
+                { $project: { $objectToArray: '$$ROOT' } }
+            ], 1, context )).toBeNull();
+
+            // Invalid sort keys
+            expect( proveHeuristicTopKPushdown( [
+                { $addFields: { score: { $size: '$tags' } } },
+                { $sort: 'invalid' },
+                { $limit: 10 }
+            ], 1, context )).toBeNull();
+
+            // Provider stage is not $addFields or $set
+            expect( proveHeuristicTopKPushdown( [
+                { $project: { score: 1 } },
+                { $sort: { score: 1 } },
+                { $limit: 10 }
+            ], 1, context )).toBeNull();
+
+            // Computed field expression is undefined in provider
+            expect( proveHeuristicTopKPushdown( [
+                { $addFields: { other: 1 } },
+                { $sort: { score: 1 } },
+                { $limit: 10 }
+            ], 1, context )).toBeNull();
+
+            // Provider writes a prefix or nested field but the exact key expression is undefined
+            expect( proveHeuristicTopKPushdown( [
+                { $set: { 'score.sub': 1 } },
+                { $sort: { score: 1 } },
+                { $limit: 10 }
+            ], 1, context )).toBeNull();
+
+            // Expression is non-deterministic
+            expect( proveHeuristicTopKPushdown( [
+                { $addFields: { score: { $rand: {} } } },
+                { $sort: { score: 1 } },
+                { $limit: 10 }
+            ], 1, context )).toBeNull();
+
+            // No computed sort keys (all root fields)
+            expect( proveHeuristicTopKPushdown( [
+                { $lookup: { from: 'items', as: 'items' } },
+                { $sort: { rootField: 1 } },
+                { $limit: 10 }
+            ], 1, context )).toBeNull();
+
+            // Provider stage cannot move earlier (targetIndex === minProviderIndex)
+            expect( proveHeuristicTopKPushdown( [
+                { $addFields: { score: { $size: '$tags' } } },
+                { $sort: { score: 1 } },
+                { $limit: 10 }
+            ], 1, context )).toBeNull();
+
+            // Intermediate stage between provider and sort modifies row count ($match)
+            expect( proveHeuristicTopKPushdown( [
+                { $addFields: { score: { $size: '$tags' } } },
+                { $match: { active: true } },
+                { $sort: { score: 1 } },
+                { $limit: 10 }
+            ], 2, context )).toBeNull();
+
+            // Intermediate stage between provider and sort modifies row count when targetIndex < minProviderIndex
+            expect( proveHeuristicTopKPushdown( [
+                { $lookup: { from: 'items', as: 'items' } },
+                { $addFields: { score: { $size: '$tags' } } },
+                { $match: { active: true } },
+                { $sort: { score: 1 } },
+                { $limit: 10 }
+            ], 3, context )).toBeNull();
+
+            // Preceding stage writes to required dependency
+            expect( proveHeuristicTopKPushdown( [
+                { $addFields: { tags: [ 1, 2 ] } },
+                { $lookup: { from: 'other', as: 'tags' } },
+                { $addFields: { score: { $size: '$tags' } } },
+                { $sort: { score: 1 } },
+                { $limit: 10 }
+            ], 3, context )).toBeNull();
+
+            // Intermediate stage is not proven error-free under strictErrors
+            const strictErrorsContext2 = resolvePipelineGuarantees( [], { strictErrors: true } );
+            expect( proveHeuristicTopKPushdown( [
+                { $addFields: { div: { $divide: [ '$a', '$b' ] } } },
+                { $addFields: { score: 10 } },
+                { $sort: { score: 1 } },
+                { $limit: 10 }
+            ], 2, strictErrorsContext2 )).toBeNull();
+        });
+
+        it( 'handles shadow key collisions by deterministically appending counter', () =>
+        {
+            const context = resolvePipelineGuarantees( [], {} );
+
+            const pipeline =
+            [
+                { $match: { deleted: false } },
+                { $lookup: { from: 'comments', as: 'comments' } },
+                { $addFields: { __heuristic_score: 1, score: { $size: '$tags' } } },
+                { $sort: { score: 1 } },
+                { $limit: 10 }
+            ];
+
+            const proof = proveHeuristicTopKPushdown( pipeline, 3, context );
+
+            expect( proof ).not.toBeNull();
+            expect( proof!.targetIndex ).toBe( 1 );
+            expect( Object.keys( proof!.shadowAddFields )[ 0 ] ).toBe( '__heuristic_score_0' );
+            expect( proof!.shadowUnsetKeys ).toEqual([ '__heuristic_score_0' ]);
+
+            // Collision between two computed sort keys in the same pipeline that sanitize to the same name
+            const multiCollisionPipeline =
+            [
+                { $match: { deleted: false } },
+                { $lookup: { from: 'comments', as: 'comments' } },
+                { $addFields: { 'k_1': { $size: '$tags' }, 'k.1': { $size: '$tags' } } },
+                { $sort: { 'k_1': 1, 'k.1': 1 } },
+                { $limit: 10 }
+            ];
+
+            const multiProof = proveHeuristicTopKPushdown( multiCollisionPipeline, 3, context );
+
+            expect( multiProof ).not.toBeNull();
+            expect( Object.keys( multiProof!.shadowAddFields ) ).toEqual([ '__heuristic_k_1', '__heuristic_k_1_0' ]);
+            expect( multiProof!.shadowUnsetKeys ).toEqual([ '__heuristic_k_1', '__heuristic_k_1_0' ]);
+        });
+
+        it( 'executes heuristic top-k pushdown for single and multiple computed keys', () =>
+        {
+            const pass = new TopKPushdownPass();
+
+            // Single key pushdown
+            const singleKeyPipeline =
+            [
+                { $match: { deleted: false } },
+                { $lookup: { from: 'briefings', as: 'briefings' } },
+                { $addFields: { ragStatus: { $function: { body: 'return job.briefings;', args: [ '$$ROOT' ] } } } },
+                { $addFields: { activeCount: { $size: '$engagements' } } },
+                { $sort: { activeCount: 1, _id: -1 } },
+                { $limit: 10 }
+            ];
+
+            const singleOptimized = pass.execute( singleKeyPipeline );
+
+            expect( singleOptimized.length ).toBe( 8 );
+            expect( singleOptimized[ 0 ] ).toEqual( { $match: { deleted: false } } );
+            expect( Object.keys( singleOptimized[ 1 ].$addFields )[ 0 ] ).toBe( '__heuristic_activeCount' );
+            expect( singleOptimized[ 2 ] ).toEqual( { $sort: { __heuristic_activeCount: 1, _id: -1 } } );
+            expect( singleOptimized[ 3 ] ).toEqual( { $limit: 10 } );
+            expect( singleOptimized[ 4 ] ).toEqual( { $unset: '__heuristic_activeCount' } );
+            expect( singleOptimized[ 5 ] ).toEqual( { $lookup: { from: 'briefings', as: 'briefings' } } );
+
+            // Multiple keys pushdown (testing array $unset)
+            const multiKeyPipeline =
+            [
+                { $match: { active: true } },
+                { $lookup: { from: 'extra', as: 'extra' } },
+                { $addFields: {
+                    rankA: { $size: '$tags' },
+                    rankB: { $size: '$skills' }
+                } },
+                { $sort: { rankA: 1, rankB: -1, _id: 1 } },
+                { $skip: 5 },
+                { $limit: 20 }
+            ];
+
+            const multiOptimized = pass.execute( multiKeyPipeline );
+
+            expect( multiOptimized.length ).toBe( 8 );
+            expect( multiOptimized[ 0 ] ).toEqual( { $match: { active: true } } );
+            expect( Object.keys( multiOptimized[ 1 ].$addFields ) ).toEqual([
+                '__heuristic_rankA',
+                '__heuristic_rankB'
+            ]);
+            expect( multiOptimized[ 2 ] ).toEqual( {
+                $sort: {
+                    __heuristic_rankA: 1,
+                    __heuristic_rankB: -1,
+                    _id: 1
+                }
+            } );
+            expect( multiOptimized[ 3 ] ).toEqual( { $skip: 5 } );
+            expect( multiOptimized[ 4 ] ).toEqual( { $limit: 20 } );
+            expect( multiOptimized[ 5 ] ).toEqual( {
+                $unset: [ '__heuristic_rankA', '__heuristic_rankB' ]
+            } );
+            expect( multiOptimized[ 6 ] ).toEqual( { $lookup: { from: 'extra', as: 'extra' } } );
+        });
+    });
 });
+

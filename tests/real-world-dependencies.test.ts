@@ -139,7 +139,7 @@ describe( 'Real-world corpus fixtures and dependencies', () =>
         ] );
     } );
 
-    it( 'verifies test.full.query is unaffected by passes due to $$ROOT dependency', () =>
+    it( 'verifies test.full.query is optimized by top-k-pushdown heuristic shadow pushdown', () =>
     {
         const fixtureTestFullQuery = JSON.parse(
             fs.readFileSync( path.resolve( __dirname, 'fixtures/real-world/test-full-query.json' ), 'utf8' )
@@ -161,7 +161,7 @@ describe( 'Real-world corpus fixtures and dependencies', () =>
             }
         }
 
-        expect( affectingPasses ).toEqual( [] );
+        expect( affectingPasses ).toEqual( [ 'top-k-pushdown' ] );
     } );
 
     it( 'produces the success-criterion shape under the production profile in default mode', () =>
@@ -225,7 +225,7 @@ describe( 'Real-world corpus fixtures and dependencies', () =>
         ] );
     } );
 
-    it( 'leaves test.full.query unchanged under production profile in all three modes', () =>
+    it( 'hoists heuristic shadow sort in test.full.query under default mode, preserving strict modes', () =>
     {
         const fixtureTestFullQuery = JSON.parse(
             fs.readFileSync( path.resolve( __dirname, 'fixtures/real-world/test-full-query.json' ), 'utf8' )
@@ -235,7 +235,9 @@ describe( 'Real-world corpus fixtures and dependencies', () =>
         const strictOrderOptimized = optimizePipelineProduction( fixtureTestFullQuery, { strictFieldOrder: true } );
         const strictErrorsOptimized = optimizePipelineProduction( fixtureTestFullQuery, { strictErrors: true } );
 
-        expect( defaultOptimized ).toEqual( fixtureTestFullQuery );
+        expect( defaultOptimized.length ).toBe( 9 );
+        expect( Object.keys( defaultOptimized[ 1 ].$addFields )[ 0 ] ).toBe( '__heuristic_furthestStage' );
+        expect( defaultOptimized[ 4 ].$unset ).toBe( '__heuristic_furthestStage' );
         expect( strictOrderOptimized ).toEqual( fixtureTestFullQuery );
         expect( strictErrorsOptimized ).toEqual( fixtureTestFullQuery );
     } );

@@ -104,3 +104,21 @@ The optimizer registry distinguishes between **active** transformations (mathema
    - Normalizing `$expr` comparisons to top-level query operators requires rigorous array traversal safety guarantees to avoid changing match semantics over multikey arrays. It is held inactive in production pending complete array-path proofs.
 4. **`filter-optimization` & `adjacent-match-merging` (Inactive in Production)**:
    - Boolean simplification rules for query filters are held inactive in production until every sub-rule is verified against multikey array semantics and short-circuit error behavior.
+
+---
+
+## 9. Heuristic Shadow Sort-Pushdown Constraint
+
+When an aggregation pipeline performs a Top-K slice (`$sort` + `$limit`) on a computed field produced downstream of joins (`$lookup`) or wildcard document consumers (`$$ROOT`), the optimizer may hoist the Top-K slice earlier in the pipeline using a temporary shadow field `__heuristic_${fieldName}`, followed immediately by `{ $unset: "__heuristic_${fieldName}" }` before the barrier.
+
+### Strict Determinism Requirement
+Because this transformation evaluates the sort expression early for slicing and recomputes the target field on the surviving documents in its original position:
+- **Mandatory Complete Determinism**: The sort expression must be **strictly and completely deterministic**.
+  - **Prohibited Operators**: `$rand`, `$sampleRate`, and any pseudo-random generator.
+  - **Prohibited Environment Variables**: `$$NOW`, `$$CLUSTER_TIME`, and dynamic temporal context.
+  - **Prohibited Dynamic Date/Time Code**: User code (`$function`, `$accumulator`) containing references to dynamic dates/times (such as `Date`, `new Date()`, `Date.now()`, `performance.now()`) or non-deterministic APIs (`Math.random()`, `crypto`).
+  - If an expression cannot be proven completely deterministic, heuristic shadow sort-pushdown is **strictly disallowed**.
+- **Preservation of Document Fidelity**:
+  - The `$unset` stage guarantees that the temporary shadow field is completely purged before any subsequent stage (such as `$lookup` or a JavaScript `$function` consuming `$$ROOT`) observes the document stream.
+  - Intermediate stages between the hoisted slice and the original sort stage must be row-preserving (`cardinality === 'preserves'`).
+  - Under strict mode (`strictFieldOrder: true`), this heuristic is disabled to preserve exact BSON document key ordering.
