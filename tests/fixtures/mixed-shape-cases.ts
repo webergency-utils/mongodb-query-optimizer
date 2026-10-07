@@ -629,6 +629,53 @@ export const mixedShapeDifferentialCases: readonly MixedShapeDifferentialCase[] 
         observation: 'ordered-bson',
         expectedOriginalOutcome: 'success',
     },
+
+    // Polymorphic adjacent match merging
+    {
+        id: 'mixed-shape-adjacent-match-merging',
+        description: 'adjacent-match-merging fuses consecutive matches over polymorphic documents without altering multikey bounds',
+        passId: 'adjacent-match-merging',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: standardMixedShapeDocs,
+            },
+        },
+        pipeline: [
+            { $sort: { _id: 1 } },
+            { $match: { status: 'active' } },
+            { $match: { rank: { $gte: 2 } } },
+        ],
+        observation: 'ordered-bson',
+        expectedOriginalOutcome: 'success',
+    },
+
+    // Polymorphic filter optimization
+    {
+        id: 'mixed-shape-filter-optimization',
+        description: 'filter-optimization normalizes nested conjunctions and disjunctions over polymorphic documents',
+        passId: 'filter-optimization',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: standardMixedShapeDocs,
+            },
+        },
+        pipeline: [
+            { $sort: { _id: 1 } },
+            {
+                $match: {
+                    $and: [
+                        { $and: [ { status: 'active' } ] },
+                        { rank: { $gte: 0 } },
+                        { rank: { $gte: 0 } },
+                    ],
+                },
+            },
+        ],
+        observation: 'ordered-bson',
+        expectedOriginalOutcome: 'success',
+    },
     ...heuristicTopKHardeningCases(),
 ];
 

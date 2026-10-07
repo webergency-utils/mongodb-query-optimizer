@@ -102,8 +102,16 @@ The optimizer registry distinguishes between **active** transformations (mathema
    - Arbitrary projection removal without full schema knowledge is lossy in MongoDB. It remains contained until schema-aware typing is available.
 3. **`expr-match-normalization` (Inactive in Production)**:
    - Normalizing `$expr` comparisons to top-level query operators requires rigorous array traversal safety guarantees to avoid changing match semantics over multikey arrays. It is held inactive in production pending complete array-path proofs.
-4. **`filter-optimization` & `adjacent-match-merging` (Inactive in Production)**:
-   - Boolean simplification rules for query filters are held inactive in production until every sub-rule is verified against multikey array semantics and short-circuit error behavior.
+4. **`filter-optimization` & `adjacent-match-merging` (Active in Production)**:
+   - **Provably Safe Filter Normalization**: The production filter optimizer safely activates 5 structural normalization rules:
+     - `flatten-conjunctions`: Flattens nested associative `$and` arrays (`{ $and: [ { $and: [ A, B ] }, C ] }` $\rightarrow$ `{ $and: [ A, B, C ] }`).
+     - `flatten-disjunctions`: Flattens nested associative `$or` arrays (`{ $or: [ { $or: [ A, B ] }, C ] }` $\rightarrow$ `{ $or: [ A, B, C ] }`).
+     - `deduplicate-conjunctions`: Eliminates duplicate branches in `$and` arrays using deterministic structural BSON hashing.
+     - `simplify-conjunction-identities`: Eliminates empty identity filters (`{}`) and unwraps single-branch `$and` arrays (`{ $and: [ A ] }` $\rightarrow$ `A`).
+     - `simplify-disjunction-identities`: Short-circuits `$or` containing empty filter tautologies (`{ $or: [ {}, A ] }` $\rightarrow$ `{}`), eliminates duplicate branches, and unwraps single-condition disjunctions (`{ $or: [ A ] }` $\rightarrow$ `A`).
+   - **Multikey Array Safety Invariant**: In MongoDB, `{ tags: { $gt: 5, $lt: 10 } }` requires a *single* array element to satisfy both bounds simultaneously. In contrast, `{ $and: [ { tags: { $gt: 5 } }, { tags: { $lt: 10 } } ] }` or two consecutive `$match` stages can be satisfied by *two distinct* array elements (e.g. `tags: [3, 12]`). Therefore, the optimizer **NEVER** collapses separate `$and` branches for the same field path into a single subdocument. The `merge-conjunctions` rule is permanently held inactive in production.
+   - **Adjacent Match Merging**: `adjacent-match-merging` fuses consecutive `$match` stages into a single `{ $match: { $and: [ ...matches ] } }`. Subsequent safe filter normalization flattens nested conjunctions and deduplicates identical conditions, while preserving separate conditions on the same field in distinct `$and` branches.
+   - **Error and Determinism Guards**: All filter rewrites are strictly guarded by `isFilterRewriteSafe`, which guarantees that non-deterministic expressions (`$rand`, `$sampleRate`), partial error-throwing functions, or unknown operator shapes are never rewritten or dropped.
 
 ---
 

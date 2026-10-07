@@ -85,7 +85,7 @@ The optimizer evaluates queries and aggregation pipelines purely as Abstract Syn
                  │
                  ▼
       ┌──────────────────────┐
-      │  Proof-Guarded Pass  │ (20 active pipeline passes, rigorous correctness proofs)
+      │  Proof-Guarded Pass  │ (22 active pipeline passes, rigorous correctness proofs)
       └──────────┬───────────┘
                  │
                  ▼
@@ -98,30 +98,31 @@ The optimizer evaluates queries and aggregation pipelines purely as Abstract Syn
 ```
 
 ### Active Pipeline Transformations (Production Registry)
-1. `add-field-pushdown`: Decomposes `$addFields`/`$set` and safely pushes sort/match-dependent expressions before `$lookup`.
-2. `top-k-pushdown`: Advances `$sort` and `$limit` slices ahead of 1:1 compute stages while respecting error guards.
-3. `lookup-delay`: Delays `$lookup` joins past non-dependent filter and sort stages.
-4. `unwind-prefilter`: Injects shape-safe `$or` prefilters before `$unwind` to discard non-matching documents without dropping polymorphic types or nested arrays.
-5. `redundant-sort-elimination`: Collapses consecutive `$sort` stages where the latter supersedes the earlier.
-6. `sort-by-count-simplification`: Converts verbose `$group` + `$sort` count patterns into canonical `$sortByCount`.
-7. `limit-skip-coalescing`: Combines adjacent `$limit` and `$skip` stages into minimal offsets and counts.
-8. `expression-simplification`: Folds constant boolean conditions and simplifies `$size` over `$filter` when conditions are always truthy.
-9. `match-pushdown`: Moves selective filter stages ahead of joins and projections.
-10. `heuristic-match-pushdown`: Pushes selective `$match` filters across heavy stages (`$lookup`, `$graphLookup`, `$function`) using deterministic shadow fields with per-key ranges and profitability gates.
-11. `limit-advance`: Advances `$limit` ahead of non-cardinality altering projections and stages.
-12. `group-filter-pushdown`: Pushes post-`$group` filters before `$group` when grouping by 1-to-1 deterministic keys.
-13. `bucket-filter-pushdown`: Pushes selective pre-filters before `$bucket` and `$bucketAuto` stages.
-14. `unused-field-pruning`: Strips dead fields created in `$addFields`/`$set` when later stages discard them.
-15. `adjacent-project-merging`: Fuses consecutive `$project` stages into a single specification.
-16. `adjacent-add-field-merging`: Merges adjacent `$addFields` or `$set` stages.
-17. `redundant-lookup-elimination`: Drops unused `$lookup` joins whose aliases are discarded downstream.
-18. `sort-project-commute`: Commutes `$sort` ahead of `$project` when all sort keys remain visible.
-19. `complex-projection-deferral`: Pushes complex computed fields downstream past selective filters.
-20. `facet-prefix-hoisting`: Extracts identical prefix stages shared across all branches of a `$facet`.
+1. `adjacent-match-merging`: Fuses consecutive `$match` stages into `$and` conjunctions while strictly preserving multikey array semantics.
+2. `filter-optimization`: Recursively applies provably safe boolean filter normalization rules (`flatten-conjunctions`, `flatten-disjunctions`, `deduplicate-conjunctions`, `simplify-conjunction-identities`, `simplify-disjunction-identities`).
+3. `add-field-pushdown`: Decomposes `$addFields`/`$set` and safely pushes sort/match-dependent expressions before `$lookup`.
+4. `top-k-pushdown`: Advances `$sort` and `$limit` slices ahead of 1:1 compute stages while respecting error guards.
+5. `lookup-delay`: Delays `$lookup` joins past non-dependent filter and sort stages.
+6. `unwind-prefilter`: Injects shape-safe `$or` prefilters before `$unwind` to discard non-matching documents without dropping polymorphic types or nested arrays.
+7. `redundant-sort-elimination`: Collapses consecutive `$sort` stages where the latter supersedes the earlier.
+8. `sort-by-count-simplification`: Converts verbose `$group` + `$sort` count patterns into canonical `$sortByCount`.
+9. `limit-skip-coalescing`: Combines adjacent `$limit` and `$skip` stages into minimal offsets and counts.
+10. `expression-simplification`: Folds constant boolean conditions and simplifies `$size` over `$filter` when conditions are always truthy.
+11. `match-pushdown`: Moves selective filter stages ahead of joins and projections.
+12. `heuristic-match-pushdown`: Pushes selective `$match` filters across heavy stages (`$lookup`, `$graphLookup`, `$function`) using deterministic shadow fields with per-key ranges and profitability gates.
+13. `limit-advance`: Advances `$limit` ahead of non-cardinality altering projections and stages.
+14. `group-filter-pushdown`: Pushes post-`$group` filters before `$group` when grouping by 1-to-1 deterministic keys.
+15. `bucket-filter-pushdown`: Pushes selective pre-filters before `$bucket` and `$bucketAuto` stages.
+16. `unused-field-pruning`: Strips dead fields created in `$addFields`/`$set` when later stages discard them.
+17. `adjacent-project-merging`: Fuses consecutive `$project` stages into a single specification.
+18. `adjacent-add-field-merging`: Merges adjacent `$addFields` or `$set` stages.
+19. `redundant-lookup-elimination`: Drops unused `$lookup` joins whose aliases are discarded downstream.
+20. `sort-project-commute`: Commutes `$sort` ahead of `$project` when all sort keys remain visible.
+21. `complex-projection-deferral`: Pushes complex computed fields downstream past selective filters.
+22. `facet-prefix-hoisting`: Extracts identical prefix stages shared across all branches of a `$facet`.
 
 ### Inactive & Contained Passes
 - `expr-match-normalization`: Inactive in production pending array traversal safety proofs across multikey arrays.
-- `filter-optimization` & `adjacent-match-merging`: Inactive in production pending full formal verification of filter rules under multikey array and short-circuit evaluation semantics.
 - `stage-priority-reorder`: Contained; aggregation pipeline stages do not form a total-order lattice.
 - `redundant-projection-elimination`: Contained; lossy without complete schema knowledge.
 

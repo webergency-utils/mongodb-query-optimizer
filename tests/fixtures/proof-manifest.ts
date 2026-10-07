@@ -227,9 +227,9 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
             status: 'active',
             proofRecheckNote: 'Proof audited: recursively applies safe active filter rules across all $match stages; preserves multikey array semantics and field ordering; error fidelity guaranteed by isFilterRewriteSafe.',
             mixedShapeCaseIds: {
-                default: 'mixed-shape-match-pushdown',
-                strictFieldOrder: 'mixed-shape-match-pushdown',
-                strictErrors: 'mixed-shape-match-pushdown'
+                default: 'mixed-shape-filter-optimization',
+                strictFieldOrder: 'mixed-shape-filter-optimization',
+                strictErrors: 'mixed-shape-filter-optimization'
             },
             strictModeBehavior: 'preserved'
         }
@@ -244,9 +244,9 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
             status: 'active',
             proofRecheckNote: 'Proof audited: merges adjacent $match stages into $and arrays without collapsing conditions on the same field into single subdocuments; preserves multikey array semantics and error fidelity.',
             mixedShapeCaseIds: {
-                default: 'mixed-shape-match-pushdown',
-                strictFieldOrder: 'mixed-shape-match-pushdown',
-                strictErrors: 'mixed-shape-match-pushdown'
+                default: 'mixed-shape-adjacent-match-merging',
+                strictFieldOrder: 'mixed-shape-adjacent-match-merging',
+                strictErrors: 'mixed-shape-adjacent-match-merging'
             },
             strictModeBehavior: 'preserved'
         }

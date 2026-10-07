@@ -20,10 +20,12 @@ The optimizer employs a mathematically sound, lattice-based abstract interpretat
 
 Every pipeline pass and filter normalization rule is strictly audited against formal correctness proofs and differential test suites. Entries in the production registry are either **Active** (with complete proof manifests and live MongoDB 8 verification) or **Inactive / Contained** with documented audit findings.
 
-### A. Active Pipeline Transformations (20 Passes)
+### A. Active Pipeline Transformations (22 Passes)
 
 | Pass ID | Status | Focus / Description | Mode Matrix Verification |
 | :--- | :---: | :--- | :---: |
+| `adjacent-match-merging` | **Active** | Fuses adjacent `$match` stages into `$and` conjunctions while preserving multikey array semantics. | Default, SFO, StrictErrors |
+| `filter-optimization` | **Active** | Recursively simplifies match filters using provably safe conjunction and disjunction normalization rules. | Default, SFO, StrictErrors |
 | `add-field-pushdown` | **Active** | Decomposes `$addFields`/`$set` and pushes sort/match expressions before `$lookup`. | Default, SFO, StrictErrors |
 | `top-k-pushdown` | **Active** | Hoists `$sort` + `$limit` slices ahead of 1:1 compute stages. | Default, SFO, StrictErrors |
 | `lookup-delay` | **Active** | Delays `$lookup` joins past non-dependent filter and sort stages. | Default, SFO, StrictErrors |
@@ -50,14 +52,22 @@ Every pipeline pass and filter normalization rule is strictly audited against fo
 | Pass ID | Status | Reason & Audit Finding |
 | :--- | :---: | :--- |
 | `expr-match-normalization` | **Inactive** | Normalizing `$expr` comparisons to top-level query operators requires complete array traversal safety proofs across multikey arrays. |
-| `filter-optimization` | **Inactive** | Held inactive pending full formal audit of filter rules for multikey array semantics and short-circuit evaluation. |
-| `adjacent-match-merging` | **Inactive** | Held inactive because merging adjacent matches delegates to filter-optimization. |
 | `stage-priority-reorder` | **Contained** | Contained; pipeline stages do not form a total-order lattice. Global priority bubble reordering is permanently contained. |
 | `redundant-projection-elimination` | **Contained** | Contained; projection removal is lossy without complete schema knowledge. |
 
 ### C. Filter Normalization Rules Status
 
-All 8 filter normalization rules (`simplify-equality`, `simplify-singleton-in`, `flatten-conjunctions`, `flatten-disjunctions`, `simplify-conjunction-identities`, `simplify-disjunction-identities`, `deduplicate-conjunctions`, `merge-conjunctions`) are currently recorded as **Inactive in Production** pending formal multikey array traversal safety proofs and short-circuit evaluation audits.
+The filter optimizer safely activates 5 provably sound structural normalization rules:
+- **`flatten-conjunctions` (Active)**: Flattens nested associative `$and` arrays (`{ $and: [ { $and: [ A, B ] }, C ] }` $\rightarrow$ `{ $and: [ A, B, C ] }`).
+- **`flatten-disjunctions` (Active)**: Flattens nested associative `$or` arrays (`{ $or: [ { $or: [ A, B ] }, C ] }` $\rightarrow$ `{ $or: [ A, B, C ] }`).
+- **`deduplicate-conjunctions` (Active)**: Eliminates identical conjunction branches using deterministic structural BSON hashing.
+- **`simplify-conjunction-identities` (Active)**: Eliminates empty identity filters (`{}`) and unwraps single-branch `$and` arrays (`{ $and: [ A ] }` $\rightarrow$ `A`).
+- **`simplify-disjunction-identities` (Active)**: Short-circuits `$or` containing empty filter tautologies (`{ $or: [ {}, A ] }` $\rightarrow$ `{}`), eliminates duplicate branches, and unwraps single-condition disjunctions (`{ $or: [ A ] }` $\rightarrow$ `A`).
+
+The remaining 3 rules are held **Inactive in Production**:
+- **`merge-conjunctions` (Inactive)**: Permanently held inactive to protect multikey array semantics (where `{ tags: { $gt: 5, $lt: 10 } }` matches a single array element, while separate `$and` branches match different array elements).
+- **`simplify-equality` (Inactive)**: Held inactive pending polymorphic array traversal and regex type equality audits.
+- **`simplify-singleton-in` (Inactive)**: Held inactive pending multikey array element traversal audits.
 
 ---
 
@@ -90,7 +100,7 @@ Below is the complete list of all 49 MongoDB aggregation pipeline stages from th
 | `$listSearchIndexes` | **Tier 3** | `conservativeTop` (Opaque Barrier) | Atlas Search index inspection; preserved verbatim. |
 | `$listSessions` | **Tier 3** | `conservativeTop` (Opaque Barrier) | Session metadata inspection; preserved verbatim. |
 | `$lookup` | **Tier 1** | `lookup-delay`, `redundant-lookup-elimination`, subpipeline pushdown, recursive subpipeline sweep, `top-k-pushdown`, `add-field-pushdown` | Delays joins past filters/sorts; eliminates unused joins; splits mixed filters; pushes filters into subpipelines; hoists independent sort/limit slices and pre-computed fields before lookups. |
-| `$match` | **Tier 1** | `match-pushdown`, `heuristic-match-pushdown`, `unwind-prefilter` (Note: `expr-match-normalization`, `filter-optimization`, `adjacent-match-merging` inactive in production) | Central optimization engine: pushes selective filters upstream, including heuristic pushdown of computed match predicates. |
+| `$match` | **Tier 1** | `adjacent-match-merging`, `filter-optimization`, `match-pushdown`, `heuristic-match-pushdown`, `unwind-prefilter` (Note: `expr-match-normalization` inactive in production) | Central optimization engine: pushes selective filters upstream, merges adjacent matches, and simplifies boolean filter trees. |
 | `$merge` | **Tier 3** | `conservativeTop` (Opaque Barrier) | Collection write side-effect; acts as a hard barrier to preserve write timing and ordering. |
 | `$out` | **Tier 3** | `conservativeTop` (Opaque Barrier) | Collection replacement side-effect; acts as a hard barrier to preserve write timing and ordering. |
 | `$planCacheStats` | **Tier 3** | `conservativeTop` (Opaque Barrier) | Query engine cache diagnostics; preserved verbatim. |
