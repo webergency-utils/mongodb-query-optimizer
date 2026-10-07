@@ -19,6 +19,7 @@ export const PRE_GATE_PIPELINE_TRANSFORMATION_IDS: readonly PipelineTransformati
     'redundant-sort-elimination',
     'sort-by-count-simplification',
     'limit-skip-coalescing',
+    'expression-simplification',
     'match-pushdown',
     'heuristic-match-pushdown',
     'limit-advance',

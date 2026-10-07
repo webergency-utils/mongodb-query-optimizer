@@ -22,6 +22,7 @@ export default defineConfig({
         "src/passes/dead-assignment-proofs.ts": { branches: 100 },
         "src/passes/expr-match-normalization.ts": { branches: 100 },
         "src/passes/expr-normalization-proofs.ts": { branches: 100 },
+        "src/passes/expression-simplification.ts": { branches: 100 },
         "src/passes/facet-prefix-hoisting.ts": { branches: 100 },
         "src/passes/facet-proofs.ts": { branches: 100 },
         "src/passes/guarantee-guards.ts": { branches: 100 },

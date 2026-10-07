@@ -7,7 +7,7 @@ import type { SemanticCase } from './semantic-cases.js';
 import { MIXED_SHAPE_CATALOG } from './mixed-shapes.js';
 
 export const GENERATED_INTERACTION_SEED = 0x5eed_2026;
-export const GENERATED_INTERACTION_CASE_COUNT = 52;
+export const GENERATED_INTERACTION_CASE_COUNT = 54;
 
 interface InteractionDescriptor
 {
@@ -26,6 +26,10 @@ const interactionDescriptors: readonly InteractionDescriptor[] = Object.freeze([
     },
     {
         pipelineId: 'limit-skip-coalescing',
+        filterId: 'flatten-conjunctions',
+    },
+    {
+        pipelineId: 'expression-simplification',
         filterId: 'flatten-conjunctions',
     },
     {
@@ -270,6 +274,23 @@ function makeInteractionPipeline(
                 { $sort: { _id: 1 } },
                 { $limit: firstLimit },
                 { $limit: secondLimit },
+            ];
+        case 'expression-simplification':
+            return [
+                { $match: filter },
+                {
+                    $addFields: {
+                        total: {
+                            $size: {
+                                $filter: {
+                                    input: '$items',
+                                    cond: { $and: [ {}, {} ] },
+                                },
+                            },
+                        },
+                    },
+                },
+                { $sort: { _id: 1 } },
             ];
         case 'match-pushdown':
             return [

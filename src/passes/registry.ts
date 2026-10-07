@@ -11,6 +11,7 @@ import { ComplexProjectionDeferralPass } from './complex-projection-deferral';
 import { CoveredProjectionSynthesisPass } from './covered-projection-synthesis';
 import { DeadAssignmentEliminationPass } from './dead-assignment-elimination';
 import { ExprMatchNormalizationPass } from './expr-match-normalization';
+import { ExpressionSimplificationPass } from './expression-simplification';
 import { FacetPrefixHoistingPass } from './facet-prefix-hoisting';
 import { FilterOptimizationPass } from './filter-optimization';
 import { GroupFilterPushdownPass } from './group-filter-pushdown';
@@ -44,6 +45,7 @@ const registeredPipelineTransformationIds = Object.freeze([
     'redundant-sort-elimination',
     'sort-by-count-simplification',
     'limit-skip-coalescing',
+    'expression-simplification',
     'match-pushdown',
     'heuristic-match-pushdown',
     'limit-advance',
@@ -73,6 +75,7 @@ const activePipelineTransformationIds: readonly PipelineTransformationId[] = Obj
     'redundant-sort-elimination',
     'sort-by-count-simplification',
     'limit-skip-coalescing',
+    'expression-simplification',
     'match-pushdown',
     'heuristic-match-pushdown',
     'limit-advance',
@@ -120,6 +123,7 @@ const candidatePipelineTransformationRegistry: Readonly<
     'redundant-sort-elimination': () => new RedundantSortEliminationPass(),
     'sort-by-count-simplification': () => new SortByCountSimplificationPass(),
     'limit-skip-coalescing': () => new LimitSkipCoalescingPass(),
+    'expression-simplification': () => new ExpressionSimplificationPass(),
     'match-pushdown': () => new MatchPushdownPass(),
     'heuristic-match-pushdown': () => new HeuristicMatchPushdownPass(),
     'limit-advance': () => new LimitAdvancePass(),

@@ -312,6 +312,23 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         }
     ),
     evidence(
+        'expression-simplification',
+        'feat-expression-simplification-focused',
+        'u9-generated-top-level-expression-simplification',
+        'u9-generated-nested-expression-simplification',
+        'feat-expression-simplification-oracle',
+        {
+            status: 'active',
+            proofRecheckNote: 'Proof audited: folds always-true constant $and/$or conditions and simplifies $size over $filter when cond is truthy; skipped under strictErrors to preserve error code fidelity on scalar inputs.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-expression-simplification',
+                strictFieldOrder: 'mixed-shape-expression-simplification',
+                strictErrors: 'mixed-shape-expression-simplification'
+            },
+            strictModeBehavior: 'constrained'
+        }
+    ),
+    evidence(
         'match-pushdown',
         'u5-match-project-alias-top-level',
         'u9-generated-top-level-match-pushdown',

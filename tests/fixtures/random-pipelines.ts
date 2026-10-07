@@ -106,6 +106,13 @@ export const RANDOM_PIPELINE_TEMPLATES: readonly PipelineTemplate[] = Object.fre
         ]
     },
     {
+        passId: 'expression-simplification',
+        buildPipeline: ( _random, _index ) => [
+            { $addFields: { total: { $size: { $filter: { input: '$tags', cond: { $and: [ {}, {} ] } } } } } },
+            { $sort: { _id: 1 } }
+        ]
+    },
+    {
         passId: 'match-pushdown',
         buildPipeline: ( _random, _index ) => [
             { $project: { _id: 1, status: 1, score: 1 } },

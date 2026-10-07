@@ -3129,6 +3129,48 @@ export const productionSemanticCases: readonly SemanticCase[] = [
         expectedEquivalent: true,
     },
     {
+        id: 'feat-expression-simplification-focused',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, tags: [ 'a', 'b' ], score: 10 },
+                    { _id: 2, tags: [ 'c' ], score: 20 },
+                    { _id: 3, tags: [], score: 30 },
+                ],
+            },
+        },
+        pipeline: [
+            { $addFields: { total: { $size: { $filter: { input: '$tags', cond: { $and: [ {}, {} ] } } } } } },
+            { $sort: { _id: 1 } },
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: ['expression-simplification'],
+        expectedEquivalent: true,
+    },
+    {
+        id: 'feat-expression-simplification-oracle',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, tags: [ 'a', 'b' ], score: 10 },
+                    { _id: 2, tags: [ 'c' ], score: 20 },
+                    { _id: 3, tags: [], score: 30 },
+                ],
+            },
+        },
+        pipeline: [
+            { $addFields: { total: { $size: { $filter: { input: '$tags', cond: { $and: [ {}, {} ] } } } } } },
+            { $sort: { _id: 1 } },
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: ['expression-simplification'],
+        expectedEquivalent: true,
+    },
+    {
         id: 'feat-heuristic-match-pushdown-focused',
         kind: 'pipeline',
         mainCollectionId: 'main',

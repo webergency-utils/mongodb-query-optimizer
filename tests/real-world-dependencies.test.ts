@@ -134,6 +134,7 @@ describe( 'Real-world corpus fixtures and dependencies', () =>
 
         expect( affectingPasses ).toEqual(
         [
+            'expression-simplification',
             'add-field-pushdown',
             'top-k-pushdown'
         ] );
@@ -161,7 +162,7 @@ describe( 'Real-world corpus fixtures and dependencies', () =>
             }
         }
 
-        expect( affectingPasses ).toEqual( [ 'top-k-pushdown' ] );
+        expect( affectingPasses ).toEqual( [ 'expression-simplification', 'top-k-pushdown' ] );
     } );
 
     it( 'produces the success-criterion shape under the production profile in default mode', () =>
@@ -235,10 +236,23 @@ describe( 'Real-world corpus fixtures and dependencies', () =>
         const strictOrderOptimized = optimizePipelineProduction( fixtureTestFullQuery, { strictFieldOrder: true } );
         const strictErrorsOptimized = optimizePipelineProduction( fixtureTestFullQuery, { strictErrors: true } );
 
+        const expectedStrictOrder = JSON.parse( JSON.stringify( fixtureTestFullQuery ) );
+        expectedStrictOrder[ 4 ].$addFields.totalApplicationsCount = {
+            $sum: {
+                $map: {
+                    input: '$engagements',
+                    as: 'engagement',
+                    in: {
+                        $size: '$$engagement.applications'
+                    }
+                }
+            }
+        };
+
         expect( defaultOptimized.length ).toBe( 9 );
         expect( Object.keys( defaultOptimized[ 1 ].$addFields )[ 0 ] ).toBe( '__heuristic_furthestStage' );
         expect( defaultOptimized[ 4 ].$unset ).toBe( '__heuristic_furthestStage' );
-        expect( strictOrderOptimized ).toEqual( fixtureTestFullQuery );
+        expect( strictOrderOptimized ).toEqual( expectedStrictOrder );
         expect( strictErrorsOptimized ).toEqual( fixtureTestFullQuery );
     } );
 } );

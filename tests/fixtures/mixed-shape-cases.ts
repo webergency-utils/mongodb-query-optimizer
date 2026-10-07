@@ -276,6 +276,28 @@ export const mixedShapeDifferentialCases: readonly MixedShapeDifferentialCase[] 
     },
 
     {
+        id: 'mixed-shape-expression-simplification',
+        description: 'expression-simplification folds $size over $filter with truthy cond',
+        passId: 'expression-simplification',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, tags: [ 'a', 'b' ], rank: 1 },
+                    { _id: 2, tags: [ 'c' ], rank: 2 },
+                    { _id: 3, tags: [], rank: 3 },
+                ],
+            },
+        },
+        pipeline: [
+            { $addFields: { total: { $size: { $filter: { input: '$tags', cond: { $and: [ {}, {} ] } } } } } },
+            { $sort: { _id: 1 } },
+        ],
+        observation: 'ordered-bson',
+        expectedOriginalOutcome: 'success',
+    },
+
+    {
         id: 'mixed-shape-heuristic-match-pushdown',
         description: 'heuristic-match-pushdown of computed field across costly lookup',
         passId: 'heuristic-match-pushdown',
