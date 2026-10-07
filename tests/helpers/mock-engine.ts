@@ -36,10 +36,10 @@ export function runMockPipeline(
             {
                 docs = docs.map((doc: any) =>
                 {
-                    const newDoc = { ...doc };
+                    let newDoc = { ...doc };
                     for (const [key, value] of Object.entries(val))
                     {
-                        setNestedVal(newDoc, key, evalExpr(doc, value));
+                        newDoc = assignFieldPath(newDoc, key.split('.'), evalExpr(doc, value));
                     }
                     return newDoc;
                 });
@@ -136,15 +136,14 @@ export function runMockPipeline(
                 {
                     for (const [key, direction] of Object.entries(val))
                     {
-                        const leftValue = getNestedVal(left, key);
-                        const rightValue = getNestedVal(right, key);
-                        if (leftValue < rightValue)
+                        const descending = (direction as number) === -1;
+                        const order = compareSortValues(
+                            sortKeyValue(getNestedVal(left, key), descending),
+                            sortKeyValue(getNestedVal(right, key), descending),
+                        );
+                        if (order !== 0)
                         {
-                            return (direction as number) === -1 ? 1 : -1;
-                        }
-                        if (leftValue > rightValue)
-                        {
-                            return (direction as number) === -1 ? -1 : 1;
+                            return descending ? -order : order;
                         }
                     }
                     return 0;
@@ -636,14 +635,116 @@ function setNestedVal(obj: any, path: string, value: any): void
     for (let index = 0; index < parts.length - 1; index++)
     {
         const part = parts[index]!;
-        if (!current[part])
+        if (current[part] === undefined || current[part] === null)
         {
             current[part] = {};
+        }
+        if (typeof current[part] !== "object" || Array.isArray(current[part]))
+        {
+            throw new Error(`Mock engine does not model a dotted write through non-document ${part}`);
         }
         current = current[part];
     }
 
     current[parts[parts.length - 1]!] = value;
+}
+
+function isPlainDocument( value: unknown ): value is Record<string, any>
+{
+    return value !== null && typeof value === 'object' && !Array.isArray( value );
+}
+
+// $addFields / $set dotted-path semantics verified against MongoDB 8: arrays apply the
+// remaining path to every element, nested arrays recurse, and any non-document value is
+// replaced by a fresh sub-document.
+function assignFieldPath( target: any, parts: readonly string[], value: any ): any
+{
+    if( Array.isArray( target ))
+    {
+        return target.map(( element ) => assignFieldPath( element, parts, value ));
+    }
+
+    const base: Record<string, any> = isPlainDocument( target ) ? { ...target } : {};
+    const [ head, ...rest ] = parts;
+
+    base[head!] = rest.length === 0 ? value : assignFieldPath( base[head!], rest, value );
+
+    return base;
+}
+
+function sortTypeRank( value: unknown ): number
+{
+    if( value === null || value === undefined )
+    {
+        return 1;
+    }
+
+    if( typeof value === 'number' )
+    {
+        return 2;
+    }
+
+    if( typeof value === 'string' )
+    {
+        return 3;
+    }
+
+    if( typeof value === 'boolean' )
+    {
+        return 6;
+    }
+
+    return Array.isArray( value ) ? 5 : 4;
+}
+
+// MongoDB sorts an array by its smallest element ascending and its largest element descending.
+// An empty array sorts before null.
+const EMPTY_ARRAY_SORT_KEY = Symbol( 'empty-array' );
+
+function sortKeyValue( value: unknown, descending: boolean ): unknown
+{
+    if( !Array.isArray( value ))
+    {
+        return value;
+    }
+
+    if( value.length === 0 )
+    {
+        return EMPTY_ARRAY_SORT_KEY;
+    }
+
+    return value.reduce(( best, entry ) =>
+    {
+        const order = compareSortValues( entry, best );
+
+        return ( descending ? order > 0 : order < 0 ) ? entry : best;
+    });
+}
+
+function compareSortValues( left: unknown, right: unknown ): number
+{
+    const leftRank = left === EMPTY_ARRAY_SORT_KEY ? 0 : sortTypeRank( left );
+    const rightRank = right === EMPTY_ARRAY_SORT_KEY ? 0 : sortTypeRank( right );
+
+    if( leftRank !== rightRank )
+    {
+        return leftRank < rightRank ? -1 : 1;
+    }
+
+    if( leftRank <= 1 )
+    {
+        return 0;
+    }
+
+    if( leftRank >= 4 && leftRank <= 5 )
+    {
+        const leftJson = JSON.stringify( left );
+        const rightJson = JSON.stringify( right );
+
+        return leftJson < rightJson ? -1 : leftJson > rightJson ? 1 : 0;
+    }
+
+    return ( left as any ) < ( right as any ) ? -1 : ( left as any ) > ( right as any ) ? 1 : 0;
 }
 
 function deleteNestedVal(obj: any, path: string): void
@@ -674,156 +775,299 @@ function deleteNestedVal(obj: any, path: string): void
     }
 }
 
-function evalExpr(doc: any, expression: any): any
+type MockVariables = Readonly<Record<string, unknown>>;
+
+function isMongoTruthy( value: unknown ): boolean
 {
-    if (typeof expression === "string")
+    return !( value === false || value === null || value === undefined || value === 0 );
+}
+
+function isNullish( value: unknown ): boolean
+{
+    return value === null || value === undefined;
+}
+
+function operandList( doc: any, value: any, vars: MockVariables ): any[]
+{
+    return Array.isArray( value )
+        ? value.map(( entry ) => evalExpr( doc, entry, vars ))
+        : [ evalExpr( doc, value, vars ) ];
+}
+
+function resolveVariable( reference: string, vars: MockVariables ): any
+{
+    const [ name, ...path ] = reference.split( '.' );
+
+    if( name === 'REMOVE' )
     {
-        if (expression.startsWith("$") && !expression.startsWith("$$"))
-        {
-            return getNestedVal(doc, expression.slice(1));
-        }
-        return expression;
-    }
-    if (!expression || typeof expression !== "object")
-    {
-        return expression;
-    }
-    if (Array.isArray(expression))
-    {
-        return expression.map((value) => evalExpr(doc, value));
+        return undefined;
     }
 
-    const keys = Object.keys(expression);
-    if (keys.length === 0)
+    if( !Object.prototype.hasOwnProperty.call( vars, name! ))
+    {
+        throw new Error( `Mock engine does not define variable $$${ name }` );
+    }
+
+    const root = vars[name!];
+
+    return path.length === 0 ? root : getNestedVal( root, path.join( '.' ));
+}
+
+function strictArithmetic( operator: string, values: any[] ): any
+{
+    if( values.some( isNullish ))
+    {
+        return null;
+    }
+
+    for( const entry of values )
+    {
+        if( typeof entry !== 'number' )
+        {
+            throw new Error( `Mock engine ${ operator } only supports numeric types, not ${ typeof entry }` );
+        }
+    }
+
+    if( operator === '$add' )
+    {
+        return values.reduce(( sum, entry ) => sum + entry, 0 );
+    }
+
+    if( operator === '$multiply' )
+    {
+        return values.reduce(( product, entry ) => product * entry, 1 );
+    }
+
+    if( operator === '$subtract' )
+    {
+        return values[0] - values[1];
+    }
+
+    if( values[1] === 0 )
+    {
+        throw new Error( "Mock engine can't $divide by zero" );
+    }
+
+    return values[0] / values[1];
+}
+
+function evalFilter( doc: any, spec: any, vars: MockVariables ): any
+{
+    const input = evalExpr( doc, spec.input, vars );
+
+    if( isNullish( input ))
+    {
+        return null;
+    }
+
+    if( !Array.isArray( input ))
+    {
+        throw new Error( 'Mock engine $filter input must be an array' );
+    }
+
+    const name = typeof spec.as === 'string' ? spec.as : 'this';
+    const limit = spec.limit === undefined ? undefined : evalExpr( doc, spec.limit, vars );
+    const kept: any[] = [];
+
+    for( const element of input )
+    {
+        if( limit !== undefined && kept.length >= limit )
+        {
+            break;
+        }
+
+        if( isMongoTruthy( evalExpr( doc, spec.cond, { ...vars, [name]: element })))
+        {
+            kept.push( element );
+        }
+    }
+
+    return kept;
+}
+
+function evalCond( doc: any, value: any, vars: MockVariables ): any
+{
+    const [ condition, thenBranch, elseBranch ] = Array.isArray( value )
+        ? value
+        : [ value.if, value.then, value.else ];
+
+    return isMongoTruthy( evalExpr( doc, condition, vars ))
+        ? evalExpr( doc, thenBranch, vars )
+        : evalExpr( doc, elseBranch, vars );
+}
+
+function evalMergeObjects( doc: any, value: any, vars: MockVariables ): any
+{
+    const merged: Record<string, any> = {};
+
+    for( const entry of operandList( doc, value, vars ))
+    {
+        if( isNullish( entry ))
+        {
+            continue;
+        }
+
+        if( typeof entry !== 'object' || Array.isArray( entry ))
+        {
+            throw new Error( 'Mock engine $mergeObjects requires object inputs' );
+        }
+
+        Object.assign( merged, entry );
+    }
+
+    return merged;
+}
+
+function evalSum( doc: any, value: any, vars: MockVariables ): number
+{
+    const values = operandList( doc, value, vars );
+    const flattened = !Array.isArray( value ) && Array.isArray( values[0] ) ? values[0] : values;
+
+    return flattened.reduce(( sum: number, entry: any ) => sum + ( typeof entry === 'number' ? entry : 0 ), 0 );
+}
+
+function evalComparison( operator: string, values: any[] ): boolean
+{
+    switch( operator )
+    {
+        case '$gt': return values[0] > values[1];
+        case '$gte': return values[0] >= values[1];
+        case '$lt': return values[0] < values[1];
+        case '$lte': return values[0] <= values[1];
+        case '$eq': return values[0] === values[1];
+        default: return values[0] !== values[1];
+    }
+}
+
+const COMPARISON_OPERATORS = new Set([ '$gt', '$gte', '$lt', '$lte', '$eq', '$ne' ]);
+const ARITHMETIC_OPERATORS = new Set([ '$add', '$multiply', '$subtract', '$divide' ]);
+
+function evalOperator( doc: any, operator: string, value: any, vars: MockVariables ): any
+{
+    if( COMPARISON_OPERATORS.has( operator ))
+    {
+        return evalComparison( operator, operandList( doc, value, vars ));
+    }
+
+    if( ARITHMETIC_OPERATORS.has( operator ))
+    {
+        return strictArithmetic( operator, operandList( doc, value, vars ));
+    }
+
+    switch( operator )
+    {
+        case '$literal':
+            return value;
+        case '$sum':
+            return evalSum( doc, value, vars );
+        case '$not':
+            return !isMongoTruthy( operandList( doc, value, vars )[0] );
+        case '$and':
+            return operandList( doc, value, vars ).every( isMongoTruthy );
+        case '$or':
+            return operandList( doc, value, vars ).some( isMongoTruthy );
+        case '$toUpper':
+        case '$toLower':
+        {
+            const text = evalExpr( doc, value, vars );
+
+            if( typeof text !== 'string' )
+            {
+                return text;
+            }
+
+            return operator === '$toUpper' ? text.toUpperCase() : text.toLowerCase();
+        }
+        case '$concat':
+            return operandList( doc, value, vars ).join( '' );
+        case '$size':
+        {
+            const array = evalExpr( doc, value, vars );
+
+            if( !Array.isArray( array ))
+            {
+                throw new Error( 'Mock engine $size argument must be an array' );
+            }
+
+            return array.length;
+        }
+        case '$ifNull':
+        {
+            const values = operandList( doc, value, vars );
+
+            return isNullish( values[0] ) ? values[1] : values[0];
+        }
+        case '$cond':
+            return evalCond( doc, value, vars );
+        case '$filter':
+            return evalFilter( doc, value, vars );
+        case '$mergeObjects':
+            return evalMergeObjects( doc, value, vars );
+        case '$function':
+        {
+            const { body, args } = value;
+            const evaluatedArgs = Array.isArray( args )
+                ? args.map(( argument: any ) => evalExpr( doc, argument, vars ))
+                : [];
+            const callable = typeof body === 'function'
+                ? body
+                : eval( `(${ body })` );
+
+            return callable( ...evaluatedArgs );
+        }
+        default:
+            throw new Error( `Mock engine does not implement expression operator ${ operator }` );
+    }
+}
+
+function evalExpr( doc: any, expression: any, vars: MockVariables = { ROOT: doc, CURRENT: doc } ): any
+{
+    if( typeof expression === 'string' )
+    {
+        if( expression.startsWith( '$$' ))
+        {
+            return resolveVariable( expression.slice( 2 ), vars );
+        }
+
+        if( expression.startsWith( '$' ))
+        {
+            return getNestedVal( doc, expression.slice( 1 ));
+        }
+
+        return expression;
+    }
+
+    if( !expression || typeof expression !== 'object' )
+    {
+        return expression;
+    }
+
+    if( Array.isArray( expression ))
+    {
+        return expression.map(( value ) => evalExpr( doc, value, vars ));
+    }
+
+    const keys = Object.keys( expression );
+
+    if( keys.length === 0 )
     {
         return {};
     }
 
     const operator = keys[0]!;
-    if (operator.startsWith("$"))
+
+    if( operator.startsWith( '$' ))
     {
-        const value = expression[operator];
-        if (operator === "$sum" || operator === "$add")
-        {
-            const values = Array.isArray(value)
-                ? value.map((entry) => evalExpr(doc, entry))
-                : [evalExpr(doc, value)];
-            return values.reduce(
-                (sum, entry) => sum + (typeof entry === "number" ? entry : 0),
-                0,
-            );
-        }
-        if (operator === "$gt")
-        {
-            const values = value.map((entry: any) => evalExpr(doc, entry));
-            return values[0] > values[1];
-        }
-        if (operator === "$gte")
-        {
-            const values = value.map((entry: any) => evalExpr(doc, entry));
-            return values[0] >= values[1];
-        }
-        if (operator === "$lt")
-        {
-            const values = value.map((entry: any) => evalExpr(doc, entry));
-            return values[0] < values[1];
-        }
-        if (operator === "$lte")
-        {
-            const values = value.map((entry: any) => evalExpr(doc, entry));
-            return values[0] <= values[1];
-        }
-        if (operator === "$eq")
-        {
-            const values = value.map((entry: any) => evalExpr(doc, entry));
-            return values[0] === values[1];
-        }
-        if (operator === "$ne")
-        {
-            const values = value.map((entry: any) => evalExpr(doc, entry));
-            return values[0] !== values[1];
-        }
-        if (operator === "$not")
-        {
-            const values = Array.isArray(value)
-                ? value.map((entry) => evalExpr(doc, entry))
-                : [evalExpr(doc, value)];
-            return !values[0];
-        }
-        if (operator === "$and" || operator === "$or")
-        {
-            const values = value.map((entry: any) => evalExpr(doc, entry));
-            return operator === "$and"
-                ? values.every(Boolean)
-                : values.some(Boolean);
-        }
-        if (operator === "$multiply")
-        {
-            const values = Array.isArray(value)
-                ? value.map((entry) => evalExpr(doc, entry))
-                : [evalExpr(doc, value)];
-            return values.reduce(
-                (product, entry) => product * (typeof entry === "number" ? entry : 0),
-                1,
-            );
-        }
-        if (operator === "$subtract")
-        {
-            const values = value.map((entry: any) => evalExpr(doc, entry));
-            return (typeof values[0] === "number" ? values[0] : 0) - (typeof values[1] === "number" ? values[1] : 0);
-        }
-        if (operator === "$divide")
-        {
-            const values = value.map((entry: any) => evalExpr(doc, entry));
-            return values[1] !== 0 ? (values[0] / values[1]) : null;
-        }
-        if (operator === "$toUpper")
-        {
-            const v = evalExpr(doc, value);
-            return typeof v === "string" ? v.toUpperCase() : v;
-        }
-        if (operator === "$toLower")
-        {
-            const v = evalExpr(doc, value);
-            return typeof v === "string" ? v.toLowerCase() : v;
-        }
-        if (operator === "$concat")
-        {
-            const values = Array.isArray(value)
-                ? value.map((entry) => evalExpr(doc, entry))
-                : [evalExpr(doc, value)];
-            return values.join("");
-        }
-        if (operator === "$size")
-        {
-            const arrayVal = evalExpr(doc, value);
-            return Array.isArray(arrayVal) ? arrayVal.length : 0;
-        }
-        if (operator === "$ifNull")
-        {
-            const values = Array.isArray(value)
-                ? value.map((entry) => evalExpr(doc, entry))
-                : [evalExpr(doc, value)];
-            return values[0] !== null && values[0] !== undefined ? values[0] : values[1];
-        }
-        if (operator === "$function")
-        {
-            const { body, args } = value;
-            const evaluatedArgs = Array.isArray(args)
-                ? args.map((argument) => evalExpr(doc, argument))
-                : [];
-            const callable = typeof body === "function"
-                ? body
-                : eval(`(${body})`);
-            return callable(...evaluatedArgs);
-        }
+        return evalOperator( doc, operator, expression[operator], vars );
     }
 
     const result: Record<string, any> = {};
-    for (const [key, value] of Object.entries(expression))
+
+    for( const [ key, value ] of Object.entries( expression ))
     {
-        result[key] = evalExpr(doc, value);
+        result[key] = evalExpr( doc, value, vars );
     }
+
     return result;
 }
 
