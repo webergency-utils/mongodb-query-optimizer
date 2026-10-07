@@ -609,8 +609,8 @@ describe( 'TopKPushdownPass execution and mock verification', () =>
             [
                 { $match: { deleted: false } },
                 { $lookup: { from: 'comments', as: 'comments' } },
-                { $addFields: { 'k_1': { $size: '$tags' }, 'k.1': { $size: '$tags' } } },
-                { $sort: { 'k_1': 1, 'k.1': 1 } },
+                { $addFields: { 'k_1': { $size: '$tags' }, 'k-1': { $size: '$tags' } } },
+                { $sort: { 'k_1': 1, 'k-1': 1 } },
                 { $limit: 10 }
             ];
 
@@ -682,6 +682,175 @@ describe( 'TopKPushdownPass execution and mock verification', () =>
             } );
             expect( multiOptimized[ 6 ] ).toEqual( { $lookup: { from: 'extra', as: 'extra' } } );
         });
+    });
+});
+
+describe( 'heuristic top-k hardening (multi-provider, dotted, profitability)', () =>
+{
+    const context = resolvePipelineGuarantees( [], {} );
+    const pass = new TopKPushdownPass();
+    const docs = [
+        { _id: 1, tags: [ 'a' ] },
+        { _id: 2, tags: [ 'a', 'b', 'c' ] },
+        { _id: 3, tags: [] },
+        { _id: 4, tags: [ 'a', 'b', 'c', 'd', 'e' ] },
+    ];
+    const lookup = { $lookup: { from: 'extra', localField: '_id', foreignField: 'ref', as: 'extra' } };
+    const ids = ( pipeline: any[] ): unknown[] => runMockPipeline( docs, pipeline ).map(( doc ) => doc._id );
+
+    it( 'rejects providers split by a stage that writes a later key dependency (AE1)', () =>
+    {
+        const pipeline = [
+            lookup,
+            { $addFields: { k1: 0 } },
+            { $set: { base: -1 } },
+            { $addFields: { k2: { $multiply: [ { $size: '$tags' }, '$base' ] } } },
+            { $sort: { k1: 1, k2: 1, _id: 1 } },
+            { $limit: 2 },
+        ];
+
+        expect( ids( pipeline )).toEqual([ 4, 2 ]);
+        expect( proveHeuristicTopKPushdown( pipeline, 4, context )).toBeNull();
+        expect( ids( pass.execute( pipeline ))).toEqual([ 4, 2 ]);
+    });
+
+    it( 'rejects a sort key that reads another computed sort key (AE2)', () =>
+    {
+        const pipeline = [
+            lookup,
+            { $addFields: { k1: 0 } },
+            { $addFields: { k2: { $multiply: [ { $size: '$tags' }, { $add: [ '$k1', -1 ] } ] } } },
+            { $sort: { k1: 1, k2: 1, _id: 1 } },
+            { $limit: 2 },
+        ];
+
+        expect( ids( pipeline )).toEqual([ 4, 2 ]);
+        expect( proveHeuristicTopKPushdown( pipeline, 3, context )).toBeNull();
+        expect( ids( pass.execute( pipeline ))).toEqual([ 4, 2 ]);
+    });
+
+    it( 'rejects dotted computed sort keys (AE3)', () =>
+    {
+        const pipeline = [
+            lookup,
+            { $addFields: { 'arr.v': { $size: '$tags' } } },
+            { $sort: { 'arr.v': 1 } },
+            { $limit: 2 },
+        ];
+
+        expect( proveHeuristicTopKPushdown( pipeline, 2, context )).toBeNull();
+    });
+
+    it( 'rejects a rewrite that only crosses cheap stages (AE4)', () =>
+    {
+        const pipeline = [
+            { $match: { deleted: false } },
+            { $addFields: { unrelated: 1 } },
+            { $addFields: { k: { $size: '$tags' } } },
+            { $sort: { k: 1 } },
+            { $limit: 2 },
+        ];
+
+        expect( proveHeuristicTopKPushdown( pipeline, 3, context )).toBeNull();
+    });
+
+    it( 'never re-hoists a sort spec that already uses a shadow field', () =>
+    {
+        const pipeline = [
+            lookup,
+            { $addFields: { __heuristic_k: { $size: '$tags' } } },
+            { $sort: { __heuristic_k: 1 } },
+            { $limit: 2 },
+        ];
+
+        expect( proveHeuristicTopKPushdown( pipeline, 2, context )).toBeNull();
+    });
+
+    it( 'rejects when a stage between target and sort removes a root sort key', () =>
+    {
+        const pipeline = [
+            lookup,
+            { $addFields: { k: { $size: '$tags' } } },
+            { $unset: 'rank' },
+            { $sort: { k: 1, rank: 1 } },
+            { $limit: 2 },
+        ];
+
+        expect( proveHeuristicTopKPushdown( pipeline, 3, context )).toBeNull();
+    });
+
+    it( 'requires every stage up to the sort to be error-free under strictErrors', () =>
+    {
+        const strict = resolvePipelineGuarantees( [], { strictErrors: true } );
+        const pipeline = [
+            lookup,
+            { $addFields: { k: { $ifNull: [ '$score', 0 ] } } },
+            { $addFields: { ratio: { $divide: [ 1, '$weight' ] } } },
+            { $sort: { k: 1 } },
+            { $limit: 2 },
+        ];
+
+        expect( proveHeuristicTopKPushdown( pipeline, 3, strict )).toBeNull();
+        expect( proveHeuristicTopKPushdown( pipeline, 3, context )).not.toBeNull();
+    });
+
+    it( 'accepts two keys from one provider behind a lookup with one array unset', () =>
+    {
+        const pipeline = [
+            lookup,
+            { $addFields: { a: { $size: '$tags' }, b: { $multiply: [ { $size: '$tags' }, -1 ] } } },
+            { $sort: { a: -1, b: 1, _id: 1 } },
+            { $limit: 2 },
+        ];
+        const optimized = pass.execute( pipeline );
+
+        expect( optimized[ 3 ] ).toEqual({ $unset: [ '__heuristic_a', '__heuristic_b' ] });
+        expect( ids( optimized )).toEqual( ids( pipeline ));
+    });
+
+    it( 'accepts two keys from different providers with independent dependencies', () =>
+    {
+        const pipeline = [
+            lookup,
+            { $addFields: { a: { $size: '$tags' } } },
+            { $addFields: { b: { $multiply: [ '$_id', -1 ] } } },
+            { $sort: { a: 1, b: 1 } },
+            { $limit: 3 },
+        ];
+        const proof = proveHeuristicTopKPushdown( pipeline, 3, context );
+
+        expect( proof ).not.toBeNull();
+        expect( proof!.targetIndex ).toBe( 0 );
+        expect( ids( pass.execute( pipeline ))).toEqual( ids( pipeline ));
+    });
+
+    it( 'counts a $function stage as costly, but not the hoisted key itself', () =>
+    {
+        const fn = { $function: { body: 'function( x ) { return x; }', args: [ '$tags' ], lang: 'js' } };
+        const costlyNeighbour = [
+            { $match: { deleted: false } },
+            { $addFields: { other: { $ifNull: [ fn, 0 ] } } },
+            { $addFields: { k: { $size: '$tags' } } },
+            { $sort: { k: 1 } },
+            { $limit: 2 },
+        ];
+        const keyOnly = [
+            { $match: { deleted: false } },
+            { $addFields: { unrelated: 1 } },
+            { $addFields: { k: { $size: '$tags' }, j: fn } },
+            { $sort: { k: 1 } },
+            { $limit: 2 },
+        ];
+        const keyIsFunction = [
+            { $match: { deleted: false } },
+            { $addFields: { unrelated: 1 } },
+            { $addFields: { k: fn } },
+            { $sort: { k: 1 } },
+            { $limit: 2 },
+        ];
+        expect( proveHeuristicTopKPushdown( costlyNeighbour, 3, context )).not.toBeNull();
+        expect( proveHeuristicTopKPushdown( keyOnly, 3, context )).not.toBeNull();
+        expect( proveHeuristicTopKPushdown( keyIsFunction, 3, context )).toBeNull();
     });
 });
 

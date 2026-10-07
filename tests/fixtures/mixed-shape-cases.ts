@@ -576,4 +576,72 @@ export const mixedShapeDifferentialCases: readonly MixedShapeDifferentialCase[] 
         observation: 'ordered-bson',
         expectedOriginalOutcome: 'success',
     },
+    ...heuristicTopKHardeningCases(),
 ];
+
+function heuristicTopKHardeningCases(): MixedShapeDifferentialCase[]
+{
+    const tagDocuments = [
+        { _id: 1, tags: [ 'a' ], foreignId: 100 },
+        { _id: 2, tags: [ 'a', 'b', 'c' ], foreignId: 101 },
+        { _id: 3, tags: [], foreignId: 102 },
+        { _id: 4, tags: [ 'a', 'b', 'c', 'd', 'e' ], foreignId: 100 },
+    ];
+    const lookup = { $lookup: { from: 'foreign', localField: 'foreignId', foreignField: '_id', as: 'foreignDocs' } };
+    const collections = {
+        main: { documents: tagDocuments },
+        foreign: { documents: foreignLookupDocs },
+    };
+    const topKCase = ( id: string, description: string, pipeline: Document[], documents?: readonly Document[] ): MixedShapeDifferentialCase => ( {
+        id,
+        description,
+        passId: 'top-k-pushdown',
+        mainCollectionId: 'main',
+        collections: documents ? { ...collections, main: { documents } } : collections,
+        pipeline,
+        observation: 'ordered-bson',
+        expectedOriginalOutcome: 'success',
+    } );
+
+    return [
+        topKCase( 'mixed-shape-heuristic-top-k-split-providers', 'Heuristic Top-K AE1: providers split by a $set on a later key dependency', [
+            lookup,
+            { $addFields: { k1: 0 } },
+            { $set: { base: -1 } },
+            { $addFields: { k2: { $multiply: [ { $size: '$tags' }, '$base' ] } } },
+            { $sort: { k1: 1, k2: 1, _id: 1 } },
+            { $limit: 2 },
+        ] ),
+        topKCase( 'mixed-shape-heuristic-top-k-cross-key', 'Heuristic Top-K AE2: a sort key reads another computed sort key', [
+            lookup,
+            { $addFields: { k1: 0 } },
+            { $addFields: { k2: { $multiply: [ { $size: '$tags' }, { $add: [ '$k1', -1 ] } ] } } },
+            { $sort: { k1: 1, k2: 1, _id: 1 } },
+            { $limit: 2 },
+        ] ),
+        topKCase( 'mixed-shape-heuristic-top-k-dotted-key', 'Heuristic Top-K AE3: dotted computed key over array, empty array, scalar and missing parents', [
+            lookup,
+            { $addFields: { 'arr.v': { $size: '$tags' } } },
+            { $sort: { 'arr.v': 1, _id: 1 } },
+            { $limit: 2 },
+        ], [
+            { _id: 1, tags: [ 'a' ], arr: [ {}, {} ], foreignId: 100 },
+            { _id: 2, tags: [ 'a', 'b' ], arr: [], foreignId: 101 },
+            { _id: 3, tags: [], arr: 7, foreignId: 102 },
+            { _id: 4, tags: [ 'a', 'b', 'c' ], foreignId: 100 },
+        ] ),
+        topKCase( 'mixed-shape-heuristic-top-k-one-provider-two-keys', 'Heuristic Top-K accepts two keys from one provider behind a $lookup', [
+            lookup,
+            { $addFields: { a: { $size: '$tags' }, b: { $multiply: [ { $size: '$tags' }, -1 ] } } },
+            { $sort: { a: -1, b: 1, _id: 1 } },
+            { $limit: 2 },
+        ] ),
+        topKCase( 'mixed-shape-heuristic-top-k-independent-providers', 'Heuristic Top-K accepts two keys from different providers with independent dependencies', [
+            lookup,
+            { $addFields: { a: { $size: '$tags' } } },
+            { $addFields: { b: { $multiply: [ '$_id', -1 ] } } },
+            { $sort: { a: 1, b: 1 } },
+            { $limit: 3 },
+        ] ),
+    ];
+}

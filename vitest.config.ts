@@ -31,6 +31,7 @@ export default defineConfig({
         "src/passes/movement-proofs.ts": { branches: 100 },
         "src/passes/projection-proofs.ts": { branches: 100 },
         "src/passes/redundant-sort-elimination.ts": { branches: 100 },
+        "src/passes/shadow-proofs.ts": { branches: 100 },
         "src/passes/sort-by-count-proofs.ts": { branches: 100 },
         "src/passes/sort-by-count-simplification.ts": { branches: 100 },
         "src/passes/sort-proofs.ts": { branches: 100 },
