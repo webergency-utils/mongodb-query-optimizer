@@ -296,7 +296,16 @@ function optimizeFilterWithRules(
         return filter;
     }
 
-    const rootCopy = { ...filter };
+    let rootCopy: any;
+    try
+    {
+        rootCopy = { ...filter };
+    }
+    catch
+    {
+        return filter;
+    }
+
     if (
         rules.length === 0
         || !Number.isSafeInteger(sweepBudget)
@@ -306,36 +315,55 @@ function optimizeFilterWithRules(
         return rootCopy;
     }
 
-    let current = rootCopy;
-    let currentFingerprint = structuralFingerprint(current);
-    const history = new Set<string>([currentFingerprint]);
-
-    for (let sweep = 0; sweep < sweepBudget; sweep++)
+    try
     {
-        const next = applyFilterSweep(current, rules, context);
-        const nextFingerprint = structuralFingerprint(next);
+        let current = rootCopy;
+        let currentFingerprint = structuralFingerprint(current);
+        const history = new Set<string>([currentFingerprint]);
 
-        if (nextFingerprint === currentFingerprint)
+        for (let sweep = 0; sweep < sweepBudget; sweep++)
         {
-            return next;
+            const next = applyFilterSweep(current, rules, context);
+            const nextFingerprint = structuralFingerprint(next);
+
+            if (nextFingerprint === currentFingerprint)
+            {
+                return next;
+            }
+
+            if (history.has(nextFingerprint))
+            {
+                return rootCopy;
+            }
+
+            history.add(nextFingerprint);
+            current = next;
+            currentFingerprint = nextFingerprint;
         }
 
-        if (history.has(nextFingerprint))
-        {
-            return rootCopy;
-        }
-
-        history.add(nextFingerprint);
-        current = next;
-        currentFingerprint = nextFingerprint;
+        return rootCopy;
     }
-
-    return rootCopy;
+    catch
+    {
+        return rootCopy;
+    }
 }
 
 export function optimizeFilter<T = any>( filter: any, options?: OptimizerOptions ): T
 {
-    return optimizeFilterWithContext( filter, resolveFilterGuarantees( options ));
+    try
+    {
+        if( !isPlainObject( filter ))
+        {
+            return filter;
+        }
+
+        return optimizeFilterWithContext( filter, resolveFilterGuarantees( options ));
+    }
+    catch
+    {
+        return filter;
+    }
 }
 
 /**

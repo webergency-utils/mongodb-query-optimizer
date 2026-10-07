@@ -13,6 +13,18 @@ export { getStageInfo } from './analyzer';
  */
 export function optimizePipeline<T = any>( pipeline: any[], options?: OptimizerOptions ): T[]
 {
-    return optimizePipelineWithProductionRegistry( pipeline, options );
+    try
+    {
+        if( !Array.isArray( pipeline ))
+        {
+            return pipeline as unknown as T[];
+        }
+
+        return optimizePipelineWithProductionRegistry( pipeline, options );
+    }
+    catch
+    {
+        return pipeline;
+    }
 }
 

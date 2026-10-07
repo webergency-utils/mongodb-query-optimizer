@@ -357,9 +357,9 @@ describe('expression semantics', () =>
             { $unsupportedOperator: '$value' },
             { documentScope: 'local' },
         );
-        expect(unsupported.dependencies.local).toEqual(new Set(['value', '*']));
-        expect(unsupported.determinism).toBe('unknown');
-        expect(unsupported.errors).toBe('unknown');
+        expect(unsupported.dependencies.local).toEqual(new Set(['value']));
+        expect(unsupported.determinism).toBe('volatile');
+        expect(unsupported.errors).toBe('may-error');
         expect(unsupported.unknown).toBe(true);
     });
 });

@@ -75,30 +75,44 @@ function isExoticObject(val: any): boolean {
     return false;
 }
 
-export function deepClone(val: any): any {
-    if (val === null || val === undefined) return val;
-    if (typeof val !== 'object') return val;
-    if (val instanceof Date) return new Date(val.getTime());
-    if (val instanceof RegExp) return new RegExp(val.source, val.flags);
+export function deepClone( val: any, seen: WeakMap<object, any> = new WeakMap() ): any
+{
+    if( val === null || val === undefined ){ return val; }
 
-    if (typeof Buffer !== 'undefined' && typeof Buffer.isBuffer === 'function' && Buffer.isBuffer(val)) {
-        return Buffer.from(val);
+    if( typeof val !== 'object' ){ return val; }
+
+    if( seen.has( val )){ return seen.get( val ); }
+
+    if( val instanceof Date ){ return new Date( val.getTime() ); }
+
+    if( val instanceof RegExp ){ return new RegExp( val.source, val.flags ); }
+
+    if( typeof Buffer !== 'undefined' && typeof Buffer.isBuffer === 'function' && Buffer.isBuffer( val ))
+    {
+        return Buffer.from( val );
     }
 
-    // Preserve BSON / class instances by reference. structuredClone strips prototypes
-    // (ObjectId → plain object), which breaks driver equality. Optimizer passes do not
-    // mutate leaf filter values in place, so sharing is safe.
-    if (isExoticObject(val)) {
+    if( isExoticObject( val ))
+    {
         return val;
     }
 
-    if (Array.isArray(val)) {
-        return val.map(item => deepClone(item));
+    if( Array.isArray( val ))
+    {
+        const copy: any[] = [];
+        seen.set( val, copy );
+        for( const item of val )
+        {
+            copy.push( deepClone( item, seen ));
+        }
+        return copy;
     }
 
     const res: any = {};
-    for (const [k, v] of Object.entries(val)) {
-        res[k] = deepClone(v);
+    seen.set( val, res );
+    for( const [ k, v ] of Object.entries( val ))
+    {
+        res[ k ] = deepClone( v, seen );
     }
     return res;
 }

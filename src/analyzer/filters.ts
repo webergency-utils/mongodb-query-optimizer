@@ -460,7 +460,17 @@ function analyzeFieldCondition(
 
         if (!KNOWN_FIELD_OPERATORS.has(operator))
         {
-            markUnknown(summary, context, false);
+            const exprSummary = analyzeExpression(operand, context);
+            mergeDependencies(summary.dependencies, exprSummary.dependencies);
+            summary.determinism = joinDeterminism(
+                joinDeterminism(summary.determinism, exprSummary.determinism),
+                'volatile',
+            );
+            summary.errors = joinErrors(
+                joinErrors(summary.errors, exprSummary.errors),
+                'may-error',
+            );
+            summary.unknown = true;
         }
     }
 
@@ -553,7 +563,17 @@ function analyzeFilterObject(
             continue;
         }
 
-        markUnknown(summary, context, false);
+        const exprSummary = analyzeExpression(value, context);
+        mergeDependencies(summary.dependencies, exprSummary.dependencies);
+        summary.determinism = joinDeterminism(
+            joinDeterminism(summary.determinism, exprSummary.determinism),
+            'volatile',
+        );
+        summary.errors = joinErrors(
+            joinErrors(summary.errors, exprSummary.errors),
+            'may-error',
+        );
+        summary.unknown = true;
     }
 
     return summary;

@@ -432,7 +432,15 @@ export function optimizePipelineWithPasses(
         return pipeline;
     }
 
-    const pristine = deepClone( pipeline );
+    let pristine: any;
+    try
+    {
+        pristine = deepClone( pipeline );
+    }
+    catch
+    {
+        return pipeline;
+    }
 
     if( passes.length === 0 )
     {
@@ -444,45 +452,52 @@ export function optimizePipelineWithPasses(
         return pristine;
     }
 
-    const context = resolvePipelineGuarantees( pipeline, options );
-    let current = deepClone( pristine );
-    let currentFingerprint: string | null = null;
-    let history: Set<string> | null = null;
-
-    for( let sweep = 0; sweep < sweepBudget; sweep++ )
+    try
     {
-        const sweepResult = applyGlobalSweepWithDirty( current, passes, context );
+        const context = resolvePipelineGuarantees( pipeline, options );
+        let current = deepClone( pristine );
+        let currentFingerprint: string | null = null;
+        let history: Set<string> | null = null;
 
-        if( !sweepResult.modified )
+        for( let sweep = 0; sweep < sweepBudget; sweep++ )
         {
-            return sweepResult.pipeline;
+            const sweepResult = applyGlobalSweepWithDirty( current, passes, context );
+
+            if( !sweepResult.modified )
+            {
+                return sweepResult.pipeline;
+            }
+
+            if( currentFingerprint === null )
+            {
+                currentFingerprint = structuralFingerprint( current );
+                history = new Set<string>([ currentFingerprint ]);
+            }
+
+            const next = sweepResult.pipeline;
+            const nextFingerprint = structuralFingerprint( next );
+
+            if( nextFingerprint === currentFingerprint )
+            {
+                return next;
+            }
+
+            if( history!.has( nextFingerprint ))
+            {
+                return pristine;
+            }
+
+            history!.add( nextFingerprint );
+            current = next;
+            currentFingerprint = nextFingerprint;
         }
 
-        if( currentFingerprint === null )
-        {
-            currentFingerprint = structuralFingerprint( current );
-            history = new Set<string>([ currentFingerprint ]);
-        }
-
-        const next = sweepResult.pipeline;
-        const nextFingerprint = structuralFingerprint( next );
-
-        if( nextFingerprint === currentFingerprint )
-        {
-            return next;
-        }
-
-        if( history!.has( nextFingerprint ))
-        {
-            return pristine;
-        }
-
-        history!.add( nextFingerprint );
-        current = next;
-        currentFingerprint = nextFingerprint;
+        return pristine;
     }
-
-    return pristine;
+    catch
+    {
+        return pristine;
+    }
 }
 
 export function optimizePipelineWithProductionRegistry( pipeline: any, options?: OptimizerOptions ): any

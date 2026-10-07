@@ -750,10 +750,8 @@ function analyzeOperator(
     const summary = analyzeExpression(operand, context);
     if (!KNOWN_EXPRESSION_OPERATORS.has(operator))
     {
-        addScopedPath(summary.dependencies, context.documentScope, "*");
-        summary.dependencies.unknown = true;
-        summary.determinism = "unknown";
-        summary.errors = "unknown";
+        summary.determinism = joinDeterminism(summary.determinism, "volatile");
+        summary.errors = joinErrors(summary.errors, "may-error");
         summary.unknown = true;
         return summary;
     }

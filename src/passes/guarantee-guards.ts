@@ -277,9 +277,9 @@ export function canMoveStageAcrossStage(
 
     if( stageAddsFields( movingStage ) && stageAddsFields( acrossStage ))
     {
-        if( context.strictFieldOrder ){ return false }
+        if( context.strictFieldOrder ){ return false; }
 
-        if( pipelineReadsFieldOrder( downstreamPipeline )){ return false }
+        if( pipelineReadsFieldOrder( downstreamPipeline )){ return false; }
     }
 
     return true;
@@ -308,11 +308,11 @@ export function canSplitFieldAddingStage(
     downstreamPipeline : readonly unknown[] = []
 ): boolean
 {
-    if( !stageAddsFields( acrossStage )){ return true }
+    if( !stageAddsFields( acrossStage )){ return true; }
 
-    if( context.strictFieldOrder ){ return false }
+    if( context.strictFieldOrder ){ return false; }
 
-    if( pipelineReadsFieldOrder( downstreamPipeline )){ return false }
+    if( pipelineReadsFieldOrder( downstreamPipeline )){ return false; }
 
     return true;
 }
