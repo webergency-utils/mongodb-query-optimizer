@@ -85,7 +85,7 @@ The optimizer evaluates queries and aggregation pipelines purely as Abstract Syn
                  │
                  ▼
       ┌──────────────────────┐
-      │  Proof-Guarded Pass  │ (18 active pipeline passes, rigorous correctness proofs)
+      │  Proof-Guarded Pass  │ (20 active pipeline passes, rigorous correctness proofs)
       └──────────┬───────────┘
                  │
                  ▼
@@ -102,20 +102,22 @@ The optimizer evaluates queries and aggregation pipelines purely as Abstract Syn
 2. `top-k-pushdown`: Advances `$sort` and `$limit` slices ahead of 1:1 compute stages while respecting error guards.
 3. `lookup-delay`: Delays `$lookup` joins past non-dependent filter and sort stages.
 4. `unwind-prefilter`: Injects shape-safe `$or` prefilters before `$unwind` to discard non-matching documents without dropping polymorphic types or nested arrays.
-5. `match-pushdown`: Moves selective filter stages ahead of joins and projections.
-6. `limit-advance`: Advances `$limit` ahead of non-cardinality altering projections and stages.
-7. `group-filter-pushdown`: Pushes post-`$group` filters before `$group` when grouping by 1-to-1 deterministic keys.
-8. `bucket-filter-pushdown`: Pushes selective pre-filters before `$bucket` and `$bucketAuto` stages.
-9. `redundant-sort-elimination`: Collapses consecutive `$sort` stages where the latter supersedes the earlier.
-10. `sort-by-count-simplification`: Converts verbose `$group` + `$sort` count patterns into canonical `$sortByCount`.
-11. `limit-skip-coalescing`: Combines adjacent `$limit` and `$skip` stages into minimal offsets and counts.
-12. `unused-field-pruning`: Strips dead fields created in `$addFields`/`$set` when later stages discard them.
-13. `adjacent-project-merging`: Fuses consecutive `$project` stages into a single specification.
-14. `adjacent-add-field-merging`: Merges adjacent `$addFields` or `$set` stages.
-15. `redundant-lookup-elimination`: Drops unused `$lookup` joins whose aliases are discarded downstream.
-16. `sort-project-commute`: Commutes `$sort` ahead of `$project` when all sort keys remain visible.
-17. `complex-projection-deferral`: Pushes complex computed fields downstream past selective filters.
-18. `facet-prefix-hoisting`: Extracts identical prefix stages shared across all branches of a `$facet`.
+5. `redundant-sort-elimination`: Collapses consecutive `$sort` stages where the latter supersedes the earlier.
+6. `sort-by-count-simplification`: Converts verbose `$group` + `$sort` count patterns into canonical `$sortByCount`.
+7. `limit-skip-coalescing`: Combines adjacent `$limit` and `$skip` stages into minimal offsets and counts.
+8. `expression-simplification`: Folds constant boolean conditions and simplifies `$size` over `$filter` when conditions are always truthy.
+9. `match-pushdown`: Moves selective filter stages ahead of joins and projections.
+10. `heuristic-match-pushdown`: Pushes selective `$match` filters across heavy stages (`$lookup`, `$graphLookup`, `$function`) using deterministic shadow fields with per-key ranges and profitability gates.
+11. `limit-advance`: Advances `$limit` ahead of non-cardinality altering projections and stages.
+12. `group-filter-pushdown`: Pushes post-`$group` filters before `$group` when grouping by 1-to-1 deterministic keys.
+13. `bucket-filter-pushdown`: Pushes selective pre-filters before `$bucket` and `$bucketAuto` stages.
+14. `unused-field-pruning`: Strips dead fields created in `$addFields`/`$set` when later stages discard them.
+15. `adjacent-project-merging`: Fuses consecutive `$project` stages into a single specification.
+16. `adjacent-add-field-merging`: Merges adjacent `$addFields` or `$set` stages.
+17. `redundant-lookup-elimination`: Drops unused `$lookup` joins whose aliases are discarded downstream.
+18. `sort-project-commute`: Commutes `$sort` ahead of `$project` when all sort keys remain visible.
+19. `complex-projection-deferral`: Pushes complex computed fields downstream past selective filters.
+20. `facet-prefix-hoisting`: Extracts identical prefix stages shared across all branches of a `$facet`.
 
 ### Inactive & Contained Passes
 - `expr-match-normalization`: Inactive in production pending array traversal safety proofs across multikey arrays.

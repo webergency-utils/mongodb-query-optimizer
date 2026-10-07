@@ -20,7 +20,7 @@ The optimizer employs a mathematically sound, lattice-based abstract interpretat
 
 Every pipeline pass and filter normalization rule is strictly audited against formal correctness proofs and differential test suites. Entries in the production registry are either **Active** (with complete proof manifests and live MongoDB 8 verification) or **Inactive / Contained** with documented audit findings.
 
-### A. Active Pipeline Transformations (18 Passes)
+### A. Active Pipeline Transformations (20 Passes)
 
 | Pass ID | Status | Focus / Description | Mode Matrix Verification |
 | :--- | :---: | :--- | :---: |
@@ -28,13 +28,15 @@ Every pipeline pass and filter normalization rule is strictly audited against fo
 | `top-k-pushdown` | **Active** | Hoists `$sort` + `$limit` slices ahead of 1:1 compute stages. | Default, SFO, StrictErrors |
 | `lookup-delay` | **Active** | Delays `$lookup` joins past non-dependent filter and sort stages. | Default, SFO, StrictErrors |
 | `unwind-prefilter` | **Active** | Injects shape-safe `$or` prefilters before `$unwind` without dropping polymorphic shapes. | Default, SFO, StrictErrors |
-| `match-pushdown` | **Active** | Moves selective filter stages ahead of joins and projections. | Default, SFO, StrictErrors |
-| `limit-advance` | **Active** | Advances `$limit` ahead of non-cardinality altering projections. | Default, SFO, StrictErrors |
-| `group-filter-pushdown` | **Active** | Pushes post-`$group` filters before `$group` for 1-to-1 deterministic keys. | Default, SFO, StrictErrors |
-| `bucket-filter-pushdown` | **Active** | Pushes selective boundary pre-filters before `$bucket` and `$bucketAuto`. | Default, SFO, StrictErrors |
 | `redundant-sort-elimination` | **Active** | Collapses consecutive `$sort` stages where the latter supersedes the earlier. | Default, SFO, StrictErrors |
 | `sort-by-count-simplification` | **Active** | Simplifies verbose `$group` + `$sort` count patterns into canonical `$sortByCount`. | Default, SFO, StrictErrors |
 | `limit-skip-coalescing` | **Active** | Combines adjacent `$limit` and `$skip` stages into minimal offsets. | Default, SFO, StrictErrors |
+| `expression-simplification` | **Active** | Folds constant boolean conditions and simplifies `$size` over `$filter` when conditions are always truthy. | Default, SFO, StrictErrors |
+| `match-pushdown` | **Active** | Moves selective filter stages ahead of joins and projections. | Default, SFO, StrictErrors |
+| `heuristic-match-pushdown` | **Active** | Pushes selective `$match` filters across heavy stages using deterministic shadow fields with per-key ranges and profitability gates. | Default, SFO, StrictErrors |
+| `limit-advance` | **Active** | Advances `$limit` ahead of non-cardinality altering projections. | Default, SFO, StrictErrors |
+| `group-filter-pushdown` | **Active** | Pushes post-`$group` filters before `$group` for 1-to-1 deterministic keys. | Default, SFO, StrictErrors |
+| `bucket-filter-pushdown` | **Active** | Pushes selective boundary pre-filters before `$bucket` and `$bucketAuto`. | Default, SFO, StrictErrors |
 | `unused-field-pruning` | **Active** | Strips unreferenced fields created in `$addFields`/`$set`. | Default, SFO, StrictErrors |
 | `adjacent-project-merging` | **Active** | Fuses consecutive `$project` stages into a single specification. | Default, SFO, StrictErrors |
 | `adjacent-add-field-merging` | **Active** | Merges adjacent `$addFields` or `$set` stages. | Default, SFO, StrictErrors |
@@ -65,7 +67,7 @@ Below is the complete list of all 49 MongoDB aggregation pipeline stages from th
 
 | Stage Operator | Support Tier | Optimization Passes / Analyzer Handling | Semantic Behavior & Rationale |
 | :--- | :---: | :--- | :--- |
-| `$addFields` | **Tier 1** | `match-pushdown`, `adjacent-add-field-merging`, `unused-field-pruning`, `top-k-pushdown`, `add-field-pushdown` | Transparent: tracks field writes, merges adjacent stages, decomposes and hoists sort/match-dependent fields ahead of joins. |
+| `$addFields` | **Tier 1** | `match-pushdown`, `heuristic-match-pushdown`, `expression-simplification`, `adjacent-add-field-merging`, `unused-field-pruning`, `top-k-pushdown`, `add-field-pushdown` | Transparent: tracks field writes, merges adjacent stages, simplifies constant expressions, and decomposes/hoists sort/match-dependent fields ahead of joins. |
 | `$bucket` | **Tier 1** | `bucket-filter-pushdown` | Pushes boundary/prefilter conditions before partitioning. |
 | `$bucketAuto` | **Tier 1** | `bucket-filter-pushdown` | Pushes boundary/prefilter conditions before automated bucketing. |
 | `$changeStream` | **Tier 3** | `conservativeTop` (Opaque Barrier) | Real-time event stream; acts as a strict execution barrier. |
@@ -88,7 +90,7 @@ Below is the complete list of all 49 MongoDB aggregation pipeline stages from th
 | `$listSearchIndexes` | **Tier 3** | `conservativeTop` (Opaque Barrier) | Atlas Search index inspection; preserved verbatim. |
 | `$listSessions` | **Tier 3** | `conservativeTop` (Opaque Barrier) | Session metadata inspection; preserved verbatim. |
 | `$lookup` | **Tier 1** | `lookup-delay`, `redundant-lookup-elimination`, subpipeline pushdown, recursive subpipeline sweep, `top-k-pushdown`, `add-field-pushdown` | Delays joins past filters/sorts; eliminates unused joins; splits mixed filters; pushes filters into subpipelines; hoists independent sort/limit slices and pre-computed fields before lookups. |
-| `$match` | **Tier 1** | `match-pushdown`, `unwind-prefilter` (Note: `expr-match-normalization`, `filter-optimization`, `adjacent-match-merging` inactive in production) | Central optimization engine: pushes selective filters upstream. |
+| `$match` | **Tier 1** | `match-pushdown`, `heuristic-match-pushdown`, `unwind-prefilter` (Note: `expr-match-normalization`, `filter-optimization`, `adjacent-match-merging` inactive in production) | Central optimization engine: pushes selective filters upstream, including heuristic pushdown of computed match predicates. |
 | `$merge` | **Tier 3** | `conservativeTop` (Opaque Barrier) | Collection write side-effect; acts as a hard barrier to preserve write timing and ordering. |
 | `$out` | **Tier 3** | `conservativeTop` (Opaque Barrier) | Collection replacement side-effect; acts as a hard barrier to preserve write timing and ordering. |
 | `$planCacheStats` | **Tier 3** | `conservativeTop` (Opaque Barrier) | Query engine cache diagnostics; preserved verbatim. |
@@ -104,7 +106,7 @@ Below is the complete list of all 49 MongoDB aggregation pipeline stages from th
 | `$scoreFusion` | **Tier 3** | `conservativeTop` (Opaque Barrier) | Hybrid search scoring fusion; preserved verbatim. |
 | `$search` | **Tier 3** | `conservativeTop` (Opaque Barrier) | Atlas Search query stage; must remain at pipeline root. |
 | `$searchMeta` | **Tier 3** | `conservativeTop` (Opaque Barrier) | Atlas Search metadata stage; must remain at pipeline root. |
-| `$set` | **Tier 1** | `match-pushdown`, `adjacent-add-field-merging`, `unused-field-pruning`, `top-k-pushdown`, `add-field-pushdown` | Syntactic alias for `$addFields`. |
+| `$set` | **Tier 1** | `match-pushdown`, `heuristic-match-pushdown`, `expression-simplification`, `adjacent-add-field-merging`, `unused-field-pruning`, `top-k-pushdown`, `add-field-pushdown` | Syntactic alias for `$addFields`. |
 | `$setWindowFields` | **Tier 2** | `analyzeWindowStage` | Analytical window computations; tracks partition keys, sort orders, and output field modifications. |
 | `$shardedDataDistribution` | **Tier 3** | `conservativeTop` (Opaque Barrier) | Cluster sharding diagnostics; preserved verbatim. |
 | `$skip` | **Tier 1** | `limit-skip-coalescing`, `lookup-delay`, `top-k-pushdown` | Coalesces adjacent skips/limits; commutes past alias-independent joins; hoists sort-skip-limit slices. |

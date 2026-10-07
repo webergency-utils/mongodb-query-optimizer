@@ -107,18 +107,78 @@ The optimizer registry distinguishes between **active** transformations (mathema
 
 ---
 
-## 9. Heuristic Shadow Sort-Pushdown Constraint
+## 9. Heuristic Shadow Pushdown Constraints
 
-When an aggregation pipeline performs a Top-K slice (`$sort` + `$limit`) on a computed field produced downstream of joins (`$lookup`) or wildcard document consumers (`$$ROOT`), the optimizer may hoist the Top-K slice earlier in the pipeline using a temporary shadow field `__heuristic_${fieldName}`, followed immediately by `{ $unset: "__heuristic_${fieldName}" }` before the barrier.
+When an aggregation pipeline contains a consumer stage—either a Top-K slice (`$sort` + `$limit`) in `top-k-pushdown` or a selective filter (`$match`) in `heuristic-match-pushdown`—that references computed fields produced downstream of heavy execution barriers, the optimizer may hoist the consumer earlier in the pipeline using temporary shadow fields named `__heuristic_${fieldName}` (with collision-avoidance suffixes `__heuristic_${fieldName}_0`, etc.). The shadow fields are subsequently removed with an explicit `{ $unset: ... }` stage before any barrier or downstream consumer.
 
-### Strict Determinism Requirement
-Because this transformation evaluates the sort expression early for slicing and recomputes the target field on the surviving documents in its original position:
-- **Mandatory Complete Determinism**: The sort expression must be **strictly and completely deterministic**.
-  - **Prohibited Operators**: `$rand`, `$sampleRate`, and any pseudo-random generator.
-  - **Prohibited Environment Variables**: `$$NOW`, `$$CLUSTER_TIME`, and dynamic temporal context.
-  - **Prohibited Dynamic Date/Time Code**: User code (`$function`, `$accumulator`) containing references to dynamic dates/times (such as `Date`, `new Date()`, `Date.now()`, `performance.now()`) or non-deterministic APIs (`Math.random()`, `crypto`).
-  - If an expression cannot be proven completely deterministic, heuristic shadow sort-pushdown is **strictly disallowed**.
-- **Preservation of Document Fidelity**:
-  - The `$unset` stage guarantees that the temporary shadow field is completely purged before any subsequent stage (such as `$lookup` or a JavaScript `$function` consuming `$$ROOT`) observes the document stream.
-  - Intermediate stages between the hoisted slice and the original sort stage must be row-preserving (`cardinality === 'preserves'`).
-  - Under strict mode (`strictFieldOrder: true`), this heuristic is disabled to preserve exact BSON document key ordering.
+### 9.1 Shared Shadow Proof Machinery (`shadow-proofs.ts`)
+Both `top-k-pushdown` and `heuristic-match-pushdown` share the unified shadow proof machinery in `src/passes/shadow-proofs.ts`:
+- **Single-Provider Hoisting**: Each computed key must be defined by a single upstream `$addFields`/`$set` stage (`providerStageIndex`).
+- **Per-Key Range Rule**: The provider stage `P` must strictly precede the consumer stage `C` (`P < C`). Every intermediate stage in the range `[P + 1, C - 1]` must preserve document cardinality (`semantics.cardinality === 'preserves'`) and must neither modify, unset, nor re-alias the provider's input keys or the generated shadow field.
+  - In `heuristic-match-pushdown`, pushed stages may cross preserving stages or upstream `$match` stages (`semantics.operator === '$match'`), but may never cross `$limit`, `$skip`, or other non-match cardinality modifiers.
+- **Dotted-Key Rejection Rule (KTD3)**: Computed fields with dotted path keys (e.g. `user.profile.age` or `stats.scores`) are strictly rejected. Only top-level field identifiers can be hoisted via shadow fields.
+- **Profitability Gate**: Hoisting via shadow fields introduces extra re-computation stages and temporary allocations. Pushdown is strictly gated to ensure profitability:
+  - The range between the hoisted position and the original consumer position must contain at least one heavy stage.
+  - Heavy stages include `$lookup`, `$graphLookup`, or `$function`.
+  - Stages such as `$accumulator` or standard arithmetic projections are omitted from qualifying as heavy stages on their own. If no heavy stage is crossed, pushdown is skipped.
+- **`strictErrors` Whole-Range Rule**: Under `{ strictErrors: true }`, early evaluation or moving filters/slices ahead of intermediate stages must not mask or alter runtime error evaluation. Pushdown is allowed only when every stage in the spanned range `[hoistIndex, consumerIndex]` is proven error-free (`semantics.errors === 'none-known'`).
+- **Recomputation After `$unset` (KTD10)**: The hoisted consumer acts as an early filter or slice. Downstream, before the original consumer position, an explicit `$unset` purges all temporary shadow fields. If downstream stages still require the original computed field name, the original provider stage continues to provide the field without collision.
+- **Native Match Preservation (KTD8)**: For `heuristic-match-pushdown`, pushed `$match` stages preserve their native query operator syntax against the shadow field (e.g. `{ __heuristic_total: { $gt: 10 } }`) rather than rewriting into `$expr`, maintaining index accessibility and standard match execution semantics.
+
+### 9.2 Strict Determinism Verification (KTD5)
+Because heuristic pushdown evaluates expressions early on candidate documents and re-evaluates them on surviving documents:
+- **Mandatory Complete Determinism**: All expressions defining shadow fields must be strictly deterministic across document streams:
+  - **Prohibited Operators**: `$rand`, `$sampleRate`, and any non-deterministic expression operator.
+  - **Prohibited System Variables**: `$$NOW`, `$$CLUSTER_TIME`, and dynamic temporal context variables.
+  - **Prohibited JavaScript APIs**: When evaluating user-defined JavaScript functions in `$function`, the optimizer inspects both the argument expressions and the function body string.
+    - Argument expressions are checked for determinism with `$function` replaced by deterministic placeholders.
+    - The JavaScript function `body` is checked against a strict token blocklist: references to `Date`, `new Date()`, `Date.now()`, `performance.now()`, `Math.random()`, `crypto`, and dynamic non-deterministic globals immediately disqualify the stage.
+  - Any non-deterministic component halts shadow pushdown immediately.
+
+### 9.3 Field Ordering Invariant
+Under strict mode (`strictFieldOrder: true`), heuristic shadow transformations are disabled to preserve exact byte-for-byte BSON document key ordering.
+
+---
+
+## 10. Expression Simplification Constraints (`expression-simplification`)
+
+The `expression-simplification` pass simplifies constant boolean conditions and redundant filter-size patterns across aggregation pipeline stages (`$addFields`, `$set`, `$project`, `$group`, `$match`).
+
+### 10.1 Constant Folding Rules
+- **Conjunctions (`$and`)**:
+  - Empty conjunctions `{ $and: [] }` or conjunctions where every operand is a truthy constant (e.g. `{ $and: [ {}, {} ] }` or `{ $and: [ true, 1 ] }`) fold to `true`.
+  - If any operand is a falsy constant (e.g. `false`, `0`, `null`), the conjunction folds to `false`.
+  - Truthy constant operands are stripped from multi-operand conjunctions when remaining non-constant operands exist.
+- **Disjunctions (`$or`)**:
+  - Empty disjunctions `{ $or: [] }` fold to `false`.
+  - If any operand is a truthy constant, the disjunction folds to `true`.
+  - Falsy constant operands are stripped from multi-operand disjunctions when remaining non-constant operands exist.
+
+### 10.2 Filter-to-Size Simplification
+When an expression specifies `$size` over a `$filter` stage:
+```typescript
+{
+    $size:
+    {
+        $filter:
+        {
+            input: expr,
+            as: varName,
+            cond: alwaysTrueCondition
+        }
+    }
+}
+```
+If the filter's `cond` expression simplifies to a constant truthy value (such as `true` or an always-true folded `$and`), every element in `input` is guaranteed to pass the filter. The expression simplifies directly to:
+```typescript
+{
+    $size: expr
+}
+```
+
+### 10.3 Error Observability & Strict Errors (KTD9)
+MongoDB's `$filter` and `$size` operators exhibit specific runtime error behavior:
+- On scalar (non-array) inputs, `$filter` produces an error (e.g. `PlanExecutor error during aggregation :: caused by :: input to $filter must be an array not string`).
+- Simplifying `$size: { $filter: { ... } }` to `$size: input` on non-array or missing inputs could alter the exact error code or timing.
+- **Strict Error Guard**: The `expression-simplification` pass is automatically bypassed whenever `options.strictErrors === true`. Constant folding and filter simplifications are applied only in `default` and `strictFieldOrder` modes.
+
