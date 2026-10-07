@@ -13,31 +13,38 @@ export class AdjacentMatchMergingPass implements PipelinePass
 {
     readonly name       = 'adjacent-match-merging';
     readonly stageTypes = [ '$match' ] as const;
-    execute( pipeline: any[], context: GuaranteeContext ): any[] {
+
+    execute( pipeline: any[], context: GuaranteeContext ): any[]
+    {
         const result: any[] = [];
         let index = 0;
 
-        while (index < pipeline.length) {
-            const stage = pipeline[index];
-            if (!isMergeableMatchStage(stage)) {
-                result.push(stage);
+        while( index < pipeline.length )
+        {
+            const stage = pipeline[ index ];
+
+            if( !isMergeableMatchStage( stage ))
+            {
+                result.push( stage );
                 index++;
                 continue;
             }
 
             const matches: any[] = [];
-            while (
+
+            while(
                 index < pipeline.length
-                && isMergeableMatchStage(pipeline[index])
-            ) {
-                matches.push(pipeline[index].$match);
+                && isMergeableMatchStage( pipeline[ index ] )
+            )
+            {
+                matches.push( pipeline[ index ].$match );
                 index++;
             }
 
             result.push(
                 matches.length === 1
                     ? stage
-                    : { $match: optimizeFilterWithContext({ $and: matches }, context ) },
+                    : { $match: optimizeFilterWithContext( { $and: matches }, context ) }
             );
         }
 

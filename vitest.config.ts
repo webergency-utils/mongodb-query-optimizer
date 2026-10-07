@@ -14,6 +14,7 @@ export default defineConfig({
         "src/guarantees.ts": { branches: 100 },
         "src/passes/add-field-pushdown.ts": { branches: 100 },
         "src/passes/add-field-pushdown-proofs.ts": { branches: 100 },
+        "src/passes/adjacent-match-merging.ts": { branches: 100 },
         "src/passes/bucket-filter-pushdown.ts": { branches: 100 },
         "src/passes/bucket-pushdown-proofs.ts": { branches: 100 },
         "src/passes/covered-projection-proofs.ts": { branches: 100 },
