@@ -44,7 +44,7 @@ describe( 'Activation gate status and guard invariants', () =>
         expect( optimizePipeline( inactivePipeline ) ).toEqual( inactivePipeline );
     } );
 
-    it( 'returns a clone equal to input for optimizeFilter when production active list is empty', () =>
+    it( 'returns a clone equal to input for optimizeFilter when inactive candidate rules are bypassed', () =>
     {
         const filter =
         {

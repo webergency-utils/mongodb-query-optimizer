@@ -96,7 +96,13 @@ describe('explicit immutable transformation registries', () =>
     {
         const status = getFilterRuleRegistryStatus();
 
-        expect(status.active).toEqual([]);
+        expect(status.active).toEqual([
+            'flatten-conjunctions',
+            'flatten-disjunctions',
+            'deduplicate-conjunctions',
+            'simplify-conjunction-identities',
+            'simplify-disjunction-identities'
+        ]);
         expect(status.contained).toEqual([]);
         expect(status.registered).toEqual(REGISTERED_FILTER_IDS);
         expectUnique(status.registered);

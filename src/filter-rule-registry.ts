@@ -22,7 +22,14 @@ const registeredFilterRuleIds = Object.freeze([
 
 export type FilterRuleId = typeof registeredFilterRuleIds[number];
 
-const activeFilterRuleIds: readonly FilterRuleId[] = Object.freeze([]);
+const activeFilterRuleIds: readonly FilterRuleId[] = Object.freeze(
+[
+    'flatten-conjunctions',
+    'flatten-disjunctions',
+    'deduplicate-conjunctions',
+    'simplify-conjunction-identities',
+    'simplify-disjunction-identities'
+] );
 
 const containedFilterRuleIds: readonly FilterRuleId[] = Object.freeze([]);
 
@@ -218,14 +225,14 @@ const simplifyConjunctionIdentitiesRule: FilterRule = {
         }
 
         const contradiction = conditions.find(( condition ) => isFilterContradiction( condition ));
+        const isOnlyCondition = Object.keys( filter ).length === 1;
 
         if( contradiction )
         {
-            return contradiction;
+            return isOnlyCondition ? contradiction : { ...filter, $and: [ contradiction ] };
         }
 
         const remaining = conditions.filter(( condition ) => !isEmptyFilter( condition ));
-        const isOnlyCondition = Object.keys( filter ).length === 1;
 
         if( isOnlyCondition && remaining.length === 0 )
         {

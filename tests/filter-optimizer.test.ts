@@ -14,6 +14,7 @@ import {
     optimizeFilter,
     optimizePipeline,
 } from './helpers/pre-gate-optimizer.js';
+import { optimizeFilter as productionOptimizeFilter } from '../src/index.js';
 import { optimizePipelineWithCandidateProfile } from '../src/passes/registry.js';
 
 describe('production filter optimizer', () =>
@@ -896,3 +897,97 @@ describe('filter-bearing pipelines', () =>
         ]);
     });
 });
+
+describe( 'production safe filter profile (5 active rules)', () =>
+{
+    it( 'deduplicates identical scalar and multikey range branches', () =>
+    {
+        expect( productionOptimizeFilter( {
+            $and: [ { a: 1 }, { a: 1 } ]
+        } ) ).toEqual( { a: 1 } );
+
+        expect( productionOptimizeFilter( {
+            $and: [ { tags: { $gt: 5 } }, { tags: { $gt: 5 } } ]
+        } ) ).toEqual( { tags: { $gt: 5 } } );
+    } );
+
+    it( 'flattens nested associative logical arrays', () =>
+    {
+        expect( productionOptimizeFilter( {
+            $and: [
+                { $and: [ { a: 1 }, { b: 2 } ] },
+                { c: 3 }
+            ]
+        } ) ).toEqual( {
+            $and: [ { a: 1 }, { b: 2 }, { c: 3 } ]
+        } );
+
+        expect( productionOptimizeFilter( {
+            $or: [
+                { $or: [ { a: 1 }, { b: 2 } ] },
+                { c: 3 }
+            ]
+        } ) ).toEqual( {
+            $or: [ { a: 1 }, { b: 2 }, { c: 3 } ]
+        } );
+    } );
+
+    it( 'simplifies conjunction identities and unwraps single-condition conjunctions', () =>
+    {
+        expect( productionOptimizeFilter( {
+            $and: [ {}, { a: 1 } ]
+        } ) ).toEqual( { a: 1 } );
+
+        expect( productionOptimizeFilter( {
+            $and: [ { a: 1 } ]
+        } ) ).toEqual( { a: 1 } );
+
+        expect( productionOptimizeFilter( {
+            $and: [ {} ]
+        } ) ).toEqual( {} );
+    } );
+
+    it( 'simplifies disjunction identities and handles tautological empty filters', () =>
+    {
+        expect( productionOptimizeFilter( {
+            $or: [ {}, { a: 1 } ]
+        } ) ).toEqual( {} );
+
+        expect( productionOptimizeFilter( {
+            $or: [ { a: 1 }, { a: 1 } ]
+        } ) ).toEqual( { a: 1 } );
+
+        expect( productionOptimizeFilter( {
+            $or: [ { a: 1 } ]
+        } ) ).toEqual( { a: 1 } );
+    } );
+
+    it( 'preserves separate multikey branches across distinct conditions on the same field', () =>
+    {
+        // Crucial invariant: must NOT collapse into { tags: { $gt: 5, $lt: 10 } }
+        expect( productionOptimizeFilter( {
+            $and: [
+                { tags: { $gt: 5 } },
+                { tags: { $lt: 10 } }
+            ]
+        } ) ).toEqual( {
+            $and: [
+                { tags: { $gt: 5 } },
+                { tags: { $lt: 10 } }
+            ]
+        } );
+    } );
+
+    it( 'preserves non-deterministic and dynamic expressions untouched', () =>
+    {
+        const dynamic = {
+            $and: [
+                { a: 1 },
+                { $expr: { $rand: {} } }
+            ]
+        };
+
+        expect( productionOptimizeFilter( dynamic ) ).toEqual( dynamic );
+    } );
+} );
+

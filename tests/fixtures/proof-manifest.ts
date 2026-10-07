@@ -114,8 +114,14 @@ export const filterProofManifest: readonly TransformationProofEvidence<FilterRul
         'u9-generated-nested-limit-skip-coalescing',
         'u4-filter-invalid-empty-and',
         {
-            status: 'inactive',
-            reason: 'Flattening $and conjunctions alters evaluation order and short-circuit error semantics under strictErrors; inactive pending error containment proof.'
+            status: 'active',
+            proofRecheckNote: 'Proof audited: flattens nested associative $and arrays without altering branch semantics or field scoping; guarded by isFilterRewriteSafe to ensure error fidelity and determinism.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-match-pushdown',
+                strictFieldOrder: 'mixed-shape-match-pushdown',
+                strictErrors: 'mixed-shape-match-pushdown'
+            },
+            strictModeBehavior: 'preserved'
         }
     ),
     evidence(
@@ -125,30 +131,14 @@ export const filterProofManifest: readonly TransformationProofEvidence<FilterRul
         'u9-generated-nested-match-pushdown',
         'u4-filter-invalid-empty-or',
         {
-            status: 'inactive',
-            reason: 'Flattening $or disjunctions alters index planner candidate selection and branch short-circuit evaluation order under strictErrors; inactive pending index-awareness audit.'
-        }
-    ),
-    evidence(
-        'simplify-conjunction-identities',
-        'u4-filter-invalid-empty-and',
-        'u9-generated-top-level-limit-advance',
-        'u9-generated-nested-limit-advance',
-        'u4-filter-invalid-empty-and',
-        {
-            status: 'inactive',
-            reason: 'Dropping empty or contradictory conjunctions drops clauses that may contain un-evaluated error-prone expressions under strictErrors; inactive pending error guard integration.'
-        }
-    ),
-    evidence(
-        'simplify-disjunction-identities',
-        'filter-match-all-or-contained',
-        'u9-generated-top-level-unused-field-pruning',
-        'u9-generated-nested-unused-field-pruning',
-        'u4-filter-match-all-or-with-sibling',
-        {
-            status: 'inactive',
-            reason: 'Removing contradictory disjunction branches can suppress execution errors under strictErrors when other branches fail to match; inactive pending error containment proof.'
+            status: 'active',
+            proofRecheckNote: 'Proof audited: flattens nested associative $or arrays without altering branch semantics; guarded by isFilterRewriteSafe to ensure error fidelity and determinism.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-match-pushdown',
+                strictFieldOrder: 'mixed-shape-match-pushdown',
+                strictErrors: 'mixed-shape-match-pushdown'
+            },
+            strictModeBehavior: 'preserved'
         }
     ),
     evidence(
@@ -158,8 +148,48 @@ export const filterProofManifest: readonly TransformationProofEvidence<FilterRul
         'u9-generated-nested-adjacent-project-merging',
         'u4-filter-multikey-embedded-document-order',
         {
-            status: 'inactive',
-            reason: 'Deduplicating conjunction expressions suppresses duplicate error-prone expressions under strictErrors; inactive pending error safety proof.'
+            status: 'active',
+            proofRecheckNote: 'Proof audited: removes duplicate conjunction branches using structural BSON fingerprinting; preserves array order and multikey conditions across different paths; guarded by isFilterRewriteSafe.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-match-pushdown',
+                strictFieldOrder: 'mixed-shape-match-pushdown',
+                strictErrors: 'mixed-shape-match-pushdown'
+            },
+            strictModeBehavior: 'preserved'
+        }
+    ),
+    evidence(
+        'simplify-conjunction-identities',
+        'u4-filter-invalid-empty-and',
+        'u9-generated-top-level-limit-advance',
+        'u9-generated-nested-limit-advance',
+        'u4-filter-invalid-empty-and',
+        {
+            status: 'active',
+            proofRecheckNote: 'Proof audited: removes empty tautological objects from $and conjunctions and unwraps single-branch $and arrays; preserves multikey branches and guards against error suppression via isFilterRewriteSafe.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-match-pushdown',
+                strictFieldOrder: 'mixed-shape-match-pushdown',
+                strictErrors: 'mixed-shape-match-pushdown'
+            },
+            strictModeBehavior: 'preserved'
+        }
+    ),
+    evidence(
+        'simplify-disjunction-identities',
+        'filter-match-all-or-contained',
+        'u9-generated-top-level-unused-field-pruning',
+        'u9-generated-nested-unused-field-pruning',
+        'u4-filter-match-all-or-with-sibling',
+        {
+            status: 'active',
+            proofRecheckNote: 'Proof audited: short-circuits $or containing empty filter tautologies, deduplicates identical branches, and unwraps single-condition disjunctions; preserves error fidelity via isFilterRewriteSafe.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-match-pushdown',
+                strictFieldOrder: 'mixed-shape-match-pushdown',
+                strictErrors: 'mixed-shape-match-pushdown'
+            },
+            strictModeBehavior: 'preserved'
         }
     ),
     evidence(
