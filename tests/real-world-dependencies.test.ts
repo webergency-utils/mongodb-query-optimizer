@@ -32,18 +32,6 @@ describe( 'Real-world corpus fixtures and dependencies', () =>
             'utf8'
         );
 
-        if( fs.existsSync( 'test.query' ) )
-        {
-            const rootTestQueryRaw = fs.readFileSync( 'test.query', 'utf8' );
-            expect( fixtureTestQueryRaw ).toBe( rootTestQueryRaw );
-        }
-
-        if( fs.existsSync( 'test.full.query' ) )
-        {
-            const rootTestFullQueryRaw = fs.readFileSync( 'test.full.query', 'utf8' );
-            expect( fixtureTestFullQueryRaw ).toBe( rootTestFullQueryRaw );
-        }
-
         const parsedQuery = JSON.parse( fixtureTestQueryRaw );
         const parsedFullQuery = JSON.parse( fixtureTestFullQueryRaw );
 

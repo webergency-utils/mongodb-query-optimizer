@@ -84,35 +84,6 @@ function resolveConjunctShadowKeys(
     return resolveShadowProviders( pipeline, matchIndex, keys, context ) ? keys : null;
 }
 
-function rangeFilters( pipeline: readonly any[], start: number, end: number ): boolean
-{
-    return pipeline.slice( start, end ).some(( stage ) => analyzeStage( stage ).cardinality === 'filters' );
-}
-
-/**
- * The rewrite evaluates each shadow expression at the target and the pushed filter before every
- * crossed stage. When a crossed stage filters, both now see documents they never saw before, so
- * a successful query could start failing. Require proven error-freedom in that case.
- */
-function isErrorSafeAcrossFilters(
-    pipeline     : readonly any[],
-    targetIndex  : number,
-    matchIndex   : number,
-    providers    : ShadowProviders,
-    shadowFilter : Record<string, unknown>
-): boolean
-{
-    for( const computed of providers.computed.values() )
-    {
-        if( rangeFilters( pipeline, targetIndex, computed.providerIndex ) && !isExpressionCompletelyDeterministic( computed.expr, true ))
-        {
-            return false;
-        }
-    }
-
-    return !rangeFilters( pipeline, targetIndex, matchIndex ) || isStageProvenErrorFree({ $match: shadowFilter });
-}
-
 function planShadowMatch(
     pipeline   : readonly any[],
     matchIndex : number,
@@ -123,17 +94,6 @@ function planShadowMatch(
 {
     // Each conjunct's keys resolved on their own, and keys resolve independently.
     const providers = resolveShadowProviders( pipeline, matchIndex, keys, context )!;
-    const targetIndex = findShadowTargetIndex( pipeline, providers, context, true );
-
-    if(
-        targetIndex === null
-        || !validateShadowRange( pipeline, targetIndex, matchIndex, providers, context, true )
-        || !rangeHasCostlyStage( pipeline, targetIndex, matchIndex, providers )
-    )
-    {
-        return null;
-    }
-
     const aliases = new Map<string, string>();
     const shadowAddFields: Record<string, unknown> = {};
 
@@ -148,7 +108,15 @@ function planShadowMatch(
     // Shadow names are unreferenced in the pipeline, so renaming cannot collide with a filter key.
     const shadowFilter = rewriteQueryDocument( combineConjuncts( conjuncts ), aliases, false )!.value;
 
-    if( !isErrorSafeAcrossFilters( pipeline, targetIndex, matchIndex, providers, shadowFilter ))
+    const canCrossFilters = isStageProvenErrorFree( { $match: shadowFilter } )
+        && [ ...providers.computed.values() ].every(( computed ) => isExpressionCompletelyDeterministic( computed.expr, true ));
+    const targetIndex = findShadowTargetIndex( pipeline, providers, context, canCrossFilters );
+
+    if(
+        targetIndex === null
+        || !validateShadowRange( pipeline, targetIndex, matchIndex, providers, context, canCrossFilters )
+        || !rangeHasCostlyStage( pipeline, targetIndex, matchIndex, providers )
+    )
     {
         return null;
     }
