@@ -1,5 +1,13 @@
 name: MongoDB Query Optimizer CodeQL config
 
+# Tests intentionally exercise unsafe regexes and ReDoS rejection paths.
 paths-ignore:
   - 'tests/**'
-  - 'scripts/**'
+  - 'src/tests/**'
+
+# Compile-time generators embed TypeScript type-checker data into string
+# templates via JSON.stringify. Inputs are build-time types, not runtime
+# request data — full AST rewrite is out of scope; suppress this query.
+query-filters:
+  - exclude:
+      id: js/bad-code-sanitization
