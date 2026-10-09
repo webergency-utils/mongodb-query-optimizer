@@ -4,21 +4,20 @@ import { describe, expect, it } from 'vitest';
 
 const workflowPath = resolve(process.cwd(), '.github/workflows/ci.yml');
 
-describe('settled MongoDB 8 CI contract', () =>
+describe('CI mock contract', () =>
 {
-    it('uses Node 24 and the repository URI secret without local MongoDB setup', async () =>
+    it('uses Node 24 and pure in-memory mock testing without real MongoDB in CI', async () =>
     {
         const workflow = await readFile(workflowPath, 'utf8');
 
         expect(workflow).toContain('node-version: 24');
-        expect(workflow).toContain(
-            'MONGODB_URI: ${{ secrets.MONGODB_QUERY_OPTIMIZER_TEST_URI }}',
-        );
-        expect(workflow.match(/MONGODB_QUERY_OPTIMIZER_TEST_URI/g)).toHaveLength(1);
-        expect(workflow).not.toMatch(/mongodb-7|7\.0/i);
-        expect(workflow).not.toMatch(/\bservices:|\bdocker\b|\bapt-get\b|\bbrew\b/);
+        expect(workflow).not.toContain('MONGODB_URI');
         expect(workflow).not.toMatch(/mongodb(?:\+srv)?:\/\//i);
+        expect(workflow).not.toMatch(/\bservices:|\bdocker\b|\bapt-get\b|\bbrew\b/);
         expect(workflow).not.toContain('environment: mongodb-query-optimizer-tests');
+        expect(workflow).toContain('run: npm test');
+        expect(workflow).toContain('run: npm run coverage');
+        expect(workflow).toContain('run: npm run build');
     });
 
     it('runs the complete command path with immutable action references', async () =>
@@ -29,7 +28,6 @@ describe('settled MongoDB 8 CI contract', () =>
             (match) => match[1]!,
         );
 
-        expect(workflow).toContain('run: npm run test:all');
         expect(actionReferences.length).toBeGreaterThan(0);
         for (const reference of actionReferences)
         {

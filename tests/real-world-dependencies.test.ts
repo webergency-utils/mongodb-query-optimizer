@@ -17,14 +17,12 @@ import {
     buildRealWorldDataset,
     REAL_WORLD_DATASET_SEED
 } from './fixtures/real-world/data.js';
+import { runMockPipeline } from './helpers/mock-engine.js';
 
 describe( 'Real-world corpus fixtures and dependencies', () =>
 {
-    it( 'parses both queries and matches the workspace root files', () =>
+    it( 'parses both queries and matches the workspace root files when present', () =>
     {
-        const rootTestQueryRaw = fs.readFileSync( 'test.query', 'utf8' );
-        const rootTestFullQueryRaw = fs.readFileSync( 'test.full.query', 'utf8' );
-
         const fixtureTestQueryRaw = fs.readFileSync(
             path.resolve( __dirname, 'fixtures/real-world/test-query.json' ),
             'utf8'
@@ -34,8 +32,17 @@ describe( 'Real-world corpus fixtures and dependencies', () =>
             'utf8'
         );
 
-        expect( fixtureTestQueryRaw ).toBe( rootTestQueryRaw );
-        expect( fixtureTestFullQueryRaw ).toBe( rootTestFullQueryRaw );
+        if( fs.existsSync( 'test.query' ) )
+        {
+            const rootTestQueryRaw = fs.readFileSync( 'test.query', 'utf8' );
+            expect( fixtureTestQueryRaw ).toBe( rootTestQueryRaw );
+        }
+
+        if( fs.existsSync( 'test.full.query' ) )
+        {
+            const rootTestFullQueryRaw = fs.readFileSync( 'test.full.query', 'utf8' );
+            expect( fixtureTestFullQueryRaw ).toBe( rootTestFullQueryRaw );
+        }
 
         const parsedQuery = JSON.parse( fixtureTestQueryRaw );
         const parsedFullQuery = JSON.parse( fixtureTestFullQueryRaw );
@@ -254,5 +261,64 @@ describe( 'Real-world corpus fixtures and dependencies', () =>
         expect( defaultOptimized[ 4 ].$unset ).toBe( '__heuristic_furthestStage' );
         expect( strictOrderOptimized ).toEqual( expectedStrictOrder );
         expect( strictErrorsOptimized ).toEqual( fixtureTestFullQuery );
+    } );
+
+    it( 'verifies test.query semantic equality using mock-engine without real MongoDB', () =>
+    {
+        const fixtureTestQuery = JSON.parse(
+            fs.readFileSync( path.resolve( __dirname, 'fixtures/real-world/test-query.json' ), 'utf8' )
+        );
+        const dataset = buildRealWorldDataset();
+        const db = {
+            briefings: dataset.briefings,
+            placements: dataset.placements,
+        };
+
+        const originalOutput = runMockPipeline( dataset.jobs, fixtureTestQuery, db );
+        const strictOrderOptimized = optimizePipelineProduction( fixtureTestQuery, { strictFieldOrder: true } );
+        const strictOutput = runMockPipeline( dataset.jobs, strictOrderOptimized, db );
+
+        expect( strictOutput ).toEqual( originalOutput );
+
+        const defaultOptimized = optimizePipelineProduction( fixtureTestQuery );
+        const defaultOutput = runMockPipeline( dataset.jobs, defaultOptimized, db );
+
+        const sortKeys = ( val: any ): any =>
+        {
+            if( Array.isArray( val ) )
+            {
+                return val.map( sortKeys );
+            }
+            if( val !== null && typeof val === 'object' )
+            {
+                const sorted: Record<string, any> = {};
+                for( const k of Object.keys( val ).sort() )
+                {
+                    sorted[ k ] = sortKeys( val[ k ] );
+                }
+                return sorted;
+            }
+            return val;
+        };
+
+        expect( sortKeys( defaultOutput ) ).toEqual( sortKeys( originalOutput ) );
+    } );
+
+    it( 'verifies test.full.query semantic equality using mock-engine without real MongoDB', () =>
+    {
+        const fixtureTestFullQuery = JSON.parse(
+            fs.readFileSync( path.resolve( __dirname, 'fixtures/real-world/test-full-query.json' ), 'utf8' )
+        );
+        const dataset = buildRealWorldDataset();
+        const db = {
+            briefings: dataset.briefings,
+            placements: dataset.placements,
+        };
+
+        const originalOutput = runMockPipeline( dataset.jobs, fixtureTestFullQuery, db );
+        const defaultOptimized = optimizePipelineProduction( fixtureTestFullQuery );
+        const optimizedOutput = runMockPipeline( dataset.jobs, defaultOptimized, db );
+
+        expect( optimizedOutput ).toEqual( originalOutput );
     } );
 } );

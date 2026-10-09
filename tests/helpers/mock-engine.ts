@@ -885,6 +885,24 @@ function evalFilter( doc: any, spec: any, vars: MockVariables ): any
     return kept;
 }
 
+function evalMap( doc: any, spec: any, vars: MockVariables ): any
+{
+    const input = evalExpr( doc, spec.input, vars );
+
+    if( isNullish( input ) )
+    {
+        return null;
+    }
+
+    if( !Array.isArray( input ) )
+    {
+        throw new Error( 'Mock engine $map input must be an array' );
+    }
+
+    const name = typeof spec.as === 'string' ? spec.as : 'this';
+    return input.map( ( element ) => evalExpr( doc, spec.in, { ...vars, [name]: element } ) );
+}
+
 function evalCond( doc: any, value: any, vars: MockVariables ): any
 {
     const [ condition, thenBranch, elseBranch ] = Array.isArray( value )
@@ -1001,6 +1019,8 @@ function evalOperator( doc: any, operator: string, value: any, vars: MockVariabl
             return evalCond( doc, value, vars );
         case '$filter':
             return evalFilter( doc, value, vars );
+        case '$map':
+            return evalMap( doc, value, vars );
         case '$mergeObjects':
             return evalMergeObjects( doc, value, vars );
         case '$function':

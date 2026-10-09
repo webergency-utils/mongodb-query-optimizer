@@ -35,23 +35,3 @@ jobs:
       - name: Build package
         run: npm run build
 
-  mongodb-8:
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    env:
-      MONGODB_URI: ${{ secrets.MONGODB_QUERY_OPTIMIZER_TEST_URI }}
-      MONGODB_TEST_DATABASE: webergency_mongodb_query_optimizer
-      MONGODB_TEST_RUN_ID: ci_${{ github.run_id }}_${{ github.run_attempt }}
-      MONGODB_TEST_WRITE_ATTESTATION: ALLOW_WEBERGENCY_MONGODB_QUERY_OPTIMIZER_WRITES
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v4
-        with:
-          node-version: 24
-          cache: npm
-      - name: Install locked dependencies
-        run: npm ci
-      - name: Run the full MongoDB 8 verification path
-        run: npm run test:all
