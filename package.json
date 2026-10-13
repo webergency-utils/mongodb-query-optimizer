@@ -1,6 +1,6 @@
 {
   "name": "@webergency-utils/mongodb-query-optimizer",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "Deterministic, zero-dependency MongoDB query and aggregation pipeline optimizer with formal correctness proofs.",
   "type": "module",
   "author": "radixxko",
@@ -29,7 +29,7 @@
   ],
   "scripts": {
     "clean": "rm -rf ./dist/*",
-    "build": "npm run clean && tsup",
+    "build": "npm run clean && npm i && tsup",
     "typecheck:source": "tsc --noEmit -p tsconfig.json",
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json",
     "typecheck": "npm run typecheck:source && npm run typecheck:tests",
