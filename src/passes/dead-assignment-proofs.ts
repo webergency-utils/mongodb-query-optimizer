@@ -88,7 +88,6 @@ export function proveDeadAssignmentElimination(
             {
                 if(
                     !hasOnlyKnownDependencyPaths( semantics )
-                    || semantics.dependencies.local.has( '*' )
                     || dependenciesReadAnyPath( semantics, [ path ])
                 )
                 {
