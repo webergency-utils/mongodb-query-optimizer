@@ -234,6 +234,49 @@ describe( 'top-k-proofs unit and branch analysis', () =>
             { $sort: { score: -1, _id: 1 } },
             { $limit: 10 },
         ], 2 )).toBeNull();
+
+        // Steps across computed $project when reaching an earlier $lookup
+        expect( proveTopKPushdown([
+            { $lookup: { from: 'items', localField: 'sku', foreignField: 'sku', as: 'items' } },
+            { $project: { score: 1, extra: '$label' } },
+            { $sort: { score: -1, _id: 1 } },
+            { $limit: 10 },
+        ], 2 )).toEqual({
+            sortIndex: 2,
+            targetIndex: 0,
+            sliceLength: 2,
+        });
+
+        // Rejects stepping across computed $project when strictErrors blocks error-prone project
+        expect( proveTopKPushdown([
+            { $lookup: { from: 'items', localField: 'sku', foreignField: 'sku', as: 'items' } },
+            { $project: { score: 1, extra: { $toInt: '$label' } } },
+            { $sort: { score: -1, _id: 1 } },
+            { $limit: 10 },
+        ], 2, { strictFieldOrder: false, strictErrors: true } )).toBeNull();
+
+        // Rejects stepping across volatile computed $project
+        expect( proveTopKPushdown([
+            { $lookup: { from: 'items', localField: 'sku', foreignField: 'sku', as: 'items' } },
+            { $project: { score: 1, extra: { $rand: {} } } },
+            { $sort: { score: -1, _id: 1 } },
+            { $limit: 10 },
+        ], 2 )).toBeNull();
+
+        // Rejects stepping across computed $project that computes a sort key or hides a sort key
+        expect( proveTopKPushdown([
+            { $lookup: { from: 'items', localField: 'sku', foreignField: 'sku', as: 'items' } },
+            { $project: { score: '$customScore', extra: '$label' } },
+            { $sort: { score: -1, _id: 1 } },
+            { $limit: 10 },
+        ], 2 )).toBeNull();
+
+        expect( proveTopKPushdown([
+            { $lookup: { from: 'items', localField: 'sku', foreignField: 'sku', as: 'items' } },
+            { $project: { extra: '$label' } },
+            { $sort: { score: -1, _id: 1 } },
+            { $limit: 10 },
+        ], 2 )).toBeNull();
     });
 });
 

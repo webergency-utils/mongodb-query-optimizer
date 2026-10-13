@@ -171,19 +171,55 @@ export function canTopKPushAcrossStage(
 }
 
 function canTopKStepAcrossProjectStage(
-    stage    : unknown,
-    sortKeys : readonly string[]
+    stage              : unknown,
+    sortKeys           : readonly string[],
+    context            : GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT,
+    downstreamPipeline : readonly unknown[] = []
 ): boolean
 {
     const project = parseSimpleProject( stage );
 
-    if( !project )
+    if( project )
+    {
+        return sortKeys.every(
+            ( key ) => projectionVisibility( project.projection, key ) === 'visible'
+        );
+    }
+
+    const entry = getSingleStageEntry( stage );
+
+    if( !entry || entry[ 0 ] !== '$project' )
     {
         return false;
     }
 
-    return sortKeys.every(
-        ( key ) => projectionVisibility( project.projection, key ) === 'visible'
+    const sortStage = { $sort: Object.fromEntries( sortKeys.map(( k ) => [ k, 1 ] )) };
+
+    if( !canMoveStageAcrossStage( sortStage, stage, 'earlier', context, downstreamPipeline ))
+    {
+        return false;
+    }
+
+    const semantics = analyzeStage( stage );
+
+    if(
+        semantics.unknown
+        || semantics.malformed
+        || !semantics.projection
+        || semantics.projection.unknown
+        || semantics.projection.hasPathCollisions
+        || semantics.determinism !== 'deterministic'
+        || semantics.observable.determinism !== 'deterministic'
+    )
+    {
+        return false;
+    }
+
+    const projection = semantics.projection;
+
+    return (
+        arePathsDisjoint( projection.computedPaths, sortKeys )
+        && sortKeys.every(( key ) => projectionVisibility( projection, key ) === 'visible' )
     );
 }
 
@@ -223,7 +259,7 @@ export function proveTopKPushdown(
             continue;
         }
 
-        if( canTopKStepAcrossProjectStage( pipeline[ i ], sortKeys ))
+        if( canTopKStepAcrossProjectStage( pipeline[ i ], sortKeys, context, downstreamPipeline ))
         {
             continue;
         }

@@ -11,7 +11,9 @@ const ALLOWED_HOIST_OPERATORS = new Set([
     '$unset',
     '$sort',
     '$limit',
-    '$skip'
+    '$skip',
+    '$unwind',
+    '$lookup'
 ]);
 
 export interface FacetPrefixHoistingProof {
@@ -37,7 +39,9 @@ function isEligibleHoistStage( stage: unknown, context: GuaranteeContext = DEFAU
     if(
         summary.malformed
         || summary.unknown
+        || summary.observable.unknown
         || summary.determinism !== 'deterministic'
+        || summary.observable.determinism !== 'deterministic'
         || summary.dependencies.unknown
         || summary.dependencies.variables.size > 0
         || ( context.strictErrors && summary.observable.errors !== 'none-known' )

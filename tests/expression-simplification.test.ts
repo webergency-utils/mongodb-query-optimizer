@@ -394,6 +394,35 @@ describe( 'ExpressionSimplificationPass unit and proof tests', () =>
         expect( simplifyExpression({ $in: [ true, [ false, null, true ] ] })).toBe( true );
         expect( simplifyExpression({ $in: [ '$x', [ 'a', 'b' ] ] })).toEqual({ $in: [ '$x', [ 'a', 'b' ] ] });
         expect( simplifyExpression({ $in: [ 'a', [ '$x', 'b' ] ] })).toEqual({ $in: [ 'a', [ '$x', 'b' ] ] });
+
+        // Constant $divide and $mod
+        expect( simplifyExpression({ $divide: [ 10, 2 ] })).toBe( 5 );
+        expect( simplifyExpression({ $divide: [ -0, 2 ] })).toBe( 0 );
+        expect( simplifyExpression({ $divide: [ 10, 0 ] })).toEqual({ $divide: [ 10, 0 ] });
+        expect( simplifyExpression({ $divide: [ Number.MAX_VALUE, 1e-300 ] })).toEqual({ $divide: [ Number.MAX_VALUE, 1e-300 ] });
+        expect( simplifyExpression({ $mod: [ 10, 3 ] })).toBe( 1 );
+        expect( simplifyExpression({ $mod: [ -4, 2 ] })).toBe( 0 );
+        expect( simplifyExpression({ $mod: [ 10, 0 ] })).toEqual({ $mod: [ 10, 0 ] });
+
+        // Constant $strLenBytes and $strLenCP
+        expect( simplifyExpression({ $strLenBytes: 'ümlaut' })).toBe( 7 );
+        expect( simplifyExpression({ $strLenCP: [ 'ümlaut' ] })).toBe( 6 );
+        expect( simplifyExpression({ $strLenBytes: '$field' })).toEqual({ $strLenBytes: '$field' });
+
+        // Single-element $and / $or unwrapping over boolean-producing expressions
+        expect( simplifyExpression({ $and: [ { $eq: [ '$a', 1 ] } ] })).toEqual({ $eq: [ '$a', 1 ] });
+        expect( simplifyExpression({ $or: [ { $gt: [ '$a', 5 ] } ] })).toEqual({ $gt: [ '$a', 5 ] });
+        expect( simplifyExpression({ $or: [ false, { $gt: [ '$a', 5 ] } ] })).toEqual({ $gt: [ '$a', 5 ] });
+        expect( simplifyExpression({ $and: [ '$flag' ] })).toEqual({ $and: [ '$flag' ] });
+        expect( simplifyExpression({ $or: [ '$flag' ] })).toEqual({ $or: [ '$flag' ] });
+
+        // Idempotent $cond (array and object forms)
+        expect( simplifyExpression({ $cond: [ '$flag', 42, 42 ] })).toBe( 42 );
+        expect( simplifyExpression({ $cond: [ { $eq: [ '$a', 1 ] }, { $literal: '$foo' }, { $literal: '$foo' } ] })).toEqual({ $literal: '$foo' });
+        expect( simplifyExpression({ $cond: { if: '$flag', then: 'same', else: 'same' } })).toBe( 'same' );
+        expect( simplifyExpression({ $cond: { if: '$flag', then: { $literal: '$x' }, else: { $literal: '$x' } } })).toEqual({ $literal: '$x' });
+        expect( simplifyExpression({ $cond: [ { $divide: [ '$a', '$b' ] }, 42, 42 ] })).toEqual({ $cond: [ { $divide: [ '$a', '$b' ] }, 42, 42 ] });
+        expect( simplifyExpression({ $cond: [ { $rand: {} }, 42, 42 ] })).toEqual({ $cond: [ { $rand: {} }, 42, 42 ] });
     });
 
     it( 'never simplifies or inspects inside $literal subtrees', () =>
@@ -519,7 +548,7 @@ describe( 'ExpressionSimplificationPass unit and proof tests', () =>
         });
         expect( optimized[ 4 ] ).toEqual({
             $match: {
-                $expr: { $and: [ { $eq: [ '$dept', 'eng' ] } ] }
+                $expr: { $eq: [ '$dept', 'eng' ] }
             }
         });
 
@@ -545,7 +574,7 @@ describe( 'ExpressionSimplificationPass unit and proof tests', () =>
             { $match: { status: 'active' } },
             { $match: { _id: { $in: [] } } },
             { $match: { status: 'active', $expr: { $eq: [ '$a', '$b' ] } } },
-            { $match: { status: 'active', $expr: { $and: [ { $eq: [ '$a', '$b' ] } ] } } },
+            { $match: { status: 'active', $expr: { $eq: [ '$a', '$b' ] } } },
             { $match: { $and: [ { a: 1 }, {} ] } },
             { $match: { $and: [ { a: 1 }, { b: 2 } ] } },
             { $match: { a: { $in: 1 } } }

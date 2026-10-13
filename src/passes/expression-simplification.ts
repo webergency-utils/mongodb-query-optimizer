@@ -1,3 +1,4 @@
+import { analyzeExpression } from '../analyzer/expressions.js';
 import { analyzeFilter } from '../analyzer/filters.js';
 import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
 import { isPlainObject } from '../utils.js';
@@ -204,6 +205,29 @@ function extractPrimitiveConstant(
     return { valid: false };
 }
 
+function isBooleanProducingExpression( expr: unknown ): expr is Record<string, unknown>
+{
+    if( !isPlainObject( expr ))
+    {
+        return false;
+    }
+
+    const keys = Object.keys( expr );
+
+    return keys.length === 1 && BOOLEAN_PRODUCING_OPERATORS.has( keys[ 0 ]! );
+}
+
+function isErrorFreeDeterministicCondition( condExpr: unknown ): boolean
+{
+    const summary = analyzeExpression( condExpr );
+
+    return (
+        !summary.unknown
+        && summary.determinism === 'deterministic'
+        && summary.errors === 'none-known'
+    );
+}
+
 function evaluateConstantComparison(
     op    : string,
     left  : number | string,
@@ -294,6 +318,11 @@ export function simplifyExpression( expr: unknown ): unknown
 
             const remaining = simplified.$and.filter(( item ) => !isTruthyConstant( item ));
 
+            if( remaining.length === 1 && isBooleanProducingExpression( remaining[ 0 ] ))
+            {
+                return remaining[ 0 ];
+            }
+
             if( remaining.length < simplified.$and.length )
             {
                 return { $and: remaining };
@@ -312,6 +341,11 @@ export function simplifyExpression( expr: unknown ): unknown
             }
 
             const remaining = simplified.$or.filter(( item ) => !isFalsyConstant( item ));
+
+            if( remaining.length === 1 && isBooleanProducingExpression( remaining[ 0 ] ))
+            {
+                return remaining[ 0 ];
+            }
 
             if( remaining.length < simplified.$or.length )
             {
@@ -341,19 +375,10 @@ export function simplifyExpression( expr: unknown ): unknown
                     && innerKeys[ 0 ] === '$not'
                     && Array.isArray( innerOperand.$not )
                     && innerOperand.$not.length === 1
-                    && isPlainObject( innerOperand.$not[ 0 ] )
+                    && isBooleanProducingExpression( innerOperand.$not[ 0 ] )
                 )
                 {
-                    const doublyNegated = innerOperand.$not[ 0 ] as Record<string, unknown>;
-                    const doublyNegatedKeys = Object.keys( doublyNegated );
-
-                    if(
-                        doublyNegatedKeys.length === 1
-                        && BOOLEAN_PRODUCING_OPERATORS.has( doublyNegatedKeys[ 0 ]! )
-                    )
-                    {
-                        return doublyNegated;
-                    }
+                    return innerOperand.$not[ 0 ];
                 }
             }
         }
@@ -369,6 +394,19 @@ export function simplifyExpression( expr: unknown ): unknown
                 if( isFalsyConstant( simplified.$cond[ 0 ] ))
                 {
                     return simplified.$cond[ 2 ];
+                }
+
+                const thenPrim = extractPrimitiveConstant( simplified.$cond[ 1 ] );
+                const elsePrim = extractPrimitiveConstant( simplified.$cond[ 2 ] );
+
+                if(
+                    thenPrim.valid
+                    && elsePrim.valid
+                    && thenPrim.value === elsePrim.value
+                    && isErrorFreeDeterministicCondition( simplified.$cond[ 0 ] )
+                )
+                {
+                    return simplified.$cond[ 1 ];
                 }
             }
             else if( isPlainObject( simplified.$cond ))
@@ -390,6 +428,19 @@ export function simplifyExpression( expr: unknown ): unknown
                     if( isFalsyConstant( condSpec.if ))
                     {
                         return condSpec.else;
+                    }
+
+                    const thenPrim = extractPrimitiveConstant( condSpec.then );
+                    const elsePrim = extractPrimitiveConstant( condSpec.else );
+
+                    if(
+                        thenPrim.valid
+                        && elsePrim.valid
+                        && thenPrim.value === elsePrim.value
+                        && isErrorFreeDeterministicCondition( condSpec.if )
+                    )
+                    {
+                        return condSpec.then;
                     }
                 }
             }
@@ -474,6 +525,24 @@ export function simplifyExpression( expr: unknown ): unknown
                 return simplified.$subtract[ 0 ] - simplified.$subtract[ 1 ];
             }
         }
+        else if(
+            ( op === '$divide' || op === '$mod' )
+            && Array.isArray( simplified[ op ] )
+            && ( simplified[ op ] as unknown[] ).length === 2
+        )
+        {
+            const [ dividend, divisor ] = simplified[ op ] as [ unknown, unknown ];
+
+            if( isFiniteNumber( dividend ) && isFiniteNumber( divisor ) && divisor !== 0 )
+            {
+                const raw = op === '$divide' ? dividend / divisor : dividend % divisor;
+
+                if( Number.isFinite( raw ))
+                {
+                    return raw === 0 ? 0 : raw;
+                }
+            }
+        }
         else if( op === '$abs' || op === '$ceil' || op === '$floor' )
         {
             const unary = extractUnaryOperand( simplified[ op ] );
@@ -487,7 +556,7 @@ export function simplifyExpression( expr: unknown ): unknown
                 return raw === 0 ? 0 : raw;
             }
         }
-        else if( op === '$toLower' || op === '$toUpper' )
+        else if( op === '$toLower' || op === '$toUpper' || op === '$strLenBytes' || op === '$strLenCP' )
         {
             const unary = extractUnaryOperand( simplified[ op ] );
 
@@ -495,11 +564,24 @@ export function simplifyExpression( expr: unknown ): unknown
             {
                 const str = extractStringConstant( unary.value );
 
-                if( str !== null && ASCII_PATTERN.test( str ))
+                if( str !== null )
                 {
-                    const converted = op === '$toLower' ? str.toLowerCase() : str.toUpperCase();
+                    if( op === '$strLenBytes' )
+                    {
+                        return Buffer.byteLength( str, 'utf8' );
+                    }
 
-                    return converted.startsWith( '$' ) ? { $literal: converted } : converted;
+                    if( op === '$strLenCP' )
+                    {
+                        return Array.from( str ).length;
+                    }
+
+                    if( ASCII_PATTERN.test( str ))
+                    {
+                        const converted = op === '$toLower' ? str.toLowerCase() : str.toUpperCase();
+
+                        return converted.startsWith( '$' ) ? { $literal: converted } : converted;
+                    }
                 }
             }
         }

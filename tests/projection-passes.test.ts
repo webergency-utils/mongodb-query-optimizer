@@ -13,6 +13,12 @@ import {
     UnusedFieldPruningPass,
 } from '../src/passes/unused-field-pruning.js';
 import {
+    ComplexProjectionDeferralPass,
+} from '../src/passes/complex-projection-deferral.js';
+import {
+    proveAddFieldSplitAcrossSort,
+} from '../src/passes/projection-proofs.js';
+import {
     candidateSemanticCases,
     productionSemanticCases,
 } from './fixtures/semantic-cases.js';
@@ -1035,6 +1041,86 @@ describe('contained projection families', () =>
             colliding,
             COMPLEX_PROJECTION_DEFERRAL,
         )).toEqual(colliding);
+
+        // proveAddFieldSplitAcrossSort unit tests
+        expect(proveAddFieldSplitAcrossSort(null, { $sort: { rank: 1 } })).toBeNull();
+        expect(proveAddFieldSplitAcrossSort({ $addFields: { rank: '$score' } }, { $sort: { rank: 1 } })).toBeNull();
+        expect(proveAddFieldSplitAcrossSort(
+            { $addFields: { rank: '$score', extra: { $getField: 'secret' } } },
+            { $sort: { rank: 1 } }
+        )).toBeNull();
+        expect(proveAddFieldSplitAcrossSort(
+            { $addFields: { a: '$x', b: '$y' } },
+            { $sort: { rank: 1 } }
+        )).toBeNull();
+        expect(proveAddFieldSplitAcrossSort(
+            { $addFields: { rank: '$x', sub: '$y' } },
+            { $sort: { rank: 1, sub: -1 } }
+        )).toBeNull();
+        expect(proveAddFieldSplitAcrossSort(
+            { $addFields: { rank: '$score', label: '$name' } },
+            { $sort: { rank: -1 } }
+        )).toEqual({
+            retainedStage: { $addFields: { rank: '$score' } },
+            deferredStage: { $addFields: { label: '$name' } },
+        });
+
+        // ComplexProjectionDeferralPass splits non-sort fields past $sort when followed by $limit or $skip
+        const deferralPass = new ComplexProjectionDeferralPass();
+        expect(deferralPass.execute([
+            { $addFields: { rank: '$score', label: '$name' } },
+            { $sort: { rank: -1 } },
+            { $limit: 5 },
+        ])).toEqual([
+            { $addFields: { rank: '$score' } },
+            { $sort: { rank: -1 } },
+            { $addFields: { label: '$name' } },
+            { $limit: 5 },
+        ]);
+
+        expect(deferralPass.execute([
+            { $set: { rank: '$score', label: '$name' } },
+            { $sort: { rank: -1 } },
+            { $skip: 10 },
+        ])).toEqual([
+            { $set: { rank: '$score' } },
+            { $sort: { rank: -1 } },
+            { $set: { label: '$name' } },
+            { $skip: 10 },
+        ]);
+
+        // Does not split when followed by invalid stage or under strictFieldOrder
+        expect(deferralPass.execute([
+            { $addFields: { rank: '$score', label: '$name' } },
+            { $sort: { rank: -1 } },
+            null,
+        ])).toEqual([
+            { $addFields: { rank: '$score', label: '$name' } },
+            { $sort: { rank: -1 } },
+            null,
+        ]);
+
+        expect(deferralPass.execute([
+            { $addFields: { rank: '$score', label: '$name' } },
+            { $sort: { rank: -1 } },
+            { $limit: 5 },
+        ], { strictFieldOrder: true, strictErrors: false })).toEqual([
+            { $addFields: { rank: '$score', label: '$name' } },
+            { $sort: { rank: -1 } },
+            { $limit: 5 },
+        ]);
+
+        // Full optimizer splits $addFields across $sort and pushes $limit ahead of deferred fields
+        expect(optimizePipeline([
+            { $addFields: { rank: '$score', label: '$name' } },
+            { $sort: { rank: -1 } },
+            { $limit: 5 },
+        ])).toEqual([
+            { $addFields: { rank: '$score' } },
+            { $sort: { rank: -1 } },
+            { $limit: 5 },
+            { $addFields: { label: '$name' } },
+        ]);
     });
 
     it('keeps redundant projection elimination conservative for unsafe duplicates', () =>

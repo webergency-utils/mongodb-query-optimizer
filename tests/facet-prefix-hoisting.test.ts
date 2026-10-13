@@ -198,6 +198,55 @@ describe('proveFacetPrefixHoisting', () =>
             }
         };
         expect( proveFacetPrefixHoisting( nonNumericSortStage )).toBeNull();
+
+        // Hoists shared deterministic $unwind and $lookup stages
+        const unwindAndLookupFacet = {
+            $facet: {
+                a: [
+                    { $unwind: '$items' },
+                    { $lookup: { from: 'catalog', localField: 'items.sku', foreignField: 'sku', as: 'details' } },
+                    { $limit: 5 }
+                ],
+                b: [
+                    { $unwind: '$items' },
+                    { $lookup: { from: 'catalog', localField: 'items.sku', foreignField: 'sku', as: 'details' } },
+                    { $count: 'total' }
+                ]
+            }
+        };
+        const unwindLookupProof = proveFacetPrefixHoisting( unwindAndLookupFacet );
+        expect( unwindLookupProof ).not.toBeNull();
+        expect( unwindLookupProof?.hoistedStages ).toEqual([
+            { $unwind: '$items' },
+            { $lookup: { from: 'catalog', localField: 'items.sku', foreignField: 'sku', as: 'details' } }
+        ]);
+
+        // Rejects $lookup with volatile subpipeline
+        const volatileLookupFacet = {
+            $facet: {
+                a: [
+                    {
+                        $lookup: {
+                            from: 'catalog',
+                            pipeline: [ { $sample: { size: 1 } } ],
+                            as: 'details'
+                        }
+                    },
+                    { $limit: 5 }
+                ],
+                b: [
+                    {
+                        $lookup: {
+                            from: 'catalog',
+                            pipeline: [ { $sample: { size: 1 } } ],
+                            as: 'details'
+                        }
+                    },
+                    { $count: 'total' }
+                ]
+            }
+        };
+        expect( proveFacetPrefixHoisting( volatileLookupFacet )).toBeNull();
     });
 
     it('rejects when leading stage is not a plain object or has multiple keys', () =>

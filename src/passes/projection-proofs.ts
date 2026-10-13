@@ -720,6 +720,66 @@ export function proveAddFieldDeferralAcrossSort(
     return arePathsDisjoint(source.semantics.writes, keys);
 }
 
+export interface AddFieldSplitAcrossSortProof
+{
+    readonly retainedStage : Record<string, Record<string, unknown>>;
+    readonly deferredStage : Record<string, Record<string, unknown>>;
+}
+
+/**
+ * Splits a deterministic, error-free add/set stage across an adjacent sort when
+ * some fields are required by the sort and other fields are independent of the
+ * sort keys, allowing downstream `$limit`/`$skip` stages to advance past the
+ * deferred fields.
+ */
+export function proveAddFieldSplitAcrossSort(
+    addStage  : unknown,
+    sortStage : unknown
+): AddFieldSplitAcrossSortProof | null
+{
+    const source = parseAddFieldStage( addStage, true );
+    const sortKeys = parseProjectionCommuteSortKeys( sortStage );
+    if( !source || !sortKeys || containsGetField( source.specification ))
+    {
+        return null;
+    }
+
+    const entries = Object.entries( source.specification );
+    if( entries.length < 2 )
+    {
+        return null;
+    }
+
+    const retainedEntries: Array<[ string, unknown ]> = [];
+    const deferredEntries: Array<[ string, unknown ]> = [];
+
+    for( const [ fieldPath, expr ] of entries )
+    {
+        if( arePathsDisjoint([ fieldPath ], sortKeys ))
+        {
+            deferredEntries.push([ fieldPath, expr ]);
+        }
+        else
+        {
+            retainedEntries.push([ fieldPath, expr ]);
+        }
+    }
+
+    if( retainedEntries.length === 0 || deferredEntries.length === 0 )
+    {
+        return null;
+    }
+
+    return {
+        retainedStage: {
+            [ source.operator ]: Object.fromEntries( retainedEntries )
+        },
+        deferredStage: {
+            [ source.operator ]: Object.fromEntries( deferredEntries )
+        }
+    };
+}
+
 function prunableSourceFields(
     source: AddFieldStage,
     requireErrorFree = true,
