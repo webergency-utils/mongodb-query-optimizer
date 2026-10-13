@@ -715,6 +715,48 @@ describe('public stage adapter', () =>
         expect(info.removedFields).toEqual(new Set());
     });
 
+    it('adapts a cyclic lookup to the conservative public stage info', () =>
+    {
+        const pipeline: any[] = [
+            {
+                $lookup: {
+                    from: 'foreign',
+                    as: 'joined',
+                    localField: 'id',
+                    foreignField: 'id',
+                    pipeline: [],
+                },
+            },
+        ];
+        pipeline[0].$lookup.pipeline = pipeline;
+
+        const info = getStageInfo(pipeline[0], 3);
+
+        expect(Object.keys(info).sort()).toEqual([
+            'altersCount',
+            'index',
+            'isDestructive',
+            'isUnknown',
+            'modifiedFields',
+            'operator',
+            'producedFields',
+            'removedFields',
+            'stage',
+            'usedFields',
+        ]);
+        expect(info.index).toBe(3);
+        expect(info.stage).toBe(pipeline[0]);
+        expect(info.operator).toBe('$lookup');
+        expect(info.isUnknown).toBe(true);
+        expect(info.isDestructive).toBe(true);
+        expect(info.altersCount).toBe(true);
+        expect(info.usedFields).toEqual(new Set(['*']));
+        expect(info.producedFields).toEqual(new Set(['*']));
+        expect(info.modifiedFields).toEqual(new Set(['*']));
+        expect(info.removedFields).toEqual(new Set());
+        expect('children' in info).toBe(false);
+    });
+
     it('analyzes standard and complex stages accurately through getStageInfo', () =>
     {
         // $group
