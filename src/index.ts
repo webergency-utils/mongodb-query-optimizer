@@ -5,6 +5,8 @@ import { optimizePipelineWithProductionRegistry } from './passes/registry';
 export { optimizeFilter };
 export type { OptimizerOptions };
 export { getStageInfo } from './analyzer';
+export { toAbstractQuery, formatAbstractQuery } from './abstract-query';
+export type { ToAbstractQueryOptions, FormatAbstractQueryOptions } from './abstract-query';
 
 /**
  * Optimizes an aggregation pipeline. With no options, field order inside output
