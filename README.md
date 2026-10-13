@@ -107,7 +107,7 @@ The optimizer evaluates queries and aggregation pipelines purely as Abstract Syn
 
 ### Active Pipeline Transformations (Production Registry)
 1. `adjacent-match-merging`: Fuses consecutive `$match` stages into `$and` conjunctions while strictly preserving multikey array semantics.
-2. `filter-optimization`: Recursively applies provably safe boolean filter normalization rules (`flatten-conjunctions`, `flatten-disjunctions`, `deduplicate-conjunctions`, `simplify-conjunction-identities`, `simplify-disjunction-identities`), numeric and `Date` interval bound tightening, contradiction detection, and `$nin` array deduplication.
+2. `filter-optimization`: Recursively applies provably safe boolean filter normalization rules (`flatten-conjunctions`, `flatten-disjunctions`, `deduplicate-conjunctions`, `simplify-conjunction-identities`, `simplify-disjunction-identities`), numeric and `Date` interval bound tightening, set-difference and equality-negation algebra (`$in`/`$eq` vs `$nin`/`$ne`), contradiction detection, `$nin` array deduplication, and elimination of no-op `{ $match: {} }` stages.
 3. `add-field-pushdown`: Decomposes `$addFields`/`$set` and safely pushes sort/match-dependent expressions across `$lookup`, `$unset`, and intermediate disjoint `$addFields`/`$set` or exclusion `$project` stages.
 4. `top-k-pushdown`: Advances `$sort` and `$limit` slices ahead of 1:1 compute and lookup stages (including stepping across sort-key-preserving `$project` stages and deterministic shadow-field hoisting) while respecting error guards.
 5. `lookup-delay`: Delays equality and pipeline-form `$lookup` joins past non-dependent filter, sort, limit, and skip stages, splits post-lookup `$match` conjuncts, and pushes filters/limits into lookup subpipelines.
@@ -115,14 +115,14 @@ The optimizer evaluates queries and aggregation pipelines purely as Abstract Syn
 7. `redundant-sort-elimination`: Eliminates empty `$sort` stages and dead `$sort` stages before adjacent or order-insensitive-separated `$sort`, `$count`, `$sortByCount`, and order-agnostic `$group`, `$bucket`, and `$bucketAuto` stages.
 8. `sort-by-count-simplification`: Converts verbose `$group` + `$sort` count patterns into canonical `$sortByCount`.
 9. `limit-skip-coalescing`: Combines adjacent `$limit` and `$skip` stages into minimal offsets and counts, and eliminates no-op `{ $skip: 0 }` stages.
-10. `expression-simplification`: Folds constant boolean, conditional, arithmetic, and string expressions (`$and`, `$or`, `$not`, `$cond`, `$ifNull`, `$add`, `$subtract`, `$multiply`, `$concat`) and simplifies `$size` over `$filter` when conditions are always truthy.
+10. `expression-simplification`: Folds and short-circuits constant boolean, conditional, comparison, arithmetic, and string expressions (`$and`, `$or`, `$not`, `$cond`, `$switch`, `$ifNull`, `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$cmp`, `$add`, `$subtract`, `$multiply`, `$concat`) and simplifies `$size` over `$filter` when conditions are always truthy.
 11. `match-pushdown`: Moves selective filter stages ahead of joins, projections, field additions, and unsets, splitting multi-conjunct `$match` stages when only a subset of conjuncts can advance.
 12. `heuristic-match-pushdown`: Pushes selective `$match` filters across heavy stages (`$lookup`, `$graphLookup`, `$function`) using deterministic shadow fields with per-key ranges and profitability gates.
 13. `limit-advance`: Advances `$limit` and `$skip` ahead of non-cardinality altering projections and stages.
 14. `group-filter-pushdown`: Pushes post-`$group` filters before `$group` when grouping by 1-to-1 deterministic keys.
 15. `bucket-filter-pushdown`: Pushes selective scalar, `$eq`, `$in`, and range (`$gt`, `$gte`, `$lt`, `$lte`) pre-filters before `$bucket` stages.
 16. `unused-field-pruning`: Strips dead fields created in `$addFields`/`$set` when immediately overwritten or discarded by the next stage (including potentially throwing expressions when `strictErrors: false`).
-17. `adjacent-project-merging`: Fuses consecutive `$project` stages into a single specification.
+17. `adjacent-project-merging`: Fuses consecutive `$project` and exact top-level `$unset` stages into a single specification.
 18. `adjacent-add-field-merging`: Merges adjacent `$addFields` or `$set` stages.
 19. `redundant-lookup-elimination`: Drops unused equality and pipeline-form `$lookup` joins whose aliases are discarded downstream.
 20. `sort-project-commute`: Commutes `$project` ahead of `$sort` when all sort keys remain visible.

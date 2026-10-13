@@ -37,9 +37,9 @@ export interface AdjacentAddFieldMergeProof
 
 export interface AdjacentProjectMergeProof
 {
-    readonly mergedStage: {
-        readonly $project: Record<string, unknown>;
-    };
+    readonly mergedStage:
+        | { readonly $project: Record<string, unknown> }
+        | { readonly $unset: string | readonly string[] };
 }
 
 export interface UnusedFieldPruningProof
@@ -333,13 +333,32 @@ function excludedIdValue(
  * include may not request a field already hidden by the first projection.
  */
 export function proveAdjacentProjectMerge(
-    firstStage: unknown,
-    secondStage: unknown,
+    firstStage  : unknown,
+    secondStage : unknown
 ): AdjacentProjectMergeProof | null
 {
-    const first = parseSimpleProject(firstStage);
-    const second = parseSimpleProject(secondStage);
-    if (!first || !second)
+    const firstUnset = exactUnsetFields( firstStage );
+    const secondUnset = exactUnsetFields( secondStage );
+
+    if( firstUnset && secondUnset )
+    {
+        const mergedFields = Array.from( new Set([ ...firstUnset, ...secondUnset ]));
+
+        return {
+            mergedStage: {
+                $unset: mergedFields.length === 1 ? mergedFields[ 0 ]! : mergedFields
+            }
+        };
+    }
+
+    const first = firstUnset
+        ? parseSimpleProject({ $project: Object.fromEntries( Array.from( firstUnset, ( f ) => [ f, 0 ] )) })
+        : parseSimpleProject( firstStage );
+    const second = secondUnset
+        ? parseSimpleProject({ $project: Object.fromEntries( Array.from( secondUnset, ( f ) => [ f, 0 ] )) })
+        : parseSimpleProject( secondStage );
+
+    if( !first || !second )
     {
         return null;
     }

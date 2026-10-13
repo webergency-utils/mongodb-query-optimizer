@@ -243,6 +243,9 @@ describe( 'Real-world corpus fixtures and dependencies', () =>
                 }
             }
         };
+        expectedStrictOrder[ 4 ].$addFields.activeApplicationsCount.$sum.$map.in.$size.$filter.cond = {
+            $and: [ '$$application.active' ]
+        };
 
         expect( defaultOptimized.length ).toBe( 9 );
         expect( Object.keys( defaultOptimized[ 1 ].$addFields )[ 0 ] ).toBe( '__heuristic_furthestStage' );

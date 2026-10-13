@@ -82,6 +82,12 @@ function extractComparableBound( val: unknown, isDateMode: boolean ): number | u
         : undefined;
 }
 
+function isRegexLike( val: unknown ): boolean
+{
+    return val instanceof RegExp
+        || Boolean( val && typeof val === 'object' && ( val as any )._bsontype === 'BSONRegExp' );
+}
+
 function simplifyFieldIntervals(
     inputDocument: Record<string, any>
 ): Record<string, any>
@@ -95,6 +101,53 @@ function simplifyFieldIntervals(
         if( dedupedNin )
         {
             operatorDocument = { ...operatorDocument, $nin: dedupedNin };
+        }
+    }
+
+    const forbidden = new Set<string>();
+
+    if( Array.isArray( operatorDocument.$nin ))
+    {
+        for( const item of operatorDocument.$nin )
+        {
+            if( !isRegexLike( item ))
+            {
+                forbidden.add( structuralFingerprint( item ));
+            }
+        }
+    }
+
+    if( '$ne' in operatorDocument && !isRegexLike( operatorDocument.$ne ))
+    {
+        forbidden.add( structuralFingerprint( operatorDocument.$ne ));
+    }
+
+    if( forbidden.size > 0 )
+    {
+        if(
+            '$eq' in operatorDocument
+            && !isRegexLike( operatorDocument.$eq )
+            && forbidden.has( structuralFingerprint( operatorDocument.$eq ))
+        )
+        {
+            return { $in: [] };
+        }
+
+        if( Array.isArray( operatorDocument.$in ) && operatorDocument.$in.length > 0 )
+        {
+            const remainingIn = operatorDocument.$in.filter(
+                ( item: unknown ) => isRegexLike( item ) || !forbidden.has( structuralFingerprint( item ))
+            );
+
+            if( remainingIn.length === 0 )
+            {
+                return { $in: [] };
+            }
+
+            if( remainingIn.length < operatorDocument.$in.length )
+            {
+                operatorDocument = { ...operatorDocument, $in: remainingIn };
+            }
         }
     }
 

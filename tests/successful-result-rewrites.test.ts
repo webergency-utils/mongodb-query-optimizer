@@ -607,6 +607,15 @@ describe('production successful-result rewrites', () =>
             [{ $addFields: { computed: { $add: ['$source', 1] } } }, { $sort: { score: -1 } }],
             [{ $sort: { score: -1 } }, { $addFields: { computed: { $add: ['$source', 1] } } }],
         ],
+        [
+            'merges exclusion project with unset and prunes preceding dead write',
+            [
+                { $addFields: { dead: 1 } },
+                { $project: { secret: 0 } },
+                { $unset: 'dead' },
+            ],
+            [{ $project: { secret: 0, dead: 0 } }],
+        ],
     ])('%s', (_name, pipeline, expected) =>
     {
         const snapshot = structuredClone(pipeline);
@@ -633,11 +642,11 @@ describe('production successful-result rewrites', () =>
             ],
         ],
         [
-            'does not prune a dead write across an exclusion project',
+            'does not prune a dead write across an exclusion project before overwrite',
             [
                 { $addFields: { dead: 1 } },
                 { $project: { secret: 0 } },
-                { $unset: 'dead' },
+                { $set: { dead: 2 } },
             ],
         ],
         [

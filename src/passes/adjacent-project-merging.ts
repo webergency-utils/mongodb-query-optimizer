@@ -7,7 +7,7 @@ import {
 export class AdjacentProjectMergingPass implements PipelinePass
 {
     readonly name       = 'adjacent-project-merging';
-    readonly stageTypes = [ '$project' ] as const;
+    readonly stageTypes = [ '$project', '$unset' ] as const;
 
     execute( pipeline: any[], _context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {

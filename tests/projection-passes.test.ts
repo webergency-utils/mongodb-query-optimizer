@@ -415,6 +415,82 @@ describe('adjacent simple project merging proofs', () =>
             { $project: { a: 1 } },
         ]);
     });
+
+    it('coalesces adjacent $unset stages and $unset + $project combinations', () =>
+    {
+        // $unset + $unset -> single $unset
+        expect(optimizeWith([
+            { $unset: 'a' },
+            { $unset: 'b' },
+        ], PROJECT_MERGING)).toEqual([
+            { $unset: ['a', 'b'] },
+        ]);
+
+        // Deduplicating single-field $unset + $unset -> string $unset
+        expect(optimizeWith([
+            { $unset: 'a' },
+            { $unset: ['a'] },
+        ], PROJECT_MERGING)).toEqual([
+            { $unset: 'a' },
+        ]);
+
+        // Exclusion $project + $unset -> exclusion $project
+        expect(optimizeWith([
+            { $project: { secret: 0 } },
+            { $unset: ['token', '_id'] },
+        ], PROJECT_MERGING)).toEqual([
+            { $project: { secret: 0, token: 0, _id: 0 } },
+        ]);
+
+        // $unset + exclusion $project -> exclusion $project
+        expect(optimizeWith([
+            { $unset: 'secret' },
+            { $project: { token: false } },
+        ], PROJECT_MERGING)).toEqual([
+            { $project: { secret: 0, token: false } },
+        ]);
+
+        // Inclusion $project + $unset -> inclusion $project
+        expect(optimizeWith([
+            { $project: { a: 1, b: 1 } },
+            { $unset: 'b' },
+        ], PROJECT_MERGING)).toEqual([
+            { $project: { a: 1 } },
+        ]);
+
+        // Inclusion $project + $unset _id -> inclusion $project with _id: 0
+        expect(optimizeWith([
+            { $project: { a: 1, b: 1 } },
+            { $unset: ['b', '_id'] },
+        ], PROJECT_MERGING)).toEqual([
+            { $project: { a: 1, _id: 0 } },
+        ]);
+
+        // $unset + inclusion $project (where $unset does not drop any included field) -> inclusion $project
+        expect(optimizeWith([
+            { $unset: 'secret' },
+            { $project: { a: 1, b: 1 } },
+        ], PROJECT_MERGING)).toEqual([
+            { $project: { a: 1, b: 1 } },
+        ]);
+
+        // $unset '_id' + inclusion $project (without explicit _id: 1) -> inclusion $project with _id: 0
+        expect(optimizeWith([
+            { $unset: '_id' },
+            { $project: { a: 1 } },
+        ], PROJECT_MERGING)).toEqual([
+            { $project: { a: 1, _id: 0 } },
+        ]);
+
+        // Declines $unset + inclusion $project when inclusion $project attempts to resurrect an unset field
+        expect(optimizeWith([
+            { $unset: 'a' },
+            { $project: { a: 1, b: 1 } },
+        ], PROJECT_MERGING)).toEqual([
+            { $unset: 'a' },
+            { $project: { a: 1, b: 1 } },
+        ]);
+    });
 });
 
 describe('exact dead add-field pruning proofs', () =>

@@ -934,6 +934,73 @@ describe('filter-bearing pipelines', () =>
             status: { $nin: ['archived', 'deleted'] },
         });
     });
+
+    it('simplifies set-difference and equality-negation combinations ($in/$eq with $nin/$ne) and drops empty $match stages', () =>
+    {
+        // Prunes $in elements forbidden by $nin on the same field
+        expect(optimizeFilter({
+            status: { $in: ['a', 'b', 'c'], $nin: ['b', 'd'] },
+        })).toEqual({
+            status: { $in: ['a', 'c'], $nin: ['b', 'd'] },
+        });
+
+        // Prunes $in elements forbidden by $ne on the same field (preserving $ne for multikey array soundness)
+        expect(optimizeFilter({
+            status: { $in: ['a', 'b'], $ne: 'b' },
+        })).toEqual({
+            status: { $in: ['a'], $ne: 'b' },
+        });
+
+        // All $in candidates forbidden by $nin -> contradiction { $in: [] }
+        expect(optimizeFilter({
+            status: { $in: ['a', 'b'], $nin: ['a', 'b', 'c'] },
+        })).toEqual({
+            status: { $in: [] },
+        });
+
+        // Preserves regex elements in $in when $nin/$ne contains non-identical elements
+        const regexFilter = {
+            status: { $in: [/act/, 'archived'], $ne: 'archived' },
+        };
+        expect(optimizeFilter(regexFilter)).toEqual({
+            status: { $in: [/act/], $ne: 'archived' },
+        });
+
+        // $eq with matching $ne -> contradiction { $in: [] }
+        expect(optimizeFilter({
+            status: { $eq: 'active', $ne: 'active' },
+        })).toEqual({
+            status: { $in: [] },
+        });
+
+        // $eq with non-matching $ne -> preserved (multikey array soundness)
+        expect(optimizeFilter({
+            status: { $eq: 'active', $ne: 'deleted' },
+        })).toEqual({
+            status: { $eq: 'active', $ne: 'deleted' },
+        });
+
+        // $eq with matching $nin element -> contradiction { $in: [] }
+        expect(optimizeFilter({
+            status: { $eq: 'active', $nin: ['pending', 'active'] },
+        })).toEqual({
+            status: { $in: [] },
+        });
+
+        // Preserves $ne/$nin alongside array $eq (multikey array semantics)
+        const arrayEqWithNe = {
+            tags: { $eq: ['a', 'b'], $ne: 'a' },
+        };
+        expect(optimizeFilter(arrayEqWithNe)).toEqual(arrayEqWithNe);
+
+        // Eliminates no-op { $match: {} } stages in pipeline optimization
+        expect(optimizePipeline([
+            { $match: { $or: [{}, { a: 1 }] } },
+            { $project: { a: 1 } },
+        ])).toEqual([
+            { $project: { a: 1 } },
+        ]);
+    });
 });
 
 describe( 'production safe filter profile (5 active rules)', () =>

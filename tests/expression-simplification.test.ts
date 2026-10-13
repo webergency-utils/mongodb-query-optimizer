@@ -141,26 +141,23 @@ describe( 'ExpressionSimplificationPass unit and proof tests', () =>
         expect( simplifyExpression( expr )).toEqual( expr );
     });
 
-    it( 'folds $and with all-truthy constant operands to true', () =>
+    it( 'folds, short-circuits, and prunes truthy identity constants in $and', () =>
     {
         expect( simplifyExpression({ $and: [ true, 1, 'a', {} ] })).toBe( true );
+        expect( simplifyExpression({ $and: [ true, '$a' ] })).toEqual({ $and: [ '$a' ] });
+        expect( simplifyExpression({ $and: [ '$a', '$b' ] })).toEqual({ $and: [ '$a', '$b' ] });
+        expect( simplifyExpression({ $and: [ false, '$a' ] })).toBe( false );
+        expect( simplifyExpression({ $and: [ 0, { $eq: [ '$a', 1 ] } ] })).toBe( false );
     });
 
-    it( 'leaves $and unchanged when any operand is not a truthy constant', () =>
-    {
-        const expr = { $and: [ true, '$a' ] };
-        expect( simplifyExpression( expr )).toEqual( expr );
-    });
-
-    it( 'folds $or with all-truthy constant operands to true', () =>
+    it( 'folds, short-circuits, and prunes falsy identity constants in $or', () =>
     {
         expect( simplifyExpression({ $or: [ true, 10 ] })).toBe( true );
-    });
-
-    it( 'does not fold $or when operands are not truthy constants', () =>
-    {
-        const falsyOr = { $or: [ 0, null ] };
-        expect( simplifyExpression( falsyOr )).toEqual( falsyOr );
+        expect( simplifyExpression({ $or: [ 0, null ] })).toBe( false );
+        expect( simplifyExpression({ $or: [ 0, null, '$a' ] })).toEqual({ $or: [ '$a' ] });
+        expect( simplifyExpression({ $or: [ '$a', '$b' ] })).toEqual({ $or: [ '$a', '$b' ] });
+        expect( simplifyExpression({ $or: [ true, '$a' ] })).toBe( true );
+        expect( simplifyExpression({ $or: [ '$a', 1 ] })).toBe( true );
     });
 
     it( 'does not fold empty $or since $or: [] evaluates to false in MongoDB', () =>
@@ -199,6 +196,118 @@ describe( 'ExpressionSimplificationPass unit and proof tests', () =>
         expect( simplifyExpression({ $cond: 'invalid' })).toEqual({ $cond: 'invalid' });
     });
 
+    it( 'simplifies $switch branches with constant case conditions and folds deterministic matches', () =>
+    {
+        // First branch is truthy constant -> returns its then expression
+        expect( simplifyExpression({
+            $switch: {
+                branches: [
+                    { case: true, then: '$first' },
+                    { case: '$cond2', then: '$second' }
+                ],
+                default: '$fallback'
+            }
+        })).toBe( '$first' );
+
+        // Prunes leading falsy constant branch and folds the next truthy constant branch
+        expect( simplifyExpression({
+            $switch: {
+                branches: [
+                    { case: false, then: '$never' },
+                    { case: 1, then: '$winner' }
+                ]
+            }
+        })).toBe( '$winner' );
+
+        // All branches falsy with default -> folds to default
+        expect( simplifyExpression({
+            $switch: {
+                branches: [
+                    { case: false, then: '$a' },
+                    { case: null, then: '$b' }
+                ],
+                default: '$fallback'
+            }
+        })).toBe( '$fallback' );
+
+        // All branches falsy WITHOUT default -> preserved because MongoDB throws at runtime
+        const noDefaultSwitch = {
+            $switch: {
+                branches: [
+                    { case: false, then: '$a' }
+                ]
+            }
+        };
+        expect( simplifyExpression( noDefaultSwitch )).toEqual( noDefaultSwitch );
+
+        // Prunes falsy branch when remaining branch is dynamic
+        expect( simplifyExpression({
+            $switch: {
+                branches: [
+                    { case: 0, then: '$dead' },
+                    { case: '$liveCond', then: '$liveVal' }
+                ],
+                default: '$def'
+            }
+        })).toEqual({
+            $switch: {
+                branches: [
+                    { case: '$liveCond', then: '$liveVal' }
+                ],
+                default: '$def'
+            }
+        });
+
+        // Prunes falsy branch when remaining branch is dynamic and no default is present
+        expect( simplifyExpression({
+            $switch: {
+                branches: [
+                    { case: 0, then: '$dead' },
+                    { case: '$liveCond', then: '$liveVal' }
+                ]
+            }
+        })).toEqual({
+            $switch: {
+                branches: [
+                    { case: '$liveCond', then: '$liveVal' }
+                ]
+            }
+        });
+
+        // Preserves dynamic branches unchanged
+        const dynamicSwitch = {
+            $switch: {
+                branches: [
+                    { case: '$c1', then: '$v1' },
+                    { case: '$c2', then: '$v2' }
+                ]
+            }
+        };
+        expect( simplifyExpression( dynamicSwitch )).toEqual( dynamicSwitch );
+
+        // Malformed $switch shapes are left untouched
+        expect( simplifyExpression({ $switch: 'invalid' })).toEqual({ $switch: 'invalid' });
+        expect( simplifyExpression({ $switch: { branches: [] } })).toEqual({ $switch: { branches: [] } });
+        expect( simplifyExpression({
+            $switch: {
+                branches: [ { case: true } ]
+            }
+        })).toEqual({
+            $switch: {
+                branches: [ { case: true } ]
+            }
+        });
+        expect( simplifyExpression({
+            $switch: {
+                branches: [ 'not-an-object' ]
+            }
+        })).toEqual({
+            $switch: {
+                branches: [ 'not-an-object' ]
+            }
+        });
+    });
+
     it( 'folds $ifNull with leading non-null constants and strips leading nulls in 3+ chains', () =>
     {
         expect( simplifyExpression({ $ifNull: [ 'fallback', '$a' ] })).toBe( 'fallback' );
@@ -211,7 +320,7 @@ describe( 'ExpressionSimplificationPass unit and proof tests', () =>
         expect( simplifyExpression({ $ifNull: [ '$a' ] })).toEqual({ $ifNull: [ '$a' ] });
     });
 
-    it( 'folds constant $add, $multiply, $subtract, and $concat expressions', () =>
+    it( 'folds constant $add, $multiply, $subtract, $concat, and comparison expressions', () =>
     {
         expect( extractStringConstant( 'hello' )).toBe( 'hello' );
         expect( extractStringConstant( '$field' )).toBeNull();
@@ -236,6 +345,31 @@ describe( 'ExpressionSimplificationPass unit and proof tests', () =>
         expect( simplifyExpression({ $concat: [ { $literal: '$a' }, '-b' ] })).toEqual({ $literal: '$a-b' });
         expect( simplifyExpression({ $concat: [ 'foo', '$bar' ] })).toEqual({ $concat: [ 'foo', '$bar' ] });
         expect( simplifyExpression({ $concat: [] })).toEqual({ $concat: [] });
+
+        // Numeric and string constant comparisons
+        expect( simplifyExpression({ $eq: [ 5, 5 ] })).toBe( true );
+        expect( simplifyExpression({ $eq: [ 5, 6 ] })).toBe( false );
+        expect( simplifyExpression({ $ne: [ 'a', 'b' ] })).toBe( true );
+        expect( simplifyExpression({ $ne: [ 'a', 'a' ] })).toBe( false );
+        expect( simplifyExpression({ $gt: [ 10, 3 ] })).toBe( true );
+        expect( simplifyExpression({ $gt: [ 'b', 'a' ] })).toBe( true );
+        expect( simplifyExpression({ $gte: [ 3, 3 ] })).toBe( true );
+        expect( simplifyExpression({ $gte: [ 'a', 'b' ] })).toBe( false );
+        expect( simplifyExpression({ $lt: [ 2, 5 ] })).toBe( true );
+        expect( simplifyExpression({ $lt: [ 'a', 'b' ] })).toBe( true );
+        expect( simplifyExpression({ $lte: [ 5, 5 ] })).toBe( true );
+        expect( simplifyExpression({ $lte: [ 'b', 'a' ] })).toBe( false );
+        expect( simplifyExpression({ $cmp: [ 1, 2 ] })).toBe( -1 );
+        expect( simplifyExpression({ $cmp: [ 2, 2 ] })).toBe( 0 );
+        expect( simplifyExpression({ $cmp: [ 5, 2 ] })).toBe( 1 );
+        expect( simplifyExpression({ $cmp: [ 'a', 'b' ] })).toBe( -1 );
+        expect( simplifyExpression({ $cmp: [ 'b', 'b' ] })).toBe( 0 );
+        expect( simplifyExpression({ $cmp: [ 'c', 'b' ] })).toBe( 1 );
+
+        // Preserves mixed-type, dynamic, or invalid-arity comparisons
+        expect( simplifyExpression({ $eq: [ 5, '5' ] })).toEqual({ $eq: [ 5, '5' ] });
+        expect( simplifyExpression({ $gt: [ '$x', 5 ] })).toEqual({ $gt: [ '$x', 5 ] });
+        expect( simplifyExpression({ $eq: [ 1 ] })).toEqual({ $eq: [ 1 ] });
     });
 
     it( 'never simplifies or inspects inside $literal subtrees', () =>
