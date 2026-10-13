@@ -802,4 +802,30 @@ describe( 'count neutral prefix trim', () =>
             { $count: 'groups' }
         ]);
     });
+
+    it( 'trims count-neutral stages before a zero-dependency $group and keeps them when $group reads fields or is malformed', () =>
+    {
+        expect( trimCountNeutralPrefix([
+            { $match: { status: 'active' } },
+            { $sort: { price: -1 } },
+            { $project: { price: 1 } },
+            { $set: { tmp: { $divide: [ '$price', 0 ] } } },
+            { $group: { _id: null, count: { $sum: 1 } } }
+        ]) ).toEqual([
+            { $match: { status: 'active' } },
+            { $group: { _id: null, count: { $sum: 1 } } }
+        ]);
+
+        const dependentGroup = [
+            { $project: { dept: 1 } },
+            { $group: { _id: '$dept', count: { $sum: 1 } } }
+        ];
+        expect( trimCountNeutralPrefix( dependentGroup ) ).toEqual( dependentGroup );
+
+        const malformedGroup = [
+            { $sort: { a: 1 } },
+            { $group: { count: { $sum: 1 } } }
+        ];
+        expect( trimCountNeutralPrefix( malformedGroup ) ).toEqual( malformedGroup );
+    });
 });

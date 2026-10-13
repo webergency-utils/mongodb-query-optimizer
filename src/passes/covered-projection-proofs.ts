@@ -202,9 +202,10 @@ export function proveCoveredProjectionSynthesis( pipeline: readonly any[] ): Cov
 }
 
 /**
- * Removes a row-count-neutral prefix immediately before `$count`.
- * A `$sort` is always treated as non-failing. A `$lookup` is removed only
- * when strict errors are off, because its subpipeline can still fail.
+ * Removes a row-count-neutral prefix immediately before `$count` or a
+ * zero-dependency `$group` (such as `{ $group: { _id: null, count: { $sum: 1 } } }`).
+ * A `$sort` is always treated as non-failing. A `$lookup` or other row-count-preserving
+ * stage is removed when strict errors are off and no later kept stage reads the document shape.
  * A plain inclusion or exclusion `$project` is removed when no later kept
  * stage still reads the document shape.
  */
@@ -217,14 +218,33 @@ export function trimCountNeutralPrefix(
 
     for( let index = result.length - 1; index >= 0; index-- )
     {
-        const entry = getSingleStageEntry( result[ index ]);
-
-        if( !entry || entry[ 0 ] !== '$count' ){ continue }
+        if( !isDependencyFreeCollapsingStage( result[ index ])){ continue }
 
         index = dropCountNeutralPrefix( result, index, context.strictErrors );
     }
 
     return result;
+}
+
+function isDependencyFreeCollapsingStage( stage : unknown ): boolean
+{
+    const entry = getSingleStageEntry( stage );
+
+    if( !entry ){ return false }
+
+    if( entry[ 0 ] === '$count' ){ return true }
+
+    if( entry[ 0 ] !== '$group' ){ return false }
+
+    const semantics = analyzeStage( stage );
+
+    return (
+        !semantics.malformed
+        && !semantics.dependencies.unknown
+        && semantics.dependencies.local.size === 0
+        && semantics.dependencies.variables.size === 0
+        && semantics.determinism === 'deterministic'
+    );
 }
 
 function dropCountNeutralPrefix(

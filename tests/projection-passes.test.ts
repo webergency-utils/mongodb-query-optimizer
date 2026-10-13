@@ -1139,7 +1139,6 @@ describe('projection production integration and scheduling', () =>
             { $addFields: { first: 1 } },
             { $set: { second: 2 } },
         ])).toEqual([
-            { $unset: 'dead' },
             { $project: { name: 1 } },
             { $addFields: { first: 1, second: 2 } },
         ]);

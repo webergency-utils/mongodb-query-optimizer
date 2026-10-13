@@ -143,6 +143,17 @@ describe('limit and skip coalescing scheduling', () =>
             { $limit: 7 },
             { $limit: 5 },
         ]);
+
+        expect(
+            new LimitSkipCoalescingPass().execute([
+                { $match: { status: 'active' } },
+                { $skip: 0 },
+                { $limit: 5 },
+            ]),
+        ).toEqual([
+            { $match: { status: 'active' } },
+            { $limit: 5 },
+        ]);
     });
 
     it('preserves every unproved value and the caller input', () =>

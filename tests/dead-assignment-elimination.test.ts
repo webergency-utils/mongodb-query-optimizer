@@ -178,7 +178,7 @@ describe( 'DeadAssignmentEliminationPass execution and parity', () =>
     it( 'has correct pass metadata', () =>
     {
         expect( pass.name ).toBe( 'dead-assignment-elimination' );
-        expect( pass.stageTypes ).toEqual([ '$addFields', '$set' ]);
+        expect( pass.stageTypes ).toEqual([ '$addFields', '$set', '$project', '$unset' ]);
     });
 
     it( 'returns cloned pipeline if no optimizations apply', () =>
@@ -441,6 +441,75 @@ describe( 'DeadAssignmentEliminationPass execution and parity', () =>
         );
 
         expect( proof?.eliminatedFields ).toEqual([ 'tmp' ]);
+    });
+
+    it( 'eliminates redundant $unset fields completely or partially when downstream discards them', () =>
+    {
+        expect( proveDeadAssignmentElimination(
+            { $unset: 'a' },
+            [ { $project: { b: 1 } } ]
+        )).toEqual({
+            replacementStage: null,
+            eliminatedFields: [ 'a' ]
+        });
+
+        expect( proveDeadAssignmentElimination(
+            { $unset: [ 'a', 'b', 'c' ] },
+            [ { $project: { b: 1 } } ]
+        )).toEqual({
+            replacementStage: { $unset: 'b' },
+            eliminatedFields: [ 'a', 'c' ]
+        });
+
+        expect( proveDeadAssignmentElimination(
+            { $unset: [ 'a', 'b', 'c' ] },
+            [ { $project: { b: 1, c: 1 } } ]
+        )).toEqual({
+            replacementStage: { $unset: [ 'b', 'c' ] },
+            eliminatedFields: [ 'a' ]
+        });
+
+        expect( proveDeadAssignmentElimination(
+            { $unset: 'a' },
+            [ { $project: { a: 1 } } ]
+        )).toBeNull();
+    });
+
+    it( 'prunes unused computed fields in inclusion $project while keeping required or only-field projections', () =>
+    {
+        expect( proveDeadAssignmentElimination(
+            { $project: { a: 1, computed: { $add: [ '$x', 1 ] } } },
+            [ { $project: { a: 1 } } ]
+        )).toEqual({
+            replacementStage: { $project: { a: 1 } },
+            eliminatedFields: [ 'computed' ]
+        });
+
+        // Keeps computed field when it is the only included/computed field and _id is excluded
+        expect( proveDeadAssignmentElimination(
+            { $project: { _id: 0, computed: { $add: [ '$x', 1 ] } } },
+            [ { $count: 'total' } ]
+        )).toBeNull();
+
+        // Can prune computed field when _id: 1 remains
+        expect( proveDeadAssignmentElimination(
+            { $project: { _id: 1, computed: { $add: [ '$x', 1 ] } } },
+            [ { $project: { _id: 1 } } ]
+        )).toEqual({
+            replacementStage: { $project: { _id: 1 } },
+            eliminatedFields: [ 'computed' ]
+        });
+
+        // Skips computed _id, dotted paths, volatile expressions, and unknown dependencies
+        expect( proveDeadAssignmentElimination(
+            { $project: { _id: '$customId', a: 1, 'nested.x': { $add: [ '$x', 1 ] }, r: { $rand: {} } } },
+            [ { $project: { a: 1 } } ]
+        )).toBeNull();
+
+        expect( proveDeadAssignmentElimination(
+            { $project: { a: 1, bad: '$$unboundVar' } },
+            [ { $project: { a: 1 } } ]
+        )).toBeNull();
     });
 });
 

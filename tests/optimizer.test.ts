@@ -1014,7 +1014,7 @@ describe('optimizePipeline', () => {
         ]);
     });
 
-    it('should retain $unset without a dedicated elimination proof', () => {
+    it('should eliminate $unset when a downstream inclusion $project already discards the field', () => {
         const data = [
             { _id: 1, name: 'Alice', age: 20 },
             { _id: 2, name: 'Bob', age: 25 }
@@ -1023,7 +1023,9 @@ describe('optimizePipeline', () => {
             { $unset: 'age' },
             { $project: { name: 1 } }
         ];
-        verifyPipelineEquivalence(data, pipeline, pipeline);
+        verifyPipelineEquivalence(data, pipeline, [
+            { $project: { name: 1 } }
+        ]);
     });
 
     it('should retain $graphLookup when its alias is not used', () => {

@@ -5,7 +5,7 @@ import { proveDeadAssignmentElimination } from './dead-assignment-proofs';
 export class DeadAssignmentEliminationPass implements PipelinePass
 {
     readonly name       = 'dead-assignment-elimination';
-    readonly stageTypes = [ '$addFields', '$set' ] as const;
+    readonly stageTypes = [ '$addFields', '$set', '$project', '$unset' ] as const;
 
     execute( pipeline: any[], context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {

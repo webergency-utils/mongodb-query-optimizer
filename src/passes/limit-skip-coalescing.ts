@@ -118,6 +118,12 @@ export function proveLimitSkipCoalescing(
     };
 }
 
+export function isZeroSkip(stage: unknown): boolean
+{
+    const parsed = parseStrictStage(stage);
+    return parsed !== null && parsed.operator === '$skip' && parsed.value === 0;
+}
+
 export class LimitSkipCoalescingPass implements PipelinePass
 {
     readonly name       = 'limit-skip-coalescing';
@@ -140,6 +146,15 @@ export class LimitSkipCoalescingPass implements PipelinePass
 
             result.splice(index, 2, proof.replacementStage);
             return result;
+        }
+
+        for (let index = 0; index < result.length; index++)
+        {
+            if (isZeroSkip(result[index]))
+            {
+                result.splice(index, 1);
+                return result;
+            }
         }
 
         return result;
