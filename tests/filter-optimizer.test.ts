@@ -896,6 +896,44 @@ describe('filter-bearing pipelines', () =>
             { $match: { age: { $in: [] } } },
         ]);
     });
+
+    it('tightens Date range intervals, detects Date contradictions, and deduplicates $nin arrays', () =>
+    {
+        const d1 = new Date('2025-01-01T00:00:00.000Z');
+        const d2 = new Date('2025-06-01T00:00:00.000Z');
+        const d3 = new Date('2025-12-01T00:00:00.000Z');
+
+        // Tightens redundant Date lower bound
+        expect(optimizeFilter({ createdAt: { $gt: d1, $gte: d2 } })).toEqual({
+            createdAt: { $gte: d2 },
+        });
+
+        // Detects contradictory Date bounds
+        expect(optimizeFilter({ createdAt: { $gt: d3, $lt: d1 } })).toEqual({
+            createdAt: { $in: [] },
+        });
+
+        // Collapses equal inclusive Date bounds to $eq
+        expect(optimizeFilter({ createdAt: { $gte: d2, $lte: new Date(d2.getTime()) } })).toEqual({
+            createdAt: { $eq: d2 },
+        });
+
+        // Invalid Date is left untouched
+        const invalidDate = new Date('invalid');
+        expect(optimizeFilter({ createdAt: { $gt: invalidDate } })).toEqual({
+            createdAt: { $gt: invalidDate },
+        });
+
+        // Deduplicates $nin array elements
+        expect(optimizeFilter({ status: { $nin: ['archived', 'deleted', 'archived'] } })).toEqual({
+            status: { $nin: ['archived', 'deleted'] },
+        });
+
+        // Preserves already-unique $nin array
+        expect(optimizeFilter({ status: { $nin: ['archived', 'deleted'] } })).toEqual({
+            status: { $nin: ['archived', 'deleted'] },
+        });
+    });
 });
 
 describe( 'production safe filter profile (5 active rules)', () =>

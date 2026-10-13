@@ -49,39 +49,71 @@ function optimizeOperatorChildren(
     return result;
 }
 
+function deduplicateOperatorArray( items: readonly any[] ): any[] | null
+{
+    const seen = new Set<string>();
+    const unique: any[] = [];
+
+    for( const item of items )
+    {
+        const fp = structuralFingerprint( item );
+
+        if( !seen.has( fp ))
+        {
+            seen.add( fp );
+            unique.push( item );
+        }
+    }
+
+    return unique.length < items.length ? unique : null;
+}
+
+function extractComparableBound( val: unknown, isDateMode: boolean ): number | undefined
+{
+    if( isDateMode )
+    {
+        return val instanceof Date && !Number.isNaN( val.getTime() )
+            ? val.getTime()
+            : undefined;
+    }
+
+    return typeof val === 'number' && Number.isFinite( val )
+        ? val
+        : undefined;
+}
+
 function simplifyFieldIntervals(
-    operatorDocument: Record<string, any>
+    inputDocument: Record<string, any>
 ): Record<string, any>
 {
+    let operatorDocument = inputDocument;
+
+    if( Array.isArray( operatorDocument.$nin ) && operatorDocument.$nin.length >= 2 )
+    {
+        const dedupedNin = deduplicateOperatorArray( operatorDocument.$nin );
+
+        if( dedupedNin )
+        {
+            operatorDocument = { ...operatorDocument, $nin: dedupedNin };
+        }
+    }
+
     const keys = Object.keys( operatorDocument );
     const hasRanges = keys.some(( k ) => k === '$gt' || k === '$gte' || k === '$lt' || k === '$lte' );
 
     if( !hasRanges ){ return operatorDocument }
 
-    let gt: number | undefined;
-    let gte: number | undefined;
-    let lt: number | undefined;
-    let lte: number | undefined;
+    const isDateMode = [
+        operatorDocument.$gt,
+        operatorDocument.$gte,
+        operatorDocument.$lt,
+        operatorDocument.$lte
+    ].some(( v ) => v instanceof Date );
 
-    if( typeof operatorDocument.$gt === 'number' && Number.isFinite( operatorDocument.$gt ))
-    {
-        gt = operatorDocument.$gt;
-    }
-
-    if( typeof operatorDocument.$gte === 'number' && Number.isFinite( operatorDocument.$gte ))
-    {
-        gte = operatorDocument.$gte;
-    }
-
-    if( typeof operatorDocument.$lt === 'number' && Number.isFinite( operatorDocument.$lt ))
-    {
-        lt = operatorDocument.$lt;
-    }
-
-    if( typeof operatorDocument.$lte === 'number' && Number.isFinite( operatorDocument.$lte ))
-    {
-        lte = operatorDocument.$lte;
-    }
+    const gt = extractComparableBound( operatorDocument.$gt, isDateMode );
+    const gte = extractComparableBound( operatorDocument.$gte, isDateMode );
+    const lt = extractComparableBound( operatorDocument.$lt, isDateMode );
+    const lte = extractComparableBound( operatorDocument.$lte, isDateMode );
 
     if( gt === undefined && gte === undefined && lt === undefined && lte === undefined )
     {
@@ -137,14 +169,17 @@ function simplifyFieldIntervals(
         {
             const { $gt: _1, $gte: _2, $lt: _3, $lte: _4, ...rest } = operatorDocument;
 
-            return { ...rest, $eq: finalLower.val };
+            return {
+                ...rest,
+                $eq: isDateMode ? new Date( finalLower.val ) : finalLower.val
+            };
         }
     }
 
-    if( typeof operatorDocument.$eq === 'number' && Number.isFinite( operatorDocument.$eq ))
-    {
-        const eqVal = operatorDocument.$eq;
+    const eqVal = extractComparableBound( operatorDocument.$eq, isDateMode );
 
+    if( eqVal !== undefined )
+    {
         if( finalLower !== undefined )
         {
             const invalid = finalLower.strict ? eqVal <= finalLower.val : eqVal < finalLower.val;

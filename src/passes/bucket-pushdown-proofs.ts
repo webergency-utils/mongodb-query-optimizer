@@ -145,6 +145,47 @@ export function proveBucketFilterPushdown(
             }));
         }
     }
+    else if(
+        isPlainObject( idCondition )
+        && bucketSpec.default === undefined
+        && Object.keys( idCondition ).length > 0
+        && Object.entries( idCondition ).every(
+            ([ op, bound ]) =>
+                ( op === '$gt' || op === '$gte' || op === '$lt' || op === '$lte' )
+                && typeof bound === typeof boundaries[ 0 ]
+        )
+    )
+    {
+        const matchingIndices: number[] = [];
+
+        for( let k = 0; k < boundaries.length - 1; k++ )
+        {
+            const b = boundaries[ k ];
+            const matches =
+                ( !( '$gt' in idCondition ) || b > idCondition.$gt )
+                && ( !( '$gte' in idCondition ) || b >= idCondition.$gte )
+                && ( !( '$lt' in idCondition ) || b < idCondition.$lt )
+                && ( !( '$lte' in idCondition ) || b <= idCondition.$lte );
+
+            if( matches )
+            {
+                matchingIndices.push( k );
+            }
+        }
+
+        if( matchingIndices.length === 0 )
+        {
+            return null;
+        }
+
+        const firstIdx = matchingIndices[ 0 ]!;
+        const lastIdx = matchingIndices[ matchingIndices.length - 1 ]!;
+
+        prefilterCondition = {
+            $gte: boundaries[ firstIdx ],
+            $lt: boundaries[ lastIdx + 1 ]
+        };
+    }
     else
     {
         return null;

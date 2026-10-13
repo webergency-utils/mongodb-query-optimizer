@@ -203,6 +203,56 @@ describe( 'bucket-pushdown-proofs unit and branch analysis', () =>
             postfilterStage: { $match: { count: { $gt: 5 }, active: true } }
         });
     });
+
+    it( 'proves range predicate ($gt, $gte, $lt, $lte) pushdown when bucket has no default', () =>
+    {
+        const bucketNoDefault =
+        {
+            $bucket: {
+                groupBy: '$year',
+                boundaries: [ 1990, 2000, 2010, 2020 ]
+            }
+        };
+
+        // $gte: 2000 -> matches bucket 2000 and 2010 -> [2000, 2020)
+        expect( proveBucketFilterPushdown(
+            bucketNoDefault,
+            { $match: { _id: { $gte: 2000 } } }
+        )).toEqual({
+            prefilterStage: { $match: { year: { $gte: 2000, $lt: 2020 } } },
+            postfilterStage: null
+        });
+
+        // $gt: 1990, $lt: 2010 -> matches bucket 2000 only -> [2000, 2010)
+        expect( proveBucketFilterPushdown(
+            bucketNoDefault,
+            { $match: { _id: { $gt: 1990, $lt: 2010 } } }
+        )).toEqual({
+            prefilterStage: { $match: { year: { $gte: 2000, $lt: 2010 } } },
+            postfilterStage: null
+        });
+
+        // $lte: 2000 -> matches bucket 1990 and 2000 -> [1990, 2010)
+        expect( proveBucketFilterPushdown(
+            bucketNoDefault,
+            { $match: { _id: { $lte: 2000 } } }
+        )).toEqual({
+            prefilterStage: { $match: { year: { $gte: 1990, $lt: 2010 } } },
+            postfilterStage: null
+        });
+
+        // Range matching no bucket boundaries returns null
+        expect( proveBucketFilterPushdown(
+            bucketNoDefault,
+            { $match: { _id: { $gt: 2050 } } }
+        )).toBeNull();
+
+        // Range with mismatched bound type returns null
+        expect( proveBucketFilterPushdown(
+            bucketNoDefault,
+            { $match: { _id: { $gt: '2000' } } }
+        )).toBeNull();
+    });
 });
 
 describe( 'BucketFilterPushdownPass execution and parity', () =>

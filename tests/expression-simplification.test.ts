@@ -3,6 +3,8 @@ import { resolvePipelineGuarantees } from '../src/guarantees.js';
 import
 {
     ExpressionSimplificationPass,
+    isFalsyConstant,
+    isNonNullConstant,
     isTruthyConstant,
     simplifyExpression
 }
@@ -15,7 +17,7 @@ describe( 'ExpressionSimplificationPass unit and proof tests', () =>
     const strictErrors = resolvePipelineGuarantees( [], { strictErrors: true } );
     const pass = new ExpressionSimplificationPass();
 
-    it( 'identifies truthy constants correctly across all branches', () =>
+    it( 'identifies truthy, falsy, and non-null constants correctly across all branches', () =>
     {
         // Primitive truthy constants
         expect( isTruthyConstant( true )).toBe( true );
@@ -53,6 +55,30 @@ describe( 'ExpressionSimplificationPass unit and proof tests', () =>
         expect( isTruthyConstant({ $literal: Number.NaN })).toBe( false );
         expect( isTruthyConstant({ $literal: null })).toBe( false );
         expect( isTruthyConstant({ $literal: { a: 1 } })).toBe( false );
+
+        // isFalsyConstant
+        expect( isFalsyConstant( false )).toBe( true );
+        expect( isFalsyConstant( 0 )).toBe( true );
+        expect( isFalsyConstant( null )).toBe( true );
+        expect( isFalsyConstant({ $literal: false })).toBe( true );
+        expect( isFalsyConstant({ $literal: 0 })).toBe( true );
+        expect( isFalsyConstant({ $literal: null })).toBe( true );
+        expect( isFalsyConstant({ $literal: 1 })).toBe( false );
+        expect( isFalsyConstant({ a: 1 })).toBe( false );
+        expect( isFalsyConstant( '$a' )).toBe( false );
+        expect( isFalsyConstant( true )).toBe( false );
+
+        // isNonNullConstant
+        expect( isNonNullConstant( true )).toBe( true );
+        expect( isNonNullConstant( false )).toBe( true );
+        expect( isNonNullConstant( 0 )).toBe( true );
+        expect( isNonNullConstant( 'abc' )).toBe( true );
+        expect( isNonNullConstant({ $literal: false })).toBe( true );
+        expect( isNonNullConstant({ $literal: 0 })).toBe( true );
+        expect( isNonNullConstant({ $literal: null })).toBe( false );
+        expect( isNonNullConstant( null )).toBe( false );
+        expect( isNonNullConstant( '$a' )).toBe( false );
+        expect( isNonNullConstant({ a: 1 })).toBe( false );
     });
 
     it( 'folds $size over $filter with all-truthy cond and no limit (AE6)', () =>
@@ -140,6 +166,48 @@ describe( 'ExpressionSimplificationPass unit and proof tests', () =>
     {
         const emptyOr = { $or: [] };
         expect( simplifyExpression( emptyOr )).toEqual( emptyOr );
+    });
+
+    it( 'folds $not over truthy and falsy constants and preserves dynamic operands', () =>
+    {
+        expect( simplifyExpression({ $not: [ true ] })).toBe( false );
+        expect( simplifyExpression({ $not: [ 42 ] })).toBe( false );
+        expect( simplifyExpression({ $not: [ false ] })).toBe( true );
+        expect( simplifyExpression({ $not: [ null ] })).toBe( true );
+        expect( simplifyExpression({ $not: [ 0 ] })).toBe( true );
+        expect( simplifyExpression({ $not: [ '$flag' ] })).toEqual({ $not: [ '$flag' ] });
+        expect( simplifyExpression({ $not: [ true, false ] })).toEqual({ $not: [ true, false ] });
+    });
+
+    it( 'folds $cond in both array and object forms when condition is a constant', () =>
+    {
+        expect( simplifyExpression({ $cond: [ true, '$a', '$b' ] })).toBe( '$a' );
+        expect( simplifyExpression({ $cond: [ false, '$a', '$b' ] })).toBe( '$b' );
+        expect( simplifyExpression({ $cond: [ null, '$a', '$b' ] })).toBe( '$b' );
+        expect( simplifyExpression({ $cond: [ '$flag', '$a', '$b' ] })).toEqual({ $cond: [ '$flag', '$a', '$b' ] });
+        expect( simplifyExpression({ $cond: [ true, '$a' ] })).toEqual({ $cond: [ true, '$a' ] });
+
+        expect( simplifyExpression({ $cond: { if: 1, then: '$x', else: '$y' } })).toBe( '$x' );
+        expect( simplifyExpression({ $cond: { if: 0, then: '$x', else: '$y' } })).toBe( '$y' );
+        expect( simplifyExpression({ $cond: { if: '$flag', then: '$x', else: '$y' } })).toEqual({
+            $cond: { if: '$flag', then: '$x', else: '$y' }
+        });
+        expect( simplifyExpression({ $cond: { if: true, then: '$x' } })).toEqual({
+            $cond: { if: true, then: '$x' }
+        });
+        expect( simplifyExpression({ $cond: 'invalid' })).toEqual({ $cond: 'invalid' });
+    });
+
+    it( 'folds $ifNull with leading non-null constants and strips leading nulls in 3+ chains', () =>
+    {
+        expect( simplifyExpression({ $ifNull: [ 'fallback', '$a' ] })).toBe( 'fallback' );
+        expect( simplifyExpression({ $ifNull: [ 0, '$a' ] })).toBe( 0 );
+        expect( simplifyExpression({ $ifNull: [ false, '$a' ] })).toBe( false );
+        expect( simplifyExpression({ $ifNull: [ null, 'default', '$a' ] })).toBe( 'default' );
+        expect( simplifyExpression({ $ifNull: [ null, '$a', '$b' ] })).toEqual({ $ifNull: [ '$a', '$b' ] });
+        expect( simplifyExpression({ $ifNull: [ null, '$a' ] })).toEqual({ $ifNull: [ null, '$a' ] });
+        expect( simplifyExpression({ $ifNull: [ '$a', '$b' ] })).toEqual({ $ifNull: [ '$a', '$b' ] });
+        expect( simplifyExpression({ $ifNull: [ '$a' ] })).toEqual({ $ifNull: [ '$a' ] });
     });
 
     it( 'never simplifies or inspects inside $literal subtrees', () =>

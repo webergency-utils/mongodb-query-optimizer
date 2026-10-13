@@ -70,6 +70,45 @@ export function isTruthyConstant( expr: unknown ): boolean
     return false;
 }
 
+export function isFalsyConstant( expr: unknown ): boolean
+{
+    if( expr === false || expr === 0 || expr === null )
+    {
+        return true;
+    }
+
+    if( isPlainObject( expr ))
+    {
+        const keys = Object.keys( expr );
+
+        if( keys.length === 1 && keys[ 0 ] === '$literal' )
+        {
+            const lit = ( expr as Record<string, unknown> ).$literal;
+
+            return lit === false || lit === 0 || lit === null;
+        }
+    }
+
+    return false;
+}
+
+export function isNonNullConstant( expr: unknown ): boolean
+{
+    if( isTruthyConstant( expr ))
+    {
+        return true;
+    }
+
+    return expr === false
+        || expr === 0
+        || (
+            isPlainObject( expr )
+            && Object.keys( expr ).length === 1
+            && '$literal' in expr
+            && ( expr.$literal === false || expr.$literal === 0 )
+        );
+}
+
 export function simplifyExpression( expr: unknown ): unknown
 {
     if( Array.isArray( expr ))
@@ -112,6 +151,71 @@ export function simplifyExpression( expr: unknown ): unknown
             if( simplified.$or.length >= 1 && simplified.$or.every( isTruthyConstant ))
             {
                 return true;
+            }
+        }
+        else if( op === '$not' && Array.isArray( simplified.$not ) && simplified.$not.length === 1 )
+        {
+            if( isTruthyConstant( simplified.$not[ 0 ] ))
+            {
+                return false;
+            }
+
+            if( isFalsyConstant( simplified.$not[ 0 ] ))
+            {
+                return true;
+            }
+        }
+        else if( op === '$cond' )
+        {
+            if( Array.isArray( simplified.$cond ) && simplified.$cond.length === 3 )
+            {
+                if( isTruthyConstant( simplified.$cond[ 0 ] ))
+                {
+                    return simplified.$cond[ 1 ];
+                }
+
+                if( isFalsyConstant( simplified.$cond[ 0 ] ))
+                {
+                    return simplified.$cond[ 2 ];
+                }
+            }
+            else if( isPlainObject( simplified.$cond ))
+            {
+                const condSpec = simplified.$cond as Record<string, unknown>;
+
+                if(
+                    Object.keys( condSpec ).length === 3
+                    && 'if' in condSpec
+                    && 'then' in condSpec
+                    && 'else' in condSpec
+                )
+                {
+                    if( isTruthyConstant( condSpec.if ))
+                    {
+                        return condSpec.then;
+                    }
+
+                    if( isFalsyConstant( condSpec.if ))
+                    {
+                        return condSpec.else;
+                    }
+                }
+            }
+        }
+        else if( op === '$ifNull' && Array.isArray( simplified.$ifNull ) && simplified.$ifNull.length >= 2 )
+        {
+            const args = simplified.$ifNull.filter(
+                ( item, idx, arr ) => idx >= arr.length - 2 || item !== null
+            );
+
+            if( isNonNullConstant( args[ 0 ] ))
+            {
+                return args[ 0 ];
+            }
+
+            if( args.length < simplified.$ifNull.length )
+            {
+                return { $ifNull: args };
             }
         }
         else if( op === '$size' && isPlainObject( simplified.$size ))
