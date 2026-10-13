@@ -733,6 +733,13 @@ describe( 'abstract query shape generator and pretty printer', () =>
             expect( formatted ).toContain( '  { "$count": "total" }' );
         });
 
+        it( 'inlines pre-abstracted shape strings containing $count: <string>', () =>
+        {
+            const shape = '[{"$count":<string>}]';
+            const formatted = formatAbstractQuery( shape, { format: 'allman' });
+            expect( formatted ).toBe( '[\n  { "$count": <string> }\n]' );
+        });
+
         it( 'inlines accumulator and array index operators', () =>
         {
             const query = {
