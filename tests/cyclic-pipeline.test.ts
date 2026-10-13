@@ -30,13 +30,17 @@ describe( 'cyclic pipelines', () =>
     {
         const pipeline = cyclicLookupPipeline();
         const optimized = optimizePipeline( pipeline );
-        const nested = optimized[ 0 ].$lookup.pipeline;
+        const summary = analyzePipeline( pipeline );
 
-        expect( Array.isArray( optimized )).toBe( true );
-        expect( nested[ 0 ].$lookup.pipeline ).toBe( nested );
+        expect( optimized ).toBe( pipeline );
+        expect( summary.unknown ).toBe( true );
+        expect( summary.malformed ).toBe( true );
+        expect( summary.stages ).toHaveLength( 1 );
+        expect( summary.stages[ 0 ]!.children[ 0 ]!.summary.stages ).toHaveLength( 0 );
+        expect( pipelineReadsFieldOrder( pipeline )).toBe( false );
     });
 
-    it( 'still rewrites stages outside the cycle', () =>
+    it( 'stops and leaves pipeline unoptimized when a cycle is present', () =>
     {
         const pipeline = cyclicLookupPipeline();
 
@@ -47,11 +51,8 @@ describe( 'cyclic pipelines', () =>
         pipeline[ 2 ].$lookup.pipeline = pipeline;
 
         const optimized = optimizePipeline( pipeline );
-        const nested = optimized[ optimized.length - 1 ].$lookup.pipeline;
 
-        expect( optimized[ 0 ]).toEqual({ $match: { a: 1, b: 1 } });
-        expect( optimized ).toHaveLength( 2 );
-        expect( nested.some(( stage: any ) => stage.$lookup?.pipeline === nested )).toBe( true );
+        expect( optimized ).toBe( pipeline );
         expect( pipelineReadsFieldOrder( pipeline )).toBe( false );
     });
 
@@ -70,10 +71,14 @@ describe( 'cyclic pipelines', () =>
         pipeline[ 0 ].$facet.branch = pipeline;
 
         const optimized = optimizePipeline( pipeline );
+        const summary = analyzePipeline( pipeline );
 
-        expect( optimized[ 0 ].$facet.branch[ 0 ].$facet.branch ).toBe(
-            optimized[ 0 ].$facet.branch
-        );
+        expect( optimized ).toBe( pipeline );
+        expect( summary.unknown ).toBe( true );
+        expect( summary.malformed ).toBe( true );
+        expect( summary.stages ).toHaveLength( 1 );
+        expect( summary.stages[ 0 ]!.children[ 0 ]!.summary.stages ).toHaveLength( 0 );
+        expect( pipelineReadsFieldOrder( pipeline )).toBe( false );
     });
 
     it( 'stops when a unionWith pipeline points at its parent pipeline', () =>
@@ -92,20 +97,29 @@ describe( 'cyclic pipelines', () =>
         pipeline[ 0 ].$unionWith.pipeline = pipeline;
 
         const optimized = optimizePipeline( pipeline );
+        const summary = analyzePipeline( pipeline );
 
-        expect( optimized[ 0 ].$unionWith.pipeline[ 0 ].$unionWith.pipeline ).toBe(
-            optimized[ 0 ].$unionWith.pipeline
-        );
+        expect( optimized ).toBe( pipeline );
+        expect( summary.unknown ).toBe( true );
+        expect( summary.malformed ).toBe( true );
+        expect( summary.stages ).toHaveLength( 1 );
+        expect( summary.stages[ 0 ]!.children[ 0 ]!.summary.stages ).toHaveLength( 0 );
+        expect( pipelineReadsFieldOrder( pipeline )).toBe( false );
     });
 
-    it( 'marks a cyclic lookup pipeline unknown instead of walking it again', () =>
+    it( 'marks a cyclic lookup pipeline unknown and malformed instead of walking it again', () =>
     {
         const pipeline = cyclicLookupPipeline();
         const summary = analyzePipeline( pipeline );
 
         expect( summary.unknown ).toBe( true );
+        expect( summary.malformed ).toBe( true );
         expect( summary.stages ).toHaveLength( 1 );
+        expect( summary.stages[ 0 ]!.malformed ).toBe( true );
         expect( summary.stages[ 0 ]!.children[ 0 ]!.summary.unknown ).toBe( true );
+        expect( summary.stages[ 0 ]!.children[ 0 ]!.summary.malformed ).toBe( true );
+        expect( summary.stages[ 0 ]!.children[ 0 ]!.summary.stages ).toHaveLength( 0 );
+        expect( pipelineReadsFieldOrder( pipeline )).toBe( false );
     });
 
     it( 'still optimizes an acyclic lookup subpipeline', () =>

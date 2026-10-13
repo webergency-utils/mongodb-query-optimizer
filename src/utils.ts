@@ -75,6 +75,40 @@ function isExoticObject(val: any): boolean {
     return false;
 }
 
+export function hasCycle(
+    val     : unknown,
+    active  : WeakSet<object> = new WeakSet(),
+    visited : WeakSet<object> = new WeakSet()
+): boolean
+{
+    if( !val || typeof val !== 'object' ){ return false; }
+
+    if( active.has( val )){ return true; }
+    if( visited.has( val )){ return false; }
+
+    active.add( val );
+
+    if( Array.isArray( val ))
+    {
+        for( const item of val )
+        {
+            if( hasCycle( item, active, visited )){ return true; }
+        }
+    }
+    else
+    {
+        for( const value of Object.values( val ))
+        {
+            if( hasCycle( value, active, visited )){ return true; }
+        }
+    }
+
+    active.delete( val );
+    visited.add( val );
+
+    return false;
+}
+
 export function deepClone( val: any, seen: WeakMap<object, any> = new WeakMap() ): any
 {
     if( val === null || val === undefined ){ return val; }
