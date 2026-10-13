@@ -1,18 +1,20 @@
 import { DEFAULT_GUARANTEE_CONTEXT, type GuaranteeContext } from '../guarantees';
 import { PipelinePass } from './types';
-import { proveCoveredProjectionSynthesis } from './covered-projection-proofs';
+import { proveCoveredProjectionSynthesis, trimCountNeutralPrefix } from './covered-projection-proofs';
 
 export class CoveredProjectionSynthesisPass implements PipelinePass
 {
     readonly name       = 'covered-projection-synthesis';
     readonly stageTypes = [ '$group', '$count', '$sortByCount' ] as const;
 
-    execute( pipeline: any[], _context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
+    execute( pipeline: any[], context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {
-        const proof = proveCoveredProjectionSynthesis( pipeline );
-        if( !proof ){ return [ ...pipeline ] }
+        const trimmed = trimCountNeutralPrefix( pipeline, context );
+        const proof = proveCoveredProjectionSynthesis( trimmed );
 
-        const result = [ ...pipeline ];
+        if( !proof ){ return trimmed }
+
+        const result = [ ...trimmed ];
         result.splice( proof.insertIndex, 0, proof.synthesizedStage );
 
         return result;

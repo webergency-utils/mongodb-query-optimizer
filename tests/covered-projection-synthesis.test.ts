@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { optimizePipeline } from '../src/index.js';
 import { CoveredProjectionSynthesisPass } from '../src/passes/covered-projection-synthesis';
-import { proveCoveredProjectionSynthesis } from '../src/passes/covered-projection-proofs';
+import { proveCoveredProjectionSynthesis, trimCountNeutralPrefix } from '../src/passes/covered-projection-proofs';
 import { optimizePipelineWithCandidateProfile } from '../src/passes/registry';
 import { runMockPipeline } from './helpers/mock-engine';
 
@@ -545,5 +545,255 @@ describe( 'production covered projection', () =>
             { $group: { _id: '$customerId', n: { $sum: '$amount' } } }
         ]);
         expect( runMockPipeline( docs, optimized ) ).toEqual( runMockPipeline( docs, pipeline ) );
+    });
+
+    it( 'drops a plain project, sort, and lookup before count outside strict mode', () =>
+    {
+        const pipeline = [
+            { $match: { status: 'open' } },
+            { $project: { price: 1, _id: 0 } },
+            { $sort: { price: -1 } },
+            {
+                $lookup: {
+                    from: 'orders',
+                    localField: '_id',
+                    foreignField: 'userId',
+                    as: 'orders'
+                }
+            },
+            { $count: 'total' }
+        ];
+
+        expect( optimizePipeline( pipeline ) ).toEqual([
+            { $match: { status: 'open' } },
+            { $count: 'total' }
+        ]);
+    });
+
+    it( 'drops a copied field and the stranded inclusion in front of count', () =>
+    {
+        expect( optimizePipeline([
+            { $set: { tmp: '$price' } },
+            { $count: 'total' }
+        ]) ).toEqual([
+            { $count: 'total' }
+        ]);
+    });
+
+    it( 'keeps a throwing assignment in front of count', () =>
+    {
+        const pipeline = [
+            { $set: { tmp: { $divide: [ '$price', 0 ] } } },
+            { $count: 'total' }
+        ];
+
+        expect( optimizePipeline( pipeline ) ).toEqual([
+            { $project: { price: 1, _id: 0 } },
+            { $set: { tmp: { $divide: [ '$price', 0 ] } } },
+            { $count: 'total' }
+        ]);
+    });
+
+    it( 'keeps lookup in strict mode and still drops the sort', () =>
+    {
+        const pipeline = [
+            { $sort: { price: -1 } },
+            {
+                $lookup: {
+                    from: 'orders',
+                    localField: '_id',
+                    foreignField: 'userId',
+                    as: 'orders'
+                }
+            },
+            { $count: 'total' }
+        ];
+
+        expect( optimizePipeline( pipeline, { strictErrors: true } ) ).toEqual([
+            {
+                $lookup: {
+                    from: 'orders',
+                    localField: '_id',
+                    foreignField: 'userId',
+                    as: 'orders'
+                }
+            },
+            { $count: 'total' }
+        ]);
+    });
+});
+
+describe( 'count neutral prefix trim', () =>
+{
+    const lookup =
+    {
+        $lookup: {
+            from: 'orders',
+            localField: '_id',
+            foreignField: 'userId',
+            as: 'orders'
+        }
+    };
+
+    const strict =
+    {
+        strictFieldOrder: false,
+        strictErrors: true
+    };
+
+    it( 'leaves a pipeline with no count unchanged', () =>
+    {
+        const pipeline = [ null, { $match: { a: 1 } } ];
+        const trimmed = trimCountNeutralPrefix( pipeline );
+
+        expect( trimmed ).toEqual( pipeline );
+        expect( trimmed ).not.toBe( pipeline );
+    });
+
+    it( 'leaves a lone count unchanged', () =>
+    {
+        expect( trimCountNeutralPrefix([
+            { $count: 'total' }
+        ]) ).toEqual([
+            { $count: 'total' }
+        ]);
+    });
+
+    it( 'drops sort, lookup, and plain projects outside strict mode', () =>
+    {
+        expect( trimCountNeutralPrefix([
+            { $match: { status: 'open' } },
+            { $project: { payload: 0 } },
+            { $sort: { price: -1 } },
+            lookup,
+            { $project: { price: 1, _id: 0 } },
+            { $count: 'total' },
+            { $sort: { total: 1 } }
+        ]) ).toEqual([
+            { $match: { status: 'open' } },
+            { $count: 'total' },
+            { $sort: { total: 1 } }
+        ]);
+    });
+
+    it( 'drops sort in strict mode and keeps a lookup that can still fail', () =>
+    {
+        expect( trimCountNeutralPrefix([
+            { $sort: { price: -1 } },
+            { $project: { price: 1 } },
+            lookup,
+            { $count: 'total' }
+        ], strict ) ).toEqual([
+            { $project: { price: 1 } },
+            lookup,
+            { $count: 'total' }
+        ]);
+    });
+
+    it( 'keeps a sort that chooses the limited rows', () =>
+    {
+        const pipeline = [
+            { $sort: { price: -1 } },
+            { $limit: 1 },
+            { $count: 'total' }
+        ];
+
+        expect( trimCountNeutralPrefix( pipeline ) ).toEqual( pipeline );
+    });
+
+    it( 'keeps a lookup a later match or unwind still depends on', () =>
+    {
+        const matched = [
+            lookup,
+            { $match: { orders: { $ne: [] } } },
+            { $count: 'total' }
+        ];
+        const unwound = [
+            lookup,
+            { $unwind: '$orders' },
+            { $count: 'total' }
+        ];
+
+        expect( trimCountNeutralPrefix( matched ) ).toEqual( matched );
+        expect( trimCountNeutralPrefix( unwound ) ).toEqual( unwound );
+    });
+
+    it( 'keeps a throwing project and a project a later assignment still reads', () =>
+    {
+        const dividing = [
+            { $project: { shown: { $divide: [ '$price', 0 ] } } },
+            { $count: 'total' }
+        ];
+        const assigned = [
+            { $sort: { price: -1 } },
+            { $project: { price: 1 } },
+            { $set: { tmp: { $divide: [ '$price', 0 ] } } },
+            { $count: 'total' }
+        ];
+
+        expect( trimCountNeutralPrefix( dividing ) ).toEqual( dividing );
+        expect( trimCountNeutralPrefix( assigned, strict ) ).toEqual([
+            { $project: { price: 1 } },
+            { $set: { tmp: { $divide: [ '$price', 0 ] } } },
+            { $count: 'total' }
+        ]);
+    });
+
+    it( 'stops at a malformed sort, an unknown stage, and a null stage', () =>
+    {
+        expect( trimCountNeutralPrefix([
+            { $sort: 'bad' },
+            { $count: 'total' }
+        ]) ).toEqual([
+            { $sort: 'bad' },
+            { $count: 'total' }
+        ]);
+
+        expect( trimCountNeutralPrefix([
+            { $custom: 1 },
+            { $count: 'total' }
+        ]) ).toEqual([
+            { $custom: 1 },
+            { $count: 'total' }
+        ]);
+
+        expect( trimCountNeutralPrefix([
+            null,
+            { $count: 'total' }
+        ]) ).toEqual([
+            null,
+            { $count: 'total' }
+        ]);
+    });
+
+    it( 'trims the neutral prefix of every count', () =>
+    {
+        expect( trimCountNeutralPrefix([
+            { $project: { a: 1 } },
+            { $count: 'a' },
+            { $sort: { a: 1 } },
+            { $count: 'b' }
+        ]) ).toEqual([
+            { $count: 'a' },
+            { $count: 'b' }
+        ]);
+    });
+
+    it( 'still synthesizes a covered projection after dropping a sort before count', () =>
+    {
+        const pass = new CoveredProjectionSynthesisPass();
+        const optimized = pass.execute([
+            { $match: { dept: 'Sales' } },
+            { $group: { _id: '$dept', total: { $sum: '$qty' } } },
+            { $sort: { _id: 1 } },
+            { $count: 'groups' }
+        ]);
+
+        expect( optimized ).toEqual([
+            { $match: { dept: 'Sales' } },
+            { $project: { dept: 1, qty: 1, _id: 0 } },
+            { $group: { _id: '$dept', total: { $sum: '$qty' } } },
+            { $count: 'groups' }
+        ]);
     });
 });

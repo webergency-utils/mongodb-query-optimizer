@@ -905,12 +905,11 @@ describe('high-ROI aggregation optimization passes end-to-end rewrites', () =>
         ];
         expect(optimizePipeline(pipeline)).toEqual([
             { $match: { orgId: 'corp' } },
-            { $project: { name: 1 } },
             {
                 $facet: {
                     branchA: [{ $count: 'total' }],
                     branchB: [
-                        { $project: { name: 1, _id: 0 } },
+                        { $project: { name: 1 } },
                         { $group: { _id: '$name' } },
                     ],
                 },

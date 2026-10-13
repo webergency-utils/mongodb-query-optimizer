@@ -1,8 +1,9 @@
 import { isExactPath, relatePaths } from '../analyzer/paths';
 import { isValidProjectionPath } from '../analyzer/projections';
 import { analyzeStage } from '../analyzer/semantics';
-import { isPlainObject } from '../utils.js';
-import { getSingleStageEntry } from './helpers.js';
+import { DEFAULT_GUARANTEE_CONTEXT, type GuaranteeContext } from '../guarantees';
+import { getSingleStageEntry, getStageSpec } from './helpers.js';
+import { parseSimpleProject } from './projection-proofs';
 
 export interface CoveredProjectionProof
 {
@@ -198,4 +199,108 @@ export function proveCoveredProjectionSynthesis( pipeline: readonly any[] ): Cov
         synthesizedStage: { $project: projectSpec },
         insertIndex
     };
+}
+
+/**
+ * Removes a row-count-neutral prefix immediately before `$count`.
+ * A `$sort` is always treated as non-failing. A `$lookup` is removed only
+ * when strict errors are off, because its subpipeline can still fail.
+ * A plain inclusion or exclusion `$project` is removed when no later kept
+ * stage still reads the document shape.
+ */
+export function trimCountNeutralPrefix(
+    pipeline : readonly any[],
+    context  : GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT
+): any[]
+{
+    const result = [ ...pipeline ];
+
+    for( let index = result.length - 1; index >= 0; index-- )
+    {
+        const entry = getSingleStageEntry( result[ index ]);
+
+        if( !entry || entry[ 0 ] !== '$count' ){ continue }
+
+        index = dropCountNeutralPrefix( result, index, context.strictErrors );
+    }
+
+    return result;
+}
+
+function dropCountNeutralPrefix(
+    pipeline     : any[],
+    countIndex   : number,
+    strictErrors : boolean
+): number
+{
+    let cursor = countIndex - 1;
+    let shapeReaderKept = false;
+
+    while( cursor >= 0 )
+    {
+        const stage = pipeline[ cursor ];
+
+        if( isRemovableSort( stage ))
+        {
+            pipeline.splice( cursor, 1 );
+            countIndex--;
+            cursor--;
+            continue;
+        }
+
+        if( isLookupStage( stage ))
+        {
+            if( !strictErrors )
+            {
+                pipeline.splice( cursor, 1 );
+                countIndex--;
+                cursor--;
+                continue;
+            }
+
+            shapeReaderKept = true;
+            cursor--;
+            continue;
+        }
+
+        if( !shapeReaderKept && parseSimpleProject( stage ))
+        {
+            pipeline.splice( cursor, 1 );
+            countIndex--;
+            cursor--;
+            continue;
+        }
+
+        if( preservesRowCount( stage ))
+        {
+            shapeReaderKept = true;
+            cursor--;
+            continue;
+        }
+
+        break;
+    }
+
+    return countIndex;
+}
+
+function isRemovableSort( stage : unknown ): boolean
+{
+    return getStageSpec( stage, '$sort' ) !== null;
+}
+
+function isLookupStage( stage : unknown ): boolean
+{
+    const entry = getSingleStageEntry( stage );
+
+    return entry !== null && entry[ 0 ] === '$lookup';
+}
+
+function preservesRowCount( stage : unknown ): boolean
+{
+    const semantics = analyzeStage( stage );
+
+    if( semantics.malformed || semantics.unknown ){ return false }
+
+    return semantics.cardinality === 'preserves';
 }

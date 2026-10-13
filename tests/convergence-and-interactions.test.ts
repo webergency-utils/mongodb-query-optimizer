@@ -427,12 +427,11 @@ describe('production pipeline copy semantics', () =>
         const optimized3 = optimizePipeline(pipeline3);
         expect(optimized3).toEqual([
             { $match: { tenant: 'org-1', status: 'active' } },
-            { $project: { name: 1 } },
             {
                 $facet: {
                     recent: [{ $count: 'total' }],
                     oldest: [
-                        { $project: { name: 1, _id: 0 } },
+                        { $project: { name: 1 } },
                         { $group: { _id: '$name' } },
                     ],
                 },
