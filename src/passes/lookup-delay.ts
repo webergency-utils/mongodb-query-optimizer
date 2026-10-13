@@ -3,6 +3,7 @@ import { GuaranteeContext, DEFAULT_GUARANTEE_CONTEXT } from '../guarantees.js';
 import
 {
     proveLookupDelayAcrossStage,
+    proveLookupLimitPushdown,
     proveLookupMatchSplit,
     proveLookupSubpipelinePushdown,
 }
@@ -108,6 +109,19 @@ export class LookupDelayPass implements PipelinePass
                         changed = true;
                         continue;
                     }
+                }
+
+                const limitProof = proveLookupLimitPushdown(
+                    result[ currentIndex ],
+                    result.slice( currentIndex + 1 ),
+                    context
+                );
+
+                if( limitProof )
+                {
+                    result[ currentIndex ] = limitProof.lookupStage;
+                    changed = true;
+                    continue;
                 }
 
                 break;

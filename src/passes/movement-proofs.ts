@@ -14,6 +14,7 @@ import { deepClone, isPlainObject } from '../utils.js';
 import {
     combineConjuncts,
     decomposeFilterIntoConjuncts,
+    getSingleStageEntry,
     isMatchStage,
 } from './helpers.js';
 import { GuaranteeContext, DEFAULT_GUARANTEE_CONTEXT } from '../guarantees.js';
@@ -966,6 +967,11 @@ export interface SubpipelinePushdownProof
     };
 }
 
+export interface LookupLimitPushdownProof
+{
+    readonly lookupStage: Record<string, unknown>;
+}
+
 export function proveLookupMatchSplit(
     lookupStage        : unknown,
     followingStage     : unknown,
@@ -1181,6 +1187,284 @@ export function proveLookupSubpipelinePushdown(
     return {
         lookupStage: updatedLookup
     };
+}
+
+function hasTerminalLimitOne( pipeline: readonly unknown[] ): boolean
+{
+    if( pipeline.length === 0 ){ return false }
+
+    const last = pipeline[ pipeline.length - 1 ];
+    const entry = getSingleStageEntry( last );
+    if( !entry ){ return false }
+
+    return entry[ 0 ] === '$limit' && entry[ 1 ] === 1;
+}
+
+function pushLimitOneToSubpipeline( pipeline: readonly unknown[] ): unknown[]
+{
+    const copy = deepClone( pipeline ) as unknown[];
+
+    if( copy.length > 0 )
+    {
+        const last = copy[ copy.length - 1 ];
+        const entry = getSingleStageEntry( last );
+
+        if( entry && entry[ 0 ] === '$limit' )
+        {
+            copy[ copy.length - 1 ] = { $limit: 1 };
+            return copy;
+        }
+    }
+
+    copy.push( { $limit: 1 } );
+    return copy;
+}
+
+function isLimitOne( stage: unknown ): boolean
+{
+    const entry = getSingleStageEntry( stage );
+    if( !entry ){ return false }
+
+    return entry[ 0 ] === '$limit' && entry[ 1 ] === 1;
+}
+
+function isUnwindForPath( stage: unknown, alias: string ): boolean
+{
+    const entry = getSingleStageEntry( stage );
+    if( !entry || entry[ 0 ] !== '$unwind' ){ return false }
+
+    const unwind = entry[ 1 ];
+    const target = `$${ alias }`;
+
+    if( typeof unwind === 'string' )
+    {
+        return unwind === target;
+    }
+
+    if( isPlainObject( unwind ) && typeof unwind.path === 'string' )
+    {
+        return unwind.path === target;
+    }
+
+    return false;
+}
+
+function isFirstElementExpression( expr: unknown, alias: string ): boolean
+{
+    if( !isPlainObject( expr ) ){ return false }
+
+    const targetRef = `$${ alias }`;
+    const rootRef = `$$ROOT.${ alias }`;
+
+    const keys = Object.keys( expr );
+    if( keys.length !== 1 ){ return false }
+
+    const op = keys[ 0 ];
+
+    if( op === '$first' )
+    {
+        const arg = ( expr as Record<string, unknown> ).$first;
+        return arg === targetRef || arg === rootRef;
+    }
+
+    if( op === '$arrayElemAt' )
+    {
+        const args = ( expr as Record<string, unknown> ).$arrayElemAt;
+        if( !Array.isArray( args ) || args.length !== 2 ){ return false }
+
+        return ( args[ 0 ] === targetRef || args[ 0 ] === rootRef ) && args[ 1 ] === 0;
+    }
+
+    return false;
+}
+
+function containsPathReference( value: unknown, alias: string ): boolean
+{
+    if( typeof value === 'string' )
+    {
+        if( value.startsWith( '$' ))
+        {
+            const path = value.startsWith( '$$ROOT.' )
+                ? value.slice( 7 )
+                : value.startsWith( '$$' )
+                    ? ''
+                    : value.slice( 1 );
+
+            return path === alias || path.startsWith( `${ alias }.` );
+        }
+
+        return false;
+    }
+
+    if( Array.isArray( value ))
+    {
+        return value.some(( item ) => containsPathReference( item, alias ));
+    }
+
+    if( isPlainObject( value ))
+    {
+        for( const [ k, v ] of Object.entries( value ))
+        {
+            if( containsPathReference( k, alias ) || containsPathReference( v, alias ))
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+function isStageSingularExtractor(
+    stage            : unknown,
+    alias            : string,
+    subsequentStages : readonly unknown[]
+): boolean
+{
+    const entry = getSingleStageEntry( stage );
+    if( !entry ){ return false }
+
+    const [ op, spec ] = entry;
+    if( op !== '$addFields' && op !== '$set' && op !== '$project' )
+    {
+        return false;
+    }
+
+    if( !isPlainObject( spec ) ){ return false }
+
+    let extractionCount = 0;
+
+    for( const [ fieldName, fieldValue ] of Object.entries( spec ))
+    {
+        if( fieldName.startsWith( `${ alias }.` ))
+        {
+            return false;
+        }
+
+        if( containsPathReference( fieldValue, alias ))
+        {
+            if( !isFirstElementExpression( fieldValue, alias ))
+            {
+                return false;
+            }
+
+            extractionCount++;
+        }
+    }
+
+    if( extractionCount === 0 )
+    {
+        return false;
+    }
+
+    const overwritesAlias = op === '$project'
+        ? ( alias in spec && spec[ alias ] !== 1 && spec[ alias ] !== true )
+        : ( alias in spec );
+    if( overwritesAlias )
+    {
+        return true;
+    }
+
+    if( op === '$project' )
+    {
+        const semantics = analyzeStage( stage );
+        const vis = projectionVisibility( semantics.projection!, alias );
+
+        if( vis === 'hidden' )
+        {
+            return true;
+        }
+    }
+
+    if( subsequentStages.length > 0 )
+    {
+        const follower = subsequentStages[ 0 ];
+
+        if( isExactPathDiscardedByFollower( alias, follower ))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+export function proveLookupLimitPushdown(
+    lookupStage     : unknown,
+    followingStages : readonly unknown[],
+    context         : GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT
+): LookupLimitPushdownProof | null
+{
+    const entry = getSingleStageEntry( lookupStage );
+    if( !entry || entry[ 0 ] !== '$lookup' || !isPlainObject( entry[ 1 ] ))
+    {
+        return null;
+    }
+
+    if( context.strictErrors && !isStageProvenErrorFree( lookupStage ))
+    {
+        return null;
+    }
+
+    const lookupSpec = entry[ 1 ] as Record<string, unknown>;
+
+    if(
+        typeof lookupSpec.as !== 'string'
+        || lookupSpec.as.length === 0
+        || !Array.isArray( lookupSpec.pipeline )
+    )
+    {
+        return null;
+    }
+
+    if( hasTerminalLimitOne( lookupSpec.pipeline ))
+    {
+        return null;
+    }
+
+    if( followingStages.length === 0 )
+    {
+        return null;
+    }
+
+    if( followingStages.length >= 2 )
+    {
+        const [ firstFollower, secondFollower ] = followingStages;
+
+        if( isUnwindForPath( firstFollower, lookupSpec.as ) && isLimitOne( secondFollower ))
+        {
+            const updatedLookup = {
+                ...( lookupStage as Record<string, unknown> ),
+                $lookup: {
+                    ...lookupSpec,
+                    pipeline: pushLimitOneToSubpipeline( lookupSpec.pipeline )
+                }
+            };
+
+            return { lookupStage: updatedLookup };
+        }
+    }
+
+    const firstFollower = followingStages[ 0 ];
+    if( isStageSingularExtractor( firstFollower, lookupSpec.as, followingStages.slice( 1 )))
+    {
+        if( context.strictErrors && !isStageProvenErrorFree( firstFollower ))
+        {
+            return null;
+        }
+
+        const updatedLookup = {
+            ...( lookupStage as Record<string, unknown> ),
+            $lookup: {
+                ...lookupSpec,
+                pipeline: pushLimitOneToSubpipeline( lookupSpec.pipeline )
+            }
+        };
+
+        return { lookupStage: updatedLookup };
+    }
+
+    return null;
 }
 
 /**

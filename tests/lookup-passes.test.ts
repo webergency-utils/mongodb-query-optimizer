@@ -3,6 +3,7 @@ import { analyzeStage } from '../src/analyzer/semantics.js';
 import { optimizePipeline } from './helpers/pre-gate-optimizer.js';
 import {
     proveLookupDelayAcrossStage,
+    proveLookupLimitPushdown,
     proveLookupMatchSplit,
     proveLookupSubpipelinePushdown,
 } from '../src/passes/movement-proofs.js';
@@ -1513,5 +1514,351 @@ describe('optimizePipeline end-to-end for lookup enhancements', () =>
             $unwind: '$orders',
         });
         expect(optimized).toHaveLength(2);
+    });
+});
+
+describe('proveLookupLimitPushdown and LookupDelayPass limit pushdown', () =>
+{
+    const pass = new LookupDelayPass();
+
+    it('rejects malformed lookup stages or missing subpipelines', () =>
+    {
+        expect(proveLookupLimitPushdown(null, [{ $unwind: '$user' }, { $limit: 1 }])).toBeNull();
+        expect(proveLookupLimitPushdown({}, [{ $unwind: '$user' }, { $limit: 1 }])).toBeNull();
+        expect(proveLookupLimitPushdown({ $match: {} }, [{ $unwind: '$user' }, { $limit: 1 }])).toBeNull();
+        expect(proveLookupLimitPushdown({ $lookup: { as: '', pipeline: [] } }, [{ $unwind: '$user' }, { $limit: 1 }])).toBeNull();
+        expect(proveLookupLimitPushdown({ $lookup: { as: 'user', pipeline: 'invalid' } }, [{ $unwind: '$user' }, { $limit: 1 }])).toBeNull();
+        expect(proveLookupLimitPushdown({ $lookup: { as: 'user', pipeline: [{ $limit: 1 }] } }, [{ $unwind: '$user' }, { $limit: 1 }])).toBeNull();
+        expect(proveLookupLimitPushdown({ $lookup: { as: 'user', pipeline: [] } }, [])).toBeNull();
+    });
+
+    it('rejects under strictErrors when lookup or followers contain errors', () =>
+    {
+        const badLookup = {
+            $lookup: {
+                as: 'user',
+                pipeline: [{ $project: { div: { $divide: [1, 0] } } }]
+            }
+        };
+        const goodLookup = {
+            $lookup: {
+                from: 'users',
+                as: 'user',
+                pipeline: []
+            }
+        };
+        const badFollower = {
+            $addFields: {
+                user: { $first: '$user' },
+                err: { $divide: [1, 0] }
+            }
+        };
+
+        expect(proveLookupLimitPushdown(badLookup, [{ $unwind: '$user' }, { $limit: 1 }], { strictErrors: true, strictFieldOrder: false })).toBeNull();
+        expect(proveLookupLimitPushdown(goodLookup, [{ $unwind: '$user' }, { $limit: 1 }], { strictErrors: true, strictFieldOrder: false })).not.toBeNull();
+        expect(proveLookupLimitPushdown(goodLookup, [badFollower], { strictErrors: true, strictFieldOrder: false })).toBeNull();
+    });
+
+    it('pushes limit: 1 across string and object unwind into empty subpipeline', () =>
+    {
+        const stringUnwindProof = proveLookupLimitPushdown(
+            { $lookup: { from: 'orders', as: 'orders', pipeline: [] } },
+            [{ $unwind: '$orders' }, { $limit: 1 }]
+        );
+        expect(stringUnwindProof).toEqual({
+            lookupStage: {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [{ $limit: 1 }]
+                }
+            }
+        });
+
+        const objectUnwindProof = proveLookupLimitPushdown(
+            { $lookup: { from: 'orders', as: 'orders', pipeline: [{ $sort: { total: -1 } }] } },
+            [{ $unwind: { path: '$orders', preserveNullAndEmptyArrays: false } }, { $limit: 1 }]
+        );
+        expect(objectUnwindProof).toEqual({
+            lookupStage: {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [
+                        { $sort: { total: -1 } },
+                        { $limit: 1 }
+                    ]
+                }
+            }
+        });
+    });
+
+    it('coalesces existing terminal limit greater than 1 in subpipeline', () =>
+    {
+        const proof = proveLookupLimitPushdown(
+            { $lookup: { from: 'orders', as: 'orders', pipeline: [{ $sort: { date: -1 } }, { $limit: 10 }] } },
+            [{ $unwind: '$orders' }, { $limit: 1 }]
+        );
+        expect(proof).toEqual({
+            lookupStage: {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [
+                        { $sort: { date: -1 } },
+                        { $limit: 1 }
+                    ]
+                }
+            }
+        });
+
+        const proofNullStage = proveLookupLimitPushdown(
+            { $lookup: { from: 'orders', as: 'orders', pipeline: [null] } },
+            [{ $unwind: '$orders' }, { $limit: 1 }]
+        );
+        expect(proofNullStage).toEqual({
+            lookupStage: {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [null, { $limit: 1 }]
+                }
+            }
+        });
+    });
+
+    it('rejects Pattern 1 when unwind path or limit count does not match', () =>
+    {
+        const lookup = { $lookup: { from: 'orders', as: 'orders', pipeline: [] } };
+        expect(proveLookupLimitPushdown(lookup, [{ $unwind: '$other' }, { $limit: 1 }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $unwind: '$orders' }, { $limit: 2 }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $unwind: '$orders' }, { $sort: { total: -1 } }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $match: { x: 1 } }, { $limit: 1 }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $unwind: { path: '$other' } }, { $limit: 1 }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $unwind: { path: 123 } }, { $limit: 1 }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $unwind: 123 }, { $limit: 1 }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $unwind: '$orders' }, null])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $unwind: '$orders' }, { $limit: 1, extra: 2 }])).toBeNull();
+    });
+
+    it('pushes limit: 1 for singular element extraction via $first and $arrayElemAt', () =>
+    {
+        const lookup = { $lookup: { from: 'users', as: 'user', pipeline: [] } };
+
+        const proofFirst = proveLookupLimitPushdown(lookup, [
+            { $set: { user: { $first: '$user' } } }
+        ]);
+        expect(proofFirst).toEqual({
+            lookupStage: {
+                $lookup: {
+                    from: 'users',
+                    as: 'user',
+                    pipeline: [{ $limit: 1 }]
+                }
+            }
+        });
+
+        const proofRootFirst = proveLookupLimitPushdown(lookup, [
+            { $set: { user: { $first: '$$ROOT.user' } } }
+        ]);
+        expect(proofRootFirst).not.toBeNull();
+
+        const proofArrayElem = proveLookupLimitPushdown(lookup, [
+            { $addFields: { user: { $arrayElemAt: ['$user', 0] } } }
+        ]);
+        expect(proofArrayElem).not.toBeNull();
+
+        const proofRootArrayElem = proveLookupLimitPushdown(lookup, [
+            { $addFields: { user: { $arrayElemAt: ['$$ROOT.user', 0] } } }
+        ]);
+        expect(proofRootArrayElem).not.toBeNull();
+
+        const proofProjectSelf = proveLookupLimitPushdown(lookup, [
+            { $project: { user: { $first: '$user' } } }
+        ]);
+        expect(proofProjectSelf).not.toBeNull();
+    });
+
+    it('pushes limit: 1 when alias is extracted to different key and discarded downstream', () =>
+    {
+        const lookup = { $lookup: { from: 'profiles', as: 'profile', pipeline: [] } };
+
+        const proofUnset = proveLookupLimitPushdown(lookup, [
+            { $addFields: { activeProfile: { $first: '$profile' } } },
+            { $unset: 'profile' }
+        ]);
+        expect(proofUnset).toEqual({
+            lookupStage: {
+                $lookup: {
+                    from: 'profiles',
+                    as: 'profile',
+                    pipeline: [{ $limit: 1 }]
+                }
+            }
+        });
+
+        const proofProject = proveLookupLimitPushdown(lookup, [
+            { $project: { activeProfile: { $first: '$profile' }, name: 1 } }
+        ]);
+        expect(proofProject).not.toBeNull();
+
+        const proofProjectFollower = proveLookupLimitPushdown(lookup, [
+            { $addFields: { activeProfile: { $first: '$profile' } } },
+            { $project: { other: 1 } }
+        ]);
+        expect(proofProjectFollower).not.toBeNull();
+
+        const proofRetainedProjectFollower = proveLookupLimitPushdown(lookup, [
+            { $addFields: { activeProfile: { $first: '$profile' } } },
+            { $project: { profile: 1 } }
+        ]);
+        expect(proofRetainedProjectFollower).toBeNull();
+    });
+
+    it('rejects singular extraction when stage is invalid or references alias elsewhere', () =>
+    {
+        const lookup = { $lookup: { from: 'users', as: 'user', pipeline: [] } };
+
+        expect(proveLookupLimitPushdown(lookup, [null])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ a: 1, b: 2 }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $match: { user: { $ne: null } } }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $set: 'invalid-spec' }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $set: { other: 1 } }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $set: { 'user.name': 1 } }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $size: '$user' } } }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $arrayElemAt: ['$user', 1] } } }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $arrayElemAt: ['$user'] } } }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $first: '$other' } } }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $first: '$user', extra: 1 } } }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $addFields: { firstUser: { $first: '$user' } } }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $addFields: { firstUser: { $first: '$user' } } }, { $match: { active: true } }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $project: { firstUser: { $first: '$user' }, user: 1 } }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $first: '$user' }, deep: [{ $size: '$user' }] } }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $first: '$user' }, cond: { $eq: ['$$var', 1] } } }])).not.toBeNull();
+    });
+
+    it('executes pushdown in LookupDelayPass across unwind and limit: 1', () =>
+    {
+        const pipeline = [
+            {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [{ $sort: { date: -1 } }]
+                }
+            },
+            { $unwind: '$orders' },
+            { $limit: 1 }
+        ];
+
+        const result = pass.execute(pipeline);
+        expect(result).toEqual([
+            {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [
+                        { $sort: { date: -1 } },
+                        { $limit: 1 }
+                    ]
+                }
+            },
+            { $unwind: '$orders' },
+            { $limit: 1 }
+        ]);
+    });
+
+    it('executes pushdown in LookupDelayPass for singular element extraction', () =>
+    {
+        const pipeline = [
+            {
+                $lookup: {
+                    from: 'users',
+                    as: 'user',
+                    pipeline: [{ $match: { active: true } }]
+                }
+            },
+            { $set: { user: { $first: '$user' } } }
+        ];
+
+        const result = pass.execute(pipeline);
+        expect(result).toEqual([
+            {
+                $lookup: {
+                    from: 'users',
+                    as: 'user',
+                    pipeline: [
+                        { $match: { active: true } },
+                        { $limit: 1 }
+                    ]
+                }
+            },
+            { $set: { user: { $first: '$user' } } }
+        ]);
+    });
+
+    it('composes subpipeline filter pushdown and limit pushdown in full optimizePipeline', () =>
+    {
+        const pipeline = [
+            {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [{ $sort: { total: -1 } }]
+                }
+            },
+            { $unwind: '$orders' },
+            { $match: { 'orders.status': 'completed' } },
+            { $limit: 1 }
+        ];
+
+        const optimized = optimizePipeline(pipeline);
+        expect(optimized[0]).toEqual({
+            $lookup: {
+                from: 'orders',
+                as: 'orders',
+                pipeline: [
+                    { $match: { status: 'completed' } },
+                    { $sort: { total: -1 } },
+                    { $limit: 1 }
+                ]
+            }
+        });
+        expect(optimized[1]).toEqual({ $unwind: '$orders' });
+        expect(optimized[2]).toEqual({ $limit: 1 });
+    });
+
+    it('preserves mock engine result equivalence for limit pushdown', () =>
+    {
+        const customers = [
+            { _id: 1, name: 'Alice' },
+            { _id: 2, name: 'Bob' }
+        ];
+        const orders = [
+            { _id: 101, customerId: 1, total: 50 },
+            { _id: 102, customerId: 1, total: 150 },
+            { _id: 103, customerId: 2, total: 200 }
+        ];
+        const pipeline = [
+            {
+                $lookup: {
+                    from: 'orders',
+                    localField: '_id',
+                    foreignField: 'customerId',
+                    as: 'orders',
+                    pipeline: [{ $sort: { total: -1 } }]
+                }
+            },
+            { $unwind: '$orders' },
+            { $limit: 1 }
+        ];
+
+        const optimized = optimizePipeline(pipeline);
+        const originalResults = runMockPipeline(customers, pipeline, { orders });
+        const optimizedResults = runMockPipeline(customers, optimized, { orders });
+
+        expect(optimizedResults).toEqual(originalResults);
+        expect(optimizedResults).toHaveLength(1);
+        expect(optimizedResults[0].orders.total).toBe(50);
     });
 });
