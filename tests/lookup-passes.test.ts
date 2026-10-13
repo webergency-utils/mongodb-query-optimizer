@@ -6,6 +6,7 @@ import {
     proveLookupLimitPushdown,
     proveLookupMatchSplit,
     proveLookupSubpipelinePushdown,
+    proveMatchPushdownAcrossStage,
 } from '../src/passes/movement-proofs.js';
 import { LookupDelayPass } from '../src/passes/lookup-delay.js';
 import {
@@ -1860,5 +1861,45 @@ describe('proveLookupLimitPushdown and LookupDelayPass limit pushdown', () =>
         expect(optimizedResults).toEqual(originalResults);
         expect(optimizedResults).toHaveLength(1);
         expect(optimizedResults[0].orders.total).toBe(50);
+    });
+});
+
+describe('movement sort question', () =>
+{
+    const lookup = makeLookup();
+    const match = { $match: { kept: 1 } };
+
+    it('rejects a dotted sort key and a wildcard sort key', () =>
+    {
+        for (const sort of [
+            { $sort: { 'a.': 1 } },
+            { $sort: { '*': 1 } },
+        ])
+        {
+            expect(proveLookupDelayAcrossStage(lookup, sort)).toBe(false);
+            expect(proveMatchPushdownAcrossStage(sort, match)).toBeNull();
+        }
+    });
+
+    it('accepts a plain local sort that does not read the lookup alias', () =>
+    {
+        const sort = { $sort: { score: -1, _id: 1 } };
+
+        expect(proveLookupDelayAcrossStage(lookup, sort)).toBe(true);
+        expect(proveMatchPushdownAcrossStage(sort, match)).toEqual({
+            matchStage: match,
+        });
+    });
+
+    it('rejects an illegal direction, an empty sort, and a non-sort stage', () =>
+    {
+        for (const stage of [
+            { $sort: { a: 2 } },
+            { $sort: {} },
+            { $project: { name: 1 } },
+        ])
+        {
+            expect(proveMatchPushdownAcrossStage(stage, match)).toBeNull();
+        }
     });
 });

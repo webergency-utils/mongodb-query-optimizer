@@ -30,6 +30,7 @@ import {
     joinProvenance,
 } from '../src/analyzer/semantics.js';
 import {
+    isMovementSafeSort,
     proveLimitAdvanceAcrossStage,
     proveMatchPushdownAcrossStage,
     provePrioritySwap,
@@ -37,6 +38,7 @@ import {
 } from '../src/passes/movement-proofs.js';
 import {
     isExactPathDiscardedByFollower,
+    parseProjectionCommuteSortKeys,
     proveAdjacentAddFieldMerge,
     proveAdjacentProjectMerge,
     proveAddFieldDeferralAcrossSort,
@@ -44,6 +46,7 @@ import {
     proveUnusedFieldPruning,
     proveUnusedFieldPruningThroughSuffix,
 } from '../src/passes/projection-proofs.js';
+import { parseNumericSortKeys } from '../src/passes/top-k-proofs.js';
 
 describe('semantic analyzer edge behavior', () =>
 {
@@ -1346,5 +1349,49 @@ describe('successful-result movement proofs', () =>
             { $addFields: { dead: 1 } },
             [{ $limit: '1' }, { $unset: 'dead' }],
         )).toBeNull();
+    });
+});
+
+describe('three sort questions', () =>
+{
+    it('accepts a dotted key only as a numeric sort spec', () =>
+    {
+        const sort = { $sort: { 'a.': 1 } };
+
+        expect(parseNumericSortKeys(sort)).toEqual(['a.']);
+        expect(parseProjectionCommuteSortKeys(sort)).toBeNull();
+        expect(isMovementSafeSort(analyzeStage(sort))).toBe(false);
+    });
+
+    it('accepts a wildcard key for numeric and projection commute, and rejects it for movement', () =>
+    {
+        const sort = { $sort: { '*': 1 } };
+
+        expect(parseNumericSortKeys(sort)).toEqual(['*']);
+        expect(parseProjectionCommuteSortKeys(sort)).toEqual(['*']);
+        expect(isMovementSafeSort(analyzeStage(sort))).toBe(false);
+    });
+
+    it('accepts a plain multi-key sort for every question', () =>
+    {
+        const sort = { $sort: { score: -1, _id: 1 } };
+
+        expect(parseNumericSortKeys(sort)).toEqual(['score', '_id']);
+        expect(parseProjectionCommuteSortKeys(sort)).toEqual(['score', '_id']);
+        expect(isMovementSafeSort(analyzeStage(sort))).toBe(true);
+    });
+
+    it('rejects an illegal direction, an empty sort, and a non-sort stage', () =>
+    {
+        for (const stage of [
+            { $sort: { a: 2 } },
+            { $sort: {} },
+            { $match: { a: 1 } },
+        ])
+        {
+            expect(parseNumericSortKeys(stage)).toBeNull();
+            expect(parseProjectionCommuteSortKeys(stage)).toBeNull();
+            expect(isMovementSafeSort(analyzeStage(stage))).toBe(false);
+        }
     });
 });

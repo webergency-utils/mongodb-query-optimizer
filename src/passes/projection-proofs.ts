@@ -596,7 +596,7 @@ export function isExactPathDiscardedByFollower(
     return visibility === 'hidden' || visibility === 'removed';
 }
 
-function parseSafeSortKeys(sortStage: unknown): string[] | null
+export function parseProjectionCommuteSortKeys(sortStage: unknown): string[] | null
 {
     const entry = getSingleStageEntry(sortStage);
     if (
@@ -646,7 +646,7 @@ export function proveSimpleProjectAdvanceAcrossSort(
     projectStage: unknown,
 ): boolean
 {
-    const keys = parseSafeSortKeys(sortStage);
+    const keys = parseProjectionCommuteSortKeys(sortStage);
     if (!keys)
     {
         return false;
@@ -673,7 +673,7 @@ export function proveAddFieldDeferralAcrossSort(
 ): boolean
 {
     const source = parseAddFieldStage(addStage, true);
-    const keys = parseSafeSortKeys(sortStage);
+    const keys = parseProjectionCommuteSortKeys(sortStage);
     if (!source || !keys)
     {
         return false;

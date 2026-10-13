@@ -6,7 +6,7 @@ import
     canTopKPushAcrossStage,
     collectExpressionDependencies,
     isExpressionCompletelyDeterministic,
-    parseSafeSortKeys,
+    parseNumericSortKeys,
     parseTopKFollower,
     proveHeuristicTopKPushdown,
     proveTopKPushdown,
@@ -27,21 +27,23 @@ describe( 'top-k-proofs unit and branch analysis', () =>
         expect( arePathsDisjoint( [ 'a.b' ], [ 'a' ] )).toBe( false );
     });
 
-    it( 'returns null in parseSafeSortKeys for invalid sort stages', () =>
+    it( 'returns null in parseNumericSortKeys for invalid sort stages', () =>
     {
-        expect( parseSafeSortKeys( null )).toBeNull();
-        expect( parseSafeSortKeys( [] )).toBeNull();
-        expect( parseSafeSortKeys( { $match: { a: 1 } } )).toBeNull();
-        expect( parseSafeSortKeys( { $sort: 'invalid' } )).toBeNull();
-        expect( parseSafeSortKeys( { $sort: {} } )).toBeNull();
-        expect( parseSafeSortKeys( { $sort: { a: 2 } } )).toBeNull();
-        expect( parseSafeSortKeys( { $sort: { a: -2 } } )).toBeNull();
-        expect( parseSafeSortKeys( { $sort: { a: 'asc' } } )).toBeNull();
+        expect( parseNumericSortKeys( null )).toBeNull();
+        expect( parseNumericSortKeys( [] )).toBeNull();
+        expect( parseNumericSortKeys( { $match: { a: 1 } } )).toBeNull();
+        expect( parseNumericSortKeys( { $sort: 'invalid' } )).toBeNull();
+        expect( parseNumericSortKeys( { $sort: {} } )).toBeNull();
+        expect( parseNumericSortKeys( { $sort: { a: 2 } } )).toBeNull();
+        expect( parseNumericSortKeys( { $sort: { a: -2 } } )).toBeNull();
+        expect( parseNumericSortKeys( { $sort: { a: 'asc' } } )).toBeNull();
     });
 
-    it( 'returns keys in parseSafeSortKeys for valid sort specifications', () =>
+    it( 'returns keys in parseNumericSortKeys for valid sort specifications', () =>
     {
-        expect( parseSafeSortKeys( { $sort: { score: -1, _id: 1 } } )).toEqual([ 'score', '_id' ]);
+        expect( parseNumericSortKeys( { $sort: { score: -1, _id: 1 } } )).toEqual([ 'score', '_id' ]);
+        expect( parseNumericSortKeys( { $sort: { 'a.': 1 } } )).toEqual([ 'a.' ]);
+        expect( parseNumericSortKeys( { $sort: { '*': 1 } } )).toEqual([ '*' ]);
     });
 
     it( 'parses top-k followers correctly', () =>

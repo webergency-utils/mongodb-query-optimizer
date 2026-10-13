@@ -41,7 +41,7 @@ const TOP_K_PASSIVE_OPERATORS = new Set([
     '$unset'
 ]);
 
-export function parseSafeSortKeys( sortStage: unknown ): string[] | null
+export function parseNumericSortKeys( sortStage: unknown ): string[] | null
 {
     const entry = getSingleStageEntry( sortStage );
 
@@ -180,7 +180,7 @@ export function proveTopKPushdown(
         return null;
     }
 
-    const sortKeys = parseSafeSortKeys( pipeline[ sortIndex ] );
+    const sortKeys = parseNumericSortKeys( pipeline[ sortIndex ] );
 
     if( !sortKeys )
     {
@@ -231,7 +231,7 @@ export function proveHeuristicTopKPushdown(
     }
 
     const follower = parseTopKFollower( pipeline, sortIndex );
-    const sortKeys = parseSafeSortKeys( pipeline[ sortIndex ] );
+    const sortKeys = parseNumericSortKeys( pipeline[ sortIndex ] );
 
     if( !follower || !sortKeys || pipelineReadsFieldOrder( pipeline.slice( sortIndex + 1 )))
     {

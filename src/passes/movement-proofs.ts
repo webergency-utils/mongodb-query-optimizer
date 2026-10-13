@@ -548,7 +548,7 @@ function filterHasExistsOnPath(
     return false;
 }
 
-function isSafeSortStage(stage: StageSemantics): boolean
+export function isMovementSafeSort(stage: StageSemantics): boolean
 {
     if (
         stage.operator !== "$sort"
@@ -680,7 +680,7 @@ export function proveMatchPushdownAcrossStage(
     }
 
     const preceding = analyzeStage(precedingStage);
-    if (isSafeSortStage(preceding))
+    if (isMovementSafeSort(preceding))
     {
         return { matchStage };
     }
@@ -867,7 +867,7 @@ export function proveLookupDelayAcrossStage(
 
     if( following.operator === '$sort' )
     {
-        if( !isSafeSortStage( following ))
+        if( !isMovementSafeSort( following ))
         {
             return false;
         }
