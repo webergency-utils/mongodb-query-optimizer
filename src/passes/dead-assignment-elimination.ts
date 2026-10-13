@@ -1,3 +1,4 @@
+import { DEFAULT_GUARANTEE_CONTEXT, type GuaranteeContext } from '../guarantees';
 import { PipelinePass } from './types';
 import { proveDeadAssignmentElimination } from './dead-assignment-proofs';
 
@@ -6,7 +7,7 @@ export class DeadAssignmentEliminationPass implements PipelinePass
     readonly name       = 'dead-assignment-elimination';
     readonly stageTypes = [ '$addFields', '$set' ] as const;
 
-    execute( pipeline: any[] ): any[]
+    execute( pipeline: any[], context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {
         const result = [ ...pipeline ];
 
@@ -14,7 +15,8 @@ export class DeadAssignmentEliminationPass implements PipelinePass
         {
             const proof = proveDeadAssignmentElimination(
                 result[ index ],
-                result.slice( index + 1 )
+                result.slice( index + 1 ),
+                context
             );
 
             if( !proof ){ continue }

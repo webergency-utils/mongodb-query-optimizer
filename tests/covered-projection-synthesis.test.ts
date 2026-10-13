@@ -385,11 +385,68 @@ describe( 'CoveredProjectionSynthesisPass class and execution', () =>
         expect( proof?.synthesizedStage.$project.dept ).toBe( 1 );
     });
 
+    it( 'keeps the source of a plain copy the group reads', () =>
+    {
+        const proof = proveCoveredProjectionSynthesis([
+            { $set: { tmp: '$amount' } },
+            { $set: { shown: '$tmp' } },
+            { $group: { _id: '$shown' } }
+        ]);
+
+        expect( proof ).not.toBeNull();
+        expect( proof?.synthesizedStage.$project.amount ).toBe( 1 );
+    });
+
+    it( 'keeps the source of an expression copy the group reads', () =>
+    {
+        const proof = proveCoveredProjectionSynthesis([
+            { $set: { b: { $add: [ '$amount', 1 ] } } },
+            { $group: { _id: '$b' } }
+        ]);
+
+        expect( proof ).not.toBeNull();
+        expect( proof?.synthesizedStage.$project.amount ).toBe( 1 );
+    });
+
     it( 'returns null when a prefix let reads the whole document', () =>
     {
         expect( proveCoveredProjectionSynthesis([
             { $set: { shown: { $let: { vars: { v: '$$ROOT' }, in: '$$v' } } } },
             { $group: { _id: '$dept' } }
         ])).toBeNull();
+    });
+
+    it( 'returns null when a prefix stage has an unknown error', () =>
+    {
+        expect( proveCoveredProjectionSynthesis([
+            {
+                $addFields: {
+                    extra: {
+                        $function: {
+                            body: 'function() { return 1 }',
+                            args: [],
+                            lang: 'js'
+                        }
+                    }
+                }
+            },
+            { $group: { _id: '$customerId', n: { $sum: '$amount' } } }
+        ])).toBeNull();
+    });
+
+    it( 'still synthesizes a covered projection when strict field order is on', () =>
+    {
+        const pipeline = [
+            { $group: { _id: '$customerId', n: { $sum: '$amount' } } }
+        ];
+        const pass = new CoveredProjectionSynthesisPass();
+        const optimized = pass.execute(
+            pipeline,
+            { strictFieldOrder: true, strictErrors: false }
+        );
+
+        expect( optimized[ 0 ] ).toEqual({
+            $project: { amount: 1, customerId: 1, _id: 0 }
+        });
     });
 });

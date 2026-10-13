@@ -1,3 +1,4 @@
+import { DEFAULT_GUARANTEE_CONTEXT, type GuaranteeContext } from '../guarantees';
 import { isExactTopLevelPath } from '../analyzer/paths';
 import { projectionVisibility } from '../analyzer/projections';
 import { analyzeStage } from '../analyzer/semantics';
@@ -26,7 +27,8 @@ export interface DeadAssignmentProof
  */
 export function proveDeadAssignmentElimination(
     sourceStage : unknown,
-    suffix      : readonly unknown[]
+    suffix      : readonly unknown[],
+    context     : GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT
 ): DeadAssignmentProof | null
 {
     if( !Array.isArray( suffix ) || suffix.length === 0 ){ return null }
@@ -65,6 +67,11 @@ export function proveDeadAssignmentElimination(
             if( overwrite && isExactTopLevelPath( path ) && path in overwrite.specification )
             {
                 if( dependenciesReadAnyPath( overwrite.semantics, [ path ]))
+                {
+                    break;
+                }
+
+                if( context.strictFieldOrder )
                 {
                     break;
                 }

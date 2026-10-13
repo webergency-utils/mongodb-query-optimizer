@@ -344,4 +344,98 @@ describe( 'DeadAssignmentEliminationPass execution and parity', () =>
         expect( proof?.eliminatedFields ).toEqual([ 'tmp' ]);
         expect( proof?.replacementStage ).toBeNull();
     });
+
+    it( 'keeps a source field that a chain of plain copies still reads', () =>
+    {
+        expect( proveDeadAssignmentElimination(
+            { $set: { price: 1 } },
+            [
+                { $set: { tmp: '$price' } },
+                { $set: { shown: '$tmp' } },
+                { $project: { shown: 1 } }
+            ]
+        )).toBeNull();
+
+        expect( proveDeadAssignmentElimination(
+            { $set: { a: 1 } },
+            [
+                { $set: { b: '$a' } },
+                { $set: { c: '$b' } },
+                { $project: { c: 1 } }
+            ]
+        )).toBeNull();
+    });
+
+    it( 'keeps a source field copied through an expression', () =>
+    {
+        expect( proveDeadAssignmentElimination(
+            { $set: { a: 1 } },
+            [
+                { $set: { b: { $add: [ '$a', 1 ] } } },
+                { $project: { b: 1 } }
+            ]
+        )).toBeNull();
+    });
+
+    it( 'does not keep an assignment a copy reads only after the field is dropped', () =>
+    {
+        const proof = proveDeadAssignmentElimination(
+            { $set: { a: 1 } },
+            [
+                { $project: { name: 1 } },
+                { $set: { b: '$a' } }
+            ]
+        );
+
+        expect( proof?.eliminatedFields ).toEqual([ 'a' ]);
+        expect( proof?.replacementStage ).toBeNull();
+    });
+
+    it( 'keeps an assignment a projection copies into another field', () =>
+    {
+        expect( proveDeadAssignmentElimination(
+            { $set: { tmp: '$price' } },
+            [ { $project: { shown: '$tmp' } } ]
+        )).toBeNull();
+    });
+
+    it( 'keeps a throwing assignment even when strict errors are off', () =>
+    {
+        const suffix = [ { $unset: 'tmp' } ];
+        const source = { $set: { tmp: { $divide: [ '$a', 0 ] } } };
+
+        expect( proveDeadAssignmentElimination( source, suffix )).toBeNull();
+        expect( proveDeadAssignmentElimination(
+            source,
+            suffix,
+            { strictFieldOrder: false, strictErrors: true }
+        )).toBeNull();
+    });
+
+    it( 'keeps an overwritten field when strict field order is on', () =>
+    {
+        const source = { $set: { tmp: 1 } };
+        const suffix = [ { $set: { kept: '$name', tmp: 'later' } } ];
+
+        expect( proveDeadAssignmentElimination(
+            source,
+            suffix,
+            { strictFieldOrder: true, strictErrors: false }
+        )).toBeNull();
+
+        const proof = proveDeadAssignmentElimination( source, suffix );
+        expect( proof?.eliminatedFields ).toEqual([ 'tmp' ]);
+        expect( proof?.replacementStage ).toBeNull();
+    });
+
+    it( 'still drops an unread field before a group when strict field order is on', () =>
+    {
+        const proof = proveDeadAssignmentElimination(
+            { $set: { tmp: 1 } },
+            [ { $group: { _id: '$customerId', n: { $sum: '$amount' } } } ],
+            { strictFieldOrder: true, strictErrors: false }
+        );
+
+        expect( proof?.eliminatedFields ).toEqual([ 'tmp' ]);
+    });
 });

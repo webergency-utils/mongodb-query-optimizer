@@ -1,3 +1,4 @@
+import { DEFAULT_GUARANTEE_CONTEXT, type GuaranteeContext } from '../guarantees';
 import { PipelinePass } from './types';
 import { proveCoveredProjectionSynthesis } from './covered-projection-proofs';
 
@@ -6,7 +7,7 @@ export class CoveredProjectionSynthesisPass implements PipelinePass
     readonly name       = 'covered-projection-synthesis';
     readonly stageTypes = [ '$group', '$count', '$sortByCount' ] as const;
 
-    execute( pipeline: any[] ): any[]
+    execute( pipeline: any[], _context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {
         const proof = proveCoveredProjectionSynthesis( pipeline );
         if( !proof ){ return [ ...pipeline ] }
