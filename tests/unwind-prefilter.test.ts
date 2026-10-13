@@ -84,6 +84,33 @@ describe( 'proveUnwindPrefilter', () =>
                 ]
             }
         });
+
+        const andMatch =
+        {
+            $match:
+            {
+                $and:
+                [
+                    { 'items.price': { $gt: 10 } },
+                    { 'items.price': { $lt: 100 } },
+                    { orgId: 'corp1' }
+                ]
+            }
+        };
+        const andProof = proveUnwindPrefilter( unwind, andMatch );
+        expect( andProof?.prefilterStage ).toEqual({
+            $match: {
+                $or: [
+                    {
+                        $and: [
+                            { 'items.price': { $gt: 10 } },
+                            { 'items.price': { $lt: 100 } }
+                        ]
+                    },
+                    { items: { $elemMatch: { $type: 'array' } } }
+                ]
+            }
+        });
     } );
 
     it( 'rejects when preserveNullAndEmptyArrays is true', () =>

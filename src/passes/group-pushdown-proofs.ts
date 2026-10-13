@@ -13,21 +13,56 @@ export interface GroupFilterPushdownProof
     postfilterStage: { $match: Record<string, any> } | null;
 }
 
-function conditionRejectsNull( condition: unknown ): boolean
+function isNullAndEmptyRejectingScalar( val: unknown ): boolean
 {
-    if( typeof condition === 'string' )
+    if( typeof val === 'string' )
     {
-        return condition.length > 0;
+        return val.length > 0;
     }
 
-    if( typeof condition === 'number' || typeof condition === 'boolean' )
+    return typeof val === 'number'
+        || typeof val === 'boolean'
+        || val instanceof Date;
+}
+
+function conditionRejectsNull( condition: unknown ): boolean
+{
+    if( isNullAndEmptyRejectingScalar( condition ))
     {
         return true;
     }
 
-    if( isPlainObject( condition ) && '$ne' in condition )
+    if( !isPlainObject( condition ))
     {
-        return condition.$ne === null;
+        return false;
+    }
+
+    if( '$ne' in condition && condition.$ne === null )
+    {
+        return true;
+    }
+
+    if( '$eq' in condition && isNullAndEmptyRejectingScalar( condition.$eq ))
+    {
+        return true;
+    }
+
+    if(
+        '$in' in condition
+        && Array.isArray( condition.$in )
+        && condition.$in.length > 0
+        && condition.$in.every( isNullAndEmptyRejectingScalar )
+    )
+    {
+        return true;
+    }
+
+    if(
+        ( '$gt' in condition && isNullAndEmptyRejectingScalar( condition.$gt ))
+        || ( '$gte' in condition && isNullAndEmptyRejectingScalar( condition.$gte ))
+    )
+    {
+        return true;
     }
 
     return false;

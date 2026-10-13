@@ -591,12 +591,13 @@ function isSafeUnwindStage( stage: StageSemantics ): boolean
 
 
 function proveDisjointMatchPushdown(
-    modifiedPaths: Iterable<string>,
-    matchStage: { readonly $match: Record<string, unknown> },
-    match: StageSemantics
+    modifiedPaths : Iterable<string>,
+    matchStage    : { readonly $match: Record<string, unknown> },
+    match         : StageSemantics,
+    projectStage? : StageSemantics
 ): MatchPushdownProof | null
 {
-    if( arePathsDisjoint( match.dependencies.local, modifiedPaths ))
+    if( !projectStage && arePathsDisjoint( match.dependencies.local, modifiedPaths ))
     {
         return { matchStage };
     }
@@ -607,15 +608,16 @@ function proveDisjointMatchPushdown(
 
     const pushable: Record<string, unknown>[] = [];
     const residual: Record<string, unknown>[] = [];
+    const emptyAliases = new Map<string, string>();
 
     for( const conjunct of conjuncts )
     {
         const conjunctSemantics = analyzeStage( { $match: conjunct } );
+        const canPush = projectStage
+            ? proveProjectDependencies( projectStage, conjunctSemantics, emptyAliases )
+            : arePathsDisjoint( conjunctSemantics.dependencies.local, modifiedPaths );
 
-        if(
-            isSafeMatchSummary( conjunctSemantics )
-            && arePathsDisjoint( conjunctSemantics.dependencies.local, modifiedPaths )
-        )
+        if( isSafeMatchSummary( conjunctSemantics ) && canPush )
         {
             pushable.push( conjunct );
         }
@@ -695,14 +697,9 @@ export function proveMatchPushdownAcrossStage(
         return null;
     }
 
-    if (preceding.operator === "$unset")
+    if( preceding.operator === '$unset' )
     {
-        return arePathsDisjoint(
-            match.dependencies.local,
-            preceding.removes,
-        )
-            ? { matchStage }
-            : null;
+        return proveDisjointMatchPushdown( preceding.removes, matchStage, match );
     }
 
     if (
@@ -732,9 +729,14 @@ export function proveMatchPushdownAcrossStage(
     const dependenciesProven = preceding.operator === "$project"
         ? proveProjectDependencies(preceding, match, aliases)
         : proveAddFieldsDependencies(preceding, match, aliases);
-    if (!dependenciesProven)
+    if( !dependenciesProven )
     {
-        return null;
+        return proveDisjointMatchPushdown(
+            preceding.modifies,
+            matchStage,
+            match,
+            preceding.operator === '$project' ? preceding : undefined
+        );
     }
 
     if(

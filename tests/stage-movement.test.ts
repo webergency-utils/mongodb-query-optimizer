@@ -588,6 +588,36 @@ describe('match pushdown proofs', () =>
         ];
         expect(optimizeMatches(pipeline)).toEqual(pipeline);
     });
+
+    it('splits mixed match across $unset, $addFields, $set, and $project into pushable and residual stages', () =>
+    {
+        expect(optimizeMatches([
+            { $unset: 'removed' },
+            { $match: { status: 'active', removed: { $exists: false } } },
+        ])).toEqual([
+            { $match: { status: 'active' } },
+            { $unset: 'removed' },
+            { $match: { removed: { $exists: false } } },
+        ]);
+
+        expect(optimizeMatches([
+            { $addFields: { computed: { $add: ['$a', '$b'] } } },
+            { $match: { tenant: 'acme', computed: { $gt: 10 } } },
+        ])).toEqual([
+            { $match: { tenant: 'acme' } },
+            { $addFields: { computed: { $add: ['$a', '$b'] } } },
+            { $match: { computed: { $gt: 10 } } },
+        ]);
+
+        expect(optimizeMatches([
+            { $project: { _id: 0, status: 1, computed: { $add: ['$a', 1] } } },
+            { $match: { status: 'active', computed: { $gt: 5 } } },
+        ])).toEqual([
+            { $match: { status: 'active' } },
+            { $project: { _id: 0, status: 1, computed: { $add: ['$a', 1] } } },
+            { $match: { computed: { $gt: 5 } } },
+        ]);
+    });
 });
 
 describe('limit and skip advancement proofs', () =>

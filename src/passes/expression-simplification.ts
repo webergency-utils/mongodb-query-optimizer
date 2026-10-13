@@ -109,6 +109,31 @@ export function isNonNullConstant( expr: unknown ): boolean
         );
 }
 
+export function extractStringConstant( expr: unknown ): string | null
+{
+    if( typeof expr === 'string' && !expr.startsWith( '$' ))
+    {
+        return expr;
+    }
+
+    if(
+        isPlainObject( expr )
+        && Object.keys( expr ).length === 1
+        && '$literal' in expr
+        && typeof expr.$literal === 'string'
+    )
+    {
+        return expr.$literal;
+    }
+
+    return null;
+}
+
+function isFiniteNumber( val: unknown ): val is number
+{
+    return typeof val === 'number' && Number.isFinite( val );
+}
+
 export function simplifyExpression( expr: unknown ): unknown
 {
     if( Array.isArray( expr ))
@@ -216,6 +241,38 @@ export function simplifyExpression( expr: unknown ): unknown
             if( args.length < simplified.$ifNull.length )
             {
                 return { $ifNull: args };
+            }
+        }
+        else if( op === '$add' && Array.isArray( simplified.$add ) && simplified.$add.length >= 1 )
+        {
+            if( simplified.$add.every( isFiniteNumber ))
+            {
+                return simplified.$add.reduce(( acc, val ) => acc + val, 0 );
+            }
+        }
+        else if( op === '$multiply' && Array.isArray( simplified.$multiply ) && simplified.$multiply.length >= 1 )
+        {
+            if( simplified.$multiply.every( isFiniteNumber ))
+            {
+                return simplified.$multiply.reduce(( acc, val ) => acc * val, 1 );
+            }
+        }
+        else if( op === '$subtract' && Array.isArray( simplified.$subtract ) && simplified.$subtract.length === 2 )
+        {
+            if( isFiniteNumber( simplified.$subtract[ 0 ] ) && isFiniteNumber( simplified.$subtract[ 1 ] ))
+            {
+                return simplified.$subtract[ 0 ] - simplified.$subtract[ 1 ];
+            }
+        }
+        else if( op === '$concat' && Array.isArray( simplified.$concat ) && simplified.$concat.length >= 1 )
+        {
+            const parts = simplified.$concat.map( extractStringConstant );
+
+            if( parts.every(( p ): p is string => p !== null ))
+            {
+                const joined = parts.join( '' );
+
+                return joined.startsWith( '$' ) ? { $literal: joined } : joined;
             }
         }
         else if( op === '$size' && isPlainObject( simplified.$size ))

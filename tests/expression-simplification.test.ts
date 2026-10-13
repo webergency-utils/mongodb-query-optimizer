@@ -3,6 +3,7 @@ import { resolvePipelineGuarantees } from '../src/guarantees.js';
 import
 {
     ExpressionSimplificationPass,
+    extractStringConstant,
     isFalsyConstant,
     isNonNullConstant,
     isTruthyConstant,
@@ -208,6 +209,33 @@ describe( 'ExpressionSimplificationPass unit and proof tests', () =>
         expect( simplifyExpression({ $ifNull: [ null, '$a' ] })).toEqual({ $ifNull: [ null, '$a' ] });
         expect( simplifyExpression({ $ifNull: [ '$a', '$b' ] })).toEqual({ $ifNull: [ '$a', '$b' ] });
         expect( simplifyExpression({ $ifNull: [ '$a' ] })).toEqual({ $ifNull: [ '$a' ] });
+    });
+
+    it( 'folds constant $add, $multiply, $subtract, and $concat expressions', () =>
+    {
+        expect( extractStringConstant( 'hello' )).toBe( 'hello' );
+        expect( extractStringConstant( '$field' )).toBeNull();
+        expect( extractStringConstant({ $literal: '$field' })).toBe( '$field' );
+        expect( extractStringConstant({ $literal: 123 })).toBeNull();
+        expect( extractStringConstant( 123 )).toBeNull();
+
+        expect( simplifyExpression({ $add: [ 1, 2, 3 ] })).toBe( 6 );
+        expect( simplifyExpression({ $add: [ 1, '$x' ] })).toEqual({ $add: [ 1, '$x' ] });
+        expect( simplifyExpression({ $add: [] })).toEqual({ $add: [] });
+
+        expect( simplifyExpression({ $multiply: [ 2, 3, 4 ] })).toBe( 24 );
+        expect( simplifyExpression({ $multiply: [ 2, '$x' ] })).toEqual({ $multiply: [ 2, '$x' ] });
+        expect( simplifyExpression({ $multiply: [] })).toEqual({ $multiply: [] });
+
+        expect( simplifyExpression({ $subtract: [ 10, 4 ] })).toBe( 6 );
+        expect( simplifyExpression({ $subtract: [ 10, '$x' ] })).toEqual({ $subtract: [ 10, '$x' ] });
+        expect( simplifyExpression({ $subtract: [ '$x', 4 ] })).toEqual({ $subtract: [ '$x', 4 ] });
+        expect( simplifyExpression({ $subtract: [ 10 ] })).toEqual({ $subtract: [ 10 ] });
+
+        expect( simplifyExpression({ $concat: [ 'foo', '-', 'bar' ] })).toBe( 'foo-bar' );
+        expect( simplifyExpression({ $concat: [ { $literal: '$a' }, '-b' ] })).toEqual({ $literal: '$a-b' });
+        expect( simplifyExpression({ $concat: [ 'foo', '$bar' ] })).toEqual({ $concat: [ 'foo', '$bar' ] });
+        expect( simplifyExpression({ $concat: [] })).toEqual({ $concat: [] });
     });
 
     it( 'never simplifies or inspects inside $literal subtrees', () =>

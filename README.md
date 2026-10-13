@@ -111,12 +111,12 @@ The optimizer evaluates queries and aggregation pipelines purely as Abstract Syn
 3. `add-field-pushdown`: Decomposes `$addFields`/`$set` and safely pushes sort/match-dependent expressions across `$lookup`, `$unset`, and intermediate disjoint `$addFields`/`$set` or exclusion `$project` stages.
 4. `top-k-pushdown`: Advances `$sort` and `$limit` slices ahead of 1:1 compute and lookup stages (including stepping across sort-key-preserving `$project` stages and deterministic shadow-field hoisting) while respecting error guards.
 5. `lookup-delay`: Delays equality and pipeline-form `$lookup` joins past non-dependent filter, sort, limit, and skip stages, splits post-lookup `$match` conjuncts, and pushes filters/limits into lookup subpipelines.
-6. `unwind-prefilter`: Injects shape-safe `$or` prefilters before `$unwind` to discard non-matching documents without dropping polymorphic types or nested arrays.
-7. `redundant-sort-elimination`: Eliminates empty `$sort` stages and dead `$sort` stages before adjacent or order-insensitive-separated `$sort`, `$count`, `$sortByCount`, and order-agnostic `$group` stages.
+6. `unwind-prefilter`: Injects shape-safe `$or` prefilters before `$unwind` (including across `$and` conjunctions) to discard non-matching documents without dropping polymorphic types or nested arrays.
+7. `redundant-sort-elimination`: Eliminates empty `$sort` stages and dead `$sort` stages before adjacent or order-insensitive-separated `$sort`, `$count`, `$sortByCount`, and order-agnostic `$group`, `$bucket`, and `$bucketAuto` stages.
 8. `sort-by-count-simplification`: Converts verbose `$group` + `$sort` count patterns into canonical `$sortByCount`.
 9. `limit-skip-coalescing`: Combines adjacent `$limit` and `$skip` stages into minimal offsets and counts, and eliminates no-op `{ $skip: 0 }` stages.
-10. `expression-simplification`: Folds constant boolean conditions (`$and`, `$or`, `$not`, `$cond`, `$ifNull`) and simplifies `$size` over `$filter` when conditions are always truthy.
-11. `match-pushdown`: Moves selective filter stages ahead of joins and projections.
+10. `expression-simplification`: Folds constant boolean, conditional, arithmetic, and string expressions (`$and`, `$or`, `$not`, `$cond`, `$ifNull`, `$add`, `$subtract`, `$multiply`, `$concat`) and simplifies `$size` over `$filter` when conditions are always truthy.
+11. `match-pushdown`: Moves selective filter stages ahead of joins, projections, field additions, and unsets, splitting multi-conjunct `$match` stages when only a subset of conjuncts can advance.
 12. `heuristic-match-pushdown`: Pushes selective `$match` filters across heavy stages (`$lookup`, `$graphLookup`, `$function`) using deterministic shadow fields with per-key ranges and profitability gates.
 13. `limit-advance`: Advances `$limit` and `$skip` ahead of non-cardinality altering projections and stages.
 14. `group-filter-pushdown`: Pushes post-`$group` filters before `$group` when grouping by 1-to-1 deterministic keys.

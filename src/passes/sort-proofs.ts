@@ -87,6 +87,43 @@ export function isDeadSortBeforeCount( currentStage: unknown, nextStage: unknown
     return typeof countSpec === 'string' && countSpec.length > 0;
 }
 
+export function isOrderAgnosticBucket( bucketStage: unknown ): boolean
+{
+    const entry = getSingleStageEntry( bucketStage );
+    if( !entry || ( entry[ 0 ] !== '$bucket' && entry[ 0 ] !== '$bucketAuto' ) || !isPlainObject( entry[ 1 ] ))
+    {
+        return false;
+    }
+
+    const spec = entry[ 1 ] as Record<string, any>;
+    if( !( 'groupBy' in spec )){ return false }
+
+    if( !( 'output' in spec )){ return true }
+
+    if( !isPlainObject( spec.output )){ return false }
+
+    for( const val of Object.values( spec.output ))
+    {
+        if( !isPlainObject( val )){ return false }
+
+        const opKeys = Object.keys( val );
+        if( opKeys.length !== 1 || !ORDER_AGNOSTIC_ACCUMULATORS.has( opKeys[ 0 ]! ))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+export function isDeadSortBeforeBucket( currentStage: unknown, nextStage: unknown ): boolean
+{
+    const sortSpec = getStageSpec( currentStage, '$sort' );
+    if( !sortSpec ){ return false }
+
+    return isOrderAgnosticBucket( nextStage );
+}
+
 export function isDeadSortBeforeSortByCount( currentStage: unknown, nextStage: unknown ): boolean
 {
     const sortSpec = getStageSpec( currentStage, '$sort' );
@@ -109,6 +146,8 @@ export function proveRedundantSortElimination(
     if( isAdjacentSort( currentStage, nextStage )){ return true }
 
     if( isDeadSortBeforeGroup( currentStage, nextStage )){ return true }
+
+    if( isDeadSortBeforeBucket( currentStage, nextStage )){ return true }
 
     if( isDeadSortBeforeCount( currentStage, nextStage )){ return true }
 

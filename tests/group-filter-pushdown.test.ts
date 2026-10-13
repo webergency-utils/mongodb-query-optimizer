@@ -381,6 +381,41 @@ describe('proveGroupFilterPushdown', () =>
             },
         });
     });
+
+    it('proves pushdown for computed _id with $eq, $in, $gt, $gte, and Date null-rejecting conditions', () =>
+    {
+        const group = {
+            $group: {
+                _id: { $toUpper: '$dept' },
+                count: { $sum: 1 },
+            },
+        };
+
+        expect(proveGroupFilterPushdown(group, { $match: { _id: { $eq: 'SALES' } } })?.prefilterStage).toEqual({
+            $match: { dept: { $exists: true, $ne: null } },
+        });
+        expect(proveGroupFilterPushdown(group, { $match: { _id: { $in: ['SALES', 'ENG'] } } })?.prefilterStage).toEqual({
+            $match: { dept: { $exists: true, $ne: null } },
+        });
+        expect(proveGroupFilterPushdown(group, { $match: { _id: { $gt: 'A' } } })?.prefilterStage).toEqual({
+            $match: { dept: { $exists: true, $ne: null } },
+        });
+        expect(proveGroupFilterPushdown(group, { $match: { _id: { $gte: new Date('2025-01-01') } } })?.prefilterStage).toEqual({
+            $match: { dept: { $exists: true, $ne: null } },
+        });
+        expect(proveGroupFilterPushdown(group, { $match: { _id: { $ne: null } } })?.prefilterStage).toEqual({
+            $match: { dept: { $exists: true, $ne: null } },
+        });
+        expect(proveGroupFilterPushdown(group, { $match: { _id: 42 } })?.prefilterStage).toEqual({
+            $match: { dept: { $exists: true, $ne: null } },
+        });
+
+        // Conditions that do not reject null or empty string return null
+        expect(proveGroupFilterPushdown(group, { $match: { _id: '' } })).toBeNull();
+        expect(proveGroupFilterPushdown(group, { $match: { _id: null } })).toBeNull();
+        expect(proveGroupFilterPushdown(group, { $match: { _id: { $in: ['SALES', ''] } } })).toBeNull();
+        expect(proveGroupFilterPushdown(group, { $match: { _id: { $lt: 'Z' } } })).toBeNull();
+    });
 });
 
 describe('GroupFilterPushdownPass', () =>

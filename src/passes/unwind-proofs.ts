@@ -2,7 +2,14 @@ import { analyzeStage } from '../analyzer/semantics.js';
 import { GuaranteeContext } from '../guarantees.js';
 import { deepClone, isPlainObject } from '../utils.js';
 import { isStageProvenErrorFree } from './guarantee-guards.js';
-import { getSingleStageEntry, getStageSpec } from './helpers.js';
+import
+{
+    combineConjuncts,
+    decomposeFilterIntoConjuncts,
+    getSingleStageEntry,
+    getStageSpec
+}
+from './helpers.js';
 
 export interface UnwindPrefilterProof
 {
@@ -158,25 +165,31 @@ export function proveUnwindPrefilter(
         }
     }
 
+    const conjuncts = decomposeFilterIntoConjuncts( matchSpec );
+
     if( indexField !== undefined )
     {
         const prefixIndex = indexField + '.';
 
-        for( const key of Object.keys( matchSpec ))
+        for( const conjunct of conjuncts )
         {
-            if( key === indexField || key.startsWith( prefixIndex ))
+            for( const key of Object.keys( conjunct ))
             {
-                return null;
+                if( key === indexField || key.startsWith( prefixIndex ))
+                {
+                    return null;
+                }
             }
         }
     }
 
     const prefix = arrayPath + '.';
-    const dottedPredicates: Record<string, any> = {};
-    let matchingFieldCount = 0;
+    const dottedConjuncts: Record<string, any>[] = [];
 
-    for( const [ key, val ] of Object.entries( matchSpec ))
+    for( const conjunct of conjuncts )
     {
+        const [ key, val ] = Object.entries( conjunct )[ 0 ]!;
+
         if( key.startsWith( prefix ))
         {
             if( !isQualifyingPrefilterValue( val ))
@@ -184,12 +197,11 @@ export function proveUnwindPrefilter(
                 return null;
             }
 
-            dottedPredicates[ key ] = deepClone( val );
-            matchingFieldCount++;
+            dottedConjuncts.push({ [ key ]: deepClone( val ) });
         }
     }
 
-    if( matchingFieldCount === 0 )
+    if( dottedConjuncts.length === 0 )
     {
         return null;
     }
@@ -207,7 +219,7 @@ export function proveUnwindPrefilter(
         prefilterStage: {
             $match: {
                 $or: [
-                    dottedPredicates,
+                    combineConjuncts( dottedConjuncts ),
                     escapeBranch
                 ]
             }

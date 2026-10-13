@@ -3,10 +3,12 @@ import { RedundantSortEliminationPass } from '../src/passes/redundant-sort-elimi
 import 
 { 
     isAdjacentSort, 
+    isDeadSortBeforeBucket,
     isDeadSortBeforeCount, 
     isDeadSortBeforeGroup, 
     isDeadSortBeforeSortByCount, 
     isEmptySort, 
+    isOrderAgnosticBucket,
     isOrderAgnosticGroup, 
     proveRedundantSortElimination,
     proveRedundantSortEliminationInPipeline
@@ -39,6 +41,25 @@ describe( 'sort-proofs unit and branch analysis', () =>
         expect( isOrderAgnosticGroup( { $group: { _id: '$dept', total: { $sum: '$amt' }, avg: { $avg: '$amt' } } } )).toBe( true );
         expect( isOrderAgnosticGroup( { $group: { _id: '$dept', min: { $min: '$amt' }, max: { $max: '$amt' }, cnt: { $count: {} } } } )).toBe( true );
         expect( isOrderAgnosticGroup( { $group: { _id: '$dept', std1: { $stdDevPop: '$amt' }, std2: { $stdDevSamp: '$amt' } } } )).toBe( true );
+    });
+
+    it( 'evaluates isOrderAgnosticBucket and isDeadSortBeforeBucket across exhaustive branches', () =>
+    {
+        expect( isOrderAgnosticBucket( null )).toBe( false );
+        expect( isOrderAgnosticBucket({ $match: { a: 1 } })).toBe( false );
+        expect( isOrderAgnosticBucket({ $bucket: 'invalid' })).toBe( false );
+        expect( isOrderAgnosticBucket({ $bucket: { boundaries: [ 0, 10 ] } })).toBe( false );
+        expect( isOrderAgnosticBucket({ $bucket: { groupBy: '$a', boundaries: [ 0, 10 ] } })).toBe( true );
+        expect( isOrderAgnosticBucket({ $bucketAuto: { groupBy: '$a', buckets: 5 } })).toBe( true );
+        expect( isOrderAgnosticBucket({ $bucket: { groupBy: '$a', output: 'invalid' } })).toBe( false );
+        expect( isOrderAgnosticBucket({ $bucket: { groupBy: '$a', output: { c: 'invalid' } } })).toBe( false );
+        expect( isOrderAgnosticBucket({ $bucket: { groupBy: '$a', output: { c: { $sum: 1, $avg: 2 } } } })).toBe( false );
+        expect( isOrderAgnosticBucket({ $bucket: { groupBy: '$a', output: { c: { $push: '$x' } } } })).toBe( false );
+        expect( isOrderAgnosticBucket({ $bucket: { groupBy: '$a', output: { c: { $sum: 1 }, m: { $max: '$x' } } } })).toBe( true );
+
+        expect( isDeadSortBeforeBucket( null, { $bucket: { groupBy: '$a' } } )).toBe( false );
+        expect( isDeadSortBeforeBucket({ $sort: { a: 1 } }, { $bucket: { groupBy: '$a', output: { p: { $push: '$x' } } } })).toBe( false );
+        expect( isDeadSortBeforeBucket({ $sort: { a: 1 } }, { $bucket: { groupBy: '$a' } })).toBe( true );
     });
 
     it( 'evaluates isEmptySort across branches', () =>
@@ -97,6 +118,7 @@ describe( 'sort-proofs unit and branch analysis', () =>
     {
         expect( proveRedundantSortElimination( { $sort: { a: 1 } }, { $sort: { b: 1 } } )).toBe( true );
         expect( proveRedundantSortElimination( { $sort: { a: 1 } }, { $group: { _id: '$dept', s: { $sum: 1 } } } )).toBe( true );
+        expect( proveRedundantSortElimination( { $sort: { a: 1 } }, { $bucket: { groupBy: '$dept', boundaries: [ 0, 10 ] } } )).toBe( true );
         expect( proveRedundantSortElimination( { $sort: { a: 1 } }, { $count: 'total' } )).toBe( true );
         expect( proveRedundantSortElimination( { $sort: { a: 1 } }, { $sortByCount: '$dept' } )).toBe( true );
         expect( proveRedundantSortElimination( { $sort: { a: 1 } }, { $match: { a: 1 } } )).toBe( false );
