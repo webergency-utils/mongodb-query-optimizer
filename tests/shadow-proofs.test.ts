@@ -52,6 +52,34 @@ describe( 'shadow-proofs shared gates', () =>
         expect( allocateShadowFieldName( pipeline, 'k', new Set())).toBe( '__heuristic_k_0' );
         expect( allocateShadowFieldName( [], 'a-b', new Set([ '__heuristic_a_b' ]))).toBe( '__heuristic_a_b_0' );
     });
+
+    it( 'resolves computed and pass-through $project fields and rejects ineligible $project specs', () =>
+    {
+        const pipelineWithComputedProject = [
+            { $lookup: { from: 'extra', localField: '_id', foreignField: 'ref', as: 'extra' } },
+            { $project: { extra: 1, cnt: { $size: '$tags' }, alias: '$score' } },
+            { $sort: { cnt: -1, alias: 1, _id: 1 } }
+        ];
+        const providers = resolveShadowProviders( pipelineWithComputedProject, 2, [ 'cnt', 'alias', '_id' ], context );
+
+        expect( providers ).not.toBeNull();
+        expect( providers!.computed.get( 'cnt' )?.providerIndex ).toBe( 1 );
+        expect( providers!.computed.get( 'alias' )?.providerIndex ).toBe( 1 );
+        expect( providers!.rootKeys ).toEqual([ '_id' ]);
+
+        // Rejects scalar literal or colliding $project specs as shadow providers
+        expect( resolveShadowProviders([
+            { $lookup: { from: 'extra', localField: '_id', foreignField: 'ref', as: 'extra' } },
+            { $project: { cnt: 42 } },
+            { $sort: { cnt: -1 } }
+        ], 2, [ 'cnt' ], context )).toBeNull();
+
+        expect( resolveShadowProviders([
+            { $lookup: { from: 'extra', localField: '_id', foreignField: 'ref', as: 'extra' } },
+            { $project: { cnt: '$a', 'cnt.sub': 1 } },
+            { $sort: { cnt: -1 } }
+        ], 2, [ 'cnt' ], context )).toBeNull();
+    });
 });
 
 describe( 'shadow-proofs determinism by $function substitution', () =>

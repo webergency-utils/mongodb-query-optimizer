@@ -708,4 +708,38 @@ describe( 'optimizePipeline execution parity for unwind prefilter', () =>
         expect( opt ).toEqual( orig );
         expect( opt.length ).toBe( 0 );
     } );
+
+    it( 'synthesizes prefilter for direct array-element predicates (key === arrayPath)', () =>
+    {
+        const dataset =
+        [
+            { _id: 1, tags: [ 'redis', 'mongodb' ] },
+            { _id: 2, tags: [ 'postgres', 'sqlite' ] },
+            { _id: 3, tags: 'mongodb' },
+            { _id: 4, tags: [ [ 'mongodb' ] ] }
+        ];
+
+        const pipeline =
+        [
+            { $unwind: '$tags' },
+            { $match: { tags: 'mongodb' } }
+        ];
+
+        const proof = proveUnwindPrefilter( pipeline[ 0 ], pipeline[ 1 ] );
+        expect( proof ).not.toBeNull();
+        expect( proof?.prefilterStage ).toEqual({
+            $match: {
+                $or: [
+                    { tags: 'mongodb' },
+                    { tags: { $elemMatch: { $type: 'array' } } }
+                ]
+            }
+        });
+
+        const optimized = optimizePipeline( pipeline );
+        const orig = runMockPipeline( dataset, pipeline );
+        const opt = runMockPipeline( dataset, optimized );
+
+        expect( opt ).toEqual( orig );
+    } );
 } );

@@ -190,7 +190,7 @@ export function proveUnwindPrefilter(
     {
         const [ key, val ] = Object.entries( conjunct )[ 0 ]!;
 
-        if( key.startsWith( prefix ))
+        if( key === arrayPath || key.startsWith( prefix ))
         {
             if( !isQualifyingPrefilterValue( val ))
             {

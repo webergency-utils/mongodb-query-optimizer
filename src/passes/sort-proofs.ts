@@ -26,7 +26,8 @@ const ORDER_INSENSITIVE_INTERMEDIATE_OPERATORS = new Set([
     '$addFields',
     '$set',
     '$unset',
-    '$lookup'
+    '$lookup',
+    '$unwind'
 ]);
 
 export function isOrderAgnosticGroup( groupStage: unknown ): boolean
@@ -198,11 +199,21 @@ export function proveRedundantSortEliminationInPipeline(
         return false;
     }
 
+    let crossedUnwind = false;
+
     for( let j = sortIndex + 1; j < pipeline.length; j++ )
     {
         const candidate = pipeline[ j ];
+        const isKilledByCandidate = crossedUnwind
+            ? (
+                isDeadSortBeforeGroup( currentStage, candidate )
+                || isDeadSortBeforeBucket( currentStage, candidate )
+                || isDeadSortBeforeCount( currentStage, candidate )
+                || isDeadSortBeforeSortByCount( currentStage, candidate )
+            )
+            : proveRedundantSortElimination( currentStage, candidate, context );
 
-        if( proveRedundantSortElimination( currentStage, candidate, context ))
+        if( isKilledByCandidate )
         {
             return true;
         }
@@ -210,6 +221,11 @@ export function proveRedundantSortEliminationInPipeline(
         if( !isOrderInsensitiveIntermediateStage( candidate, context ))
         {
             return false;
+        }
+
+        if( getSingleStageEntry( candidate )![ 0 ] === '$unwind' )
+        {
+            crossedUnwind = true;
         }
     }
 

@@ -1719,11 +1719,31 @@ describe('proveLookupLimitPushdown and LookupDelayPass limit pushdown', () =>
         });
     });
 
-    it('rejects Pattern 1 when unwind path or limit count does not match', () =>
+    it('pushes limit: N and skip + limit across unwind and rejects invalid unwind or limit specs', () =>
     {
         const lookup = { $lookup: { from: 'orders', as: 'orders', pipeline: [] } };
+        expect(proveLookupLimitPushdown(lookup, [{ $unwind: '$orders' }, { $limit: 2 }])).toEqual({
+            lookupStage: {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [{ $limit: 2 }]
+                }
+            }
+        });
+        expect(proveLookupLimitPushdown(lookup, [{ $unwind: '$orders' }, { $skip: 3 }, { $limit: 2 }])).toEqual({
+            lookupStage: {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [{ $limit: 5 }]
+                }
+            }
+        });
         expect(proveLookupLimitPushdown(lookup, [{ $unwind: '$other' }, { $limit: 1 }])).toBeNull();
-        expect(proveLookupLimitPushdown(lookup, [{ $unwind: '$orders' }, { $limit: 2 }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $unwind: '$orders' }, { $limit: 0 }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $unwind: '$orders' }, { $skip: 3 }, { $sort: { total: -1 } }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $unwind: '$orders' }, { $skip: 3 }, null])).toBeNull();
         expect(proveLookupLimitPushdown(lookup, [{ $unwind: '$orders' }, { $sort: { total: -1 } }])).toBeNull();
         expect(proveLookupLimitPushdown(lookup, [{ $match: { x: 1 } }, { $limit: 1 }])).toBeNull();
         expect(proveLookupLimitPushdown(lookup, [{ $unwind: { path: '$other' } }, { $limit: 1 }])).toBeNull();

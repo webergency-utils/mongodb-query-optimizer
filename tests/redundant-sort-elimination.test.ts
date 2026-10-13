@@ -313,5 +313,29 @@ describe( 'RedundantSortEliminationPass execution and parity', () =>
             0,
             { strictFieldOrder: false, strictErrors: true }
         )).toBe( false );
+
+        // Eliminates dead sort across $unwind before order-agnostic collapsing stages ($group, $bucket, $count, $sortByCount)
+        expect( proveRedundantSortEliminationInPipeline(
+            [ { $sort: { a: 1 } }, { $unwind: '$items' }, { $group: { _id: '$items.cat', s: { $sum: 1 } } } ],
+            0
+        )).toBe( true );
+        expect( proveRedundantSortEliminationInPipeline(
+            [ { $sort: { a: 1 } }, { $unwind: '$items' }, { $bucket: { groupBy: '$items.price', boundaries: [ 0, 10, 20 ] } } ],
+            0
+        )).toBe( true );
+        expect( proveRedundantSortEliminationInPipeline(
+            [ { $sort: { a: 1 } }, { $unwind: '$items' }, { $count: 'total' } ],
+            0
+        )).toBe( true );
+        expect( proveRedundantSortEliminationInPipeline(
+            [ { $sort: { a: 1 } }, { $unwind: '$items' }, { $sortByCount: '$items.tag' } ],
+            0
+        )).toBe( true );
+
+        // Preserves sort before $unwind when followed by another $sort (to preserve tie-breaking order)
+        expect( proveRedundantSortEliminationInPipeline(
+            [ { $sort: { a: 1 } }, { $unwind: '$items' }, { $sort: { 'items.price': 1 } } ],
+            0
+        )).toBe( false );
     });
 });

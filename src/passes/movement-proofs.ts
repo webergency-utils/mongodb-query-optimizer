@@ -1300,12 +1300,45 @@ function pushLimitToSubpipeline( pipeline: readonly unknown[], limitVal: number 
     return copy;
 }
 
-function isLimitOne( stage: unknown ): boolean
+function extractUnwindFollowerLimit( followingStages: readonly unknown[] ): number | null
 {
-    const entry = getSingleStageEntry( stage );
-    if( !entry ){ return false }
+    const second = getSingleStageEntry( followingStages[ 1 ] );
+    if( !second ){ return null }
 
-    return entry[ 0 ] === '$limit' && entry[ 1 ] === 1;
+    if(
+        second[ 0 ] === '$limit'
+        && typeof second[ 1 ] === 'number'
+        && Number.isSafeInteger( second[ 1 ] )
+        && second[ 1 ] > 0
+    )
+    {
+        return second[ 1 ];
+    }
+
+    if(
+        second[ 0 ] === '$skip'
+        && typeof second[ 1 ] === 'number'
+        && Number.isSafeInteger( second[ 1 ] )
+        && second[ 1 ] >= 0
+        && followingStages.length >= 3
+    )
+    {
+        const third = getSingleStageEntry( followingStages[ 2 ] );
+
+        if(
+            third
+            && third[ 0 ] === '$limit'
+            && typeof third[ 1 ] === 'number'
+            && Number.isSafeInteger( third[ 1 ] )
+            && third[ 1 ] > 0
+            && Number.isSafeInteger( second[ 1 ] + third[ 1 ] )
+        )
+        {
+            return second[ 1 ] + third[ 1 ];
+        }
+    }
+
+    return null;
 }
 
 function isUnwindForPath( stage: unknown, alias: string ): boolean
@@ -1527,11 +1560,12 @@ export function proveLookupLimitPushdown(
 
     if( followingStages.length >= 2 )
     {
-        const [ firstFollower, secondFollower ] = followingStages;
+        const firstFollower = followingStages[ 0 ];
+        const unwindLimit = extractUnwindFollowerLimit( followingStages );
 
-        if( isUnwindForPath( firstFollower, lookupSpec.as ) && isLimitOne( secondFollower ))
+        if( isUnwindForPath( firstFollower, lookupSpec.as ) && unwindLimit !== null )
         {
-            if( hasTerminalLimitAtMost( lookupSpec.pipeline, 1 ))
+            if( hasTerminalLimitAtMost( lookupSpec.pipeline, unwindLimit ))
             {
                 return null;
             }
@@ -1540,7 +1574,7 @@ export function proveLookupLimitPushdown(
                 ...( lookupStage as Record<string, unknown> ),
                 $lookup: {
                     ...lookupSpec,
-                    pipeline: pushLimitToSubpipeline( lookupSpec.pipeline, 1 )
+                    pipeline: pushLimitToSubpipeline( lookupSpec.pipeline, unwindLimit )
                 }
             };
 

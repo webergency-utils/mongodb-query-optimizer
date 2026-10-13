@@ -1,4 +1,5 @@
 import { analyzeExpression } from '../analyzer/expressions.js';
+import { analyzeProjection, projectionVisibility } from '../analyzer/projections.js';
 import { analyzeStage } from '../analyzer/semantics.js';
 import { GuaranteeContext } from '../guarantees.js';
 import { isPlainObject } from '../utils.js';
@@ -143,10 +144,46 @@ export function collectExpressionDependencies( expr: unknown ): Set<string>
     return new Set( analyzeExpression( substituteFunctionCalls( expr )).dependencies.local );
 }
 
+function isPassThroughProjectField( stage: unknown, key: string ): boolean
+{
+    const entry = getSingleStageEntry( stage );
+
+    if( !entry || entry[ 0 ] !== '$project' || !isPlainObject( entry[ 1 ] ))
+    {
+        return false;
+    }
+
+    const projection = analyzeProjection( entry[ 1 ], 'project' );
+
+    return (
+        !projection.unknown
+        && !projection.hasPathCollisions
+        && projectionVisibility( projection, key ) === 'visible'
+        && arePathsDisjoint( projection.computedPaths, [ key ] )
+    );
+}
+
+function isEligibleProjectComputedExpression( spec: Record<string, unknown>, key: string ): boolean
+{
+    const projection = analyzeProjection( spec, 'project' );
+
+    if( projection.unknown || projection.hasPathCollisions || !projection.computedPaths.has( key ))
+    {
+        return false;
+    }
+
+    const expr = spec[ key ];
+
+    return (
+        ( typeof expr === 'string' && expr.startsWith( '$' ) && !expr.startsWith( '$$' ) && expr.length > 1 )
+        || ( isPlainObject( expr ) && Object.keys( expr ).length === 1 && Object.keys( expr )[ 0 ]!.startsWith( '$' ))
+    );
+}
+
 /**
- * Resolves, for each key read at `consumerIndex`, either the single `$addFields` / `$set`
- * provider that computes it (a computed key) or confirms that no earlier stage writes,
- * modifies or removes it (a root key). Returns null when any key is not eligible.
+ * Resolves, for each key read at `consumerIndex`, either the single `$addFields` / `$set` /
+ * computed `$project` provider that computes it (a computed key) or confirms that no earlier
+ * stage writes, modifies or removes it (a root key). Returns null when any key is not eligible.
  */
 export function resolveShadowProviders(
     pipeline      : readonly any[],
@@ -169,6 +206,11 @@ export function resolveShadowProviders(
 
         for( let i = consumerIndex - 1; i >= 0; i-- )
         {
+            if( isPassThroughProjectField( pipeline[ i ], key ))
+            {
+                continue;
+            }
+
             if( stageTouchesPaths( pipeline[ i ], [ key ] ))
             {
                 providerIndex = i;
@@ -186,7 +228,7 @@ export function resolveShadowProviders(
 
         if(
             !entry
-            || ( entry[ 0 ] !== '$addFields' && entry[ 0 ] !== '$set' )
+            || ( entry[ 0 ] !== '$addFields' && entry[ 0 ] !== '$set' && entry[ 0 ] !== '$project' )
             || !isPlainObject( entry[ 1 ] )
             || key.includes( '.' )
         )
@@ -196,7 +238,10 @@ export function resolveShadowProviders(
 
         const spec = entry[ 1 ] as Record<string, unknown>;
 
-        if( !Object.prototype.hasOwnProperty.call( spec, key ))
+        if(
+            !Object.prototype.hasOwnProperty.call( spec, key )
+            || ( entry[ 0 ] === '$project' && !isEligibleProjectComputedExpression( spec, key ))
+        )
         {
             return null;
         }
