@@ -14,6 +14,9 @@ import {
     generatedInteractionSemanticCases,
 } from './fixtures/generated-interactions.js';
 import {
+    mixedShapeDifferentialCases,
+} from './fixtures/mixed-shape-cases.js';
+import {
     filterProofManifest,
     pipelineProofManifest,
     validateGateRecord,
@@ -161,6 +164,9 @@ describe('active transformation proof manifest', () =>
     const semanticCasesById = new Map(
         semanticCases.map((testCase) => [testCase.id, testCase]),
     );
+    const mixedShapeCasesById = new Map(
+        mixedShapeDifferentialCases.map((testCase) => [testCase.id, testCase]),
+    );
 
     it('matches both active registries without missing or duplicate IDs', () =>
     {
@@ -189,6 +195,24 @@ describe('active transformation proof manifest', () =>
             if( entry.gate.status === 'active' )
             {
                 expect(() => validateGateRecord( entry )).not.toThrow();
+
+                const caseIds = entry.gate.mixedShapeCaseIds;
+                expect(caseIds).toBeDefined();
+
+                if( caseIds )
+                {
+                    for( const caseId of [
+                        caseIds.default,
+                        caseIds.strictFieldOrder,
+                        caseIds.strictErrors,
+                    ] )
+                    {
+                        expect(
+                            mixedShapeCasesById.has(caseId),
+                            `${entry.transformationId} references missing ${caseId}`,
+                        ).toBe(true);
+                    }
+                }
             }
         }
 

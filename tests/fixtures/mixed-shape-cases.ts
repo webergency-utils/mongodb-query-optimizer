@@ -392,6 +392,57 @@ export const mixedShapeDifferentialCases: readonly MixedShapeDifferentialCase[] 
         expectedOriginalOutcome: 'success',
     },
 
+    // Polymorphic covered projection synthesis
+    {
+        id: 'mixed-shape-covered-projection-synthesis',
+        description: 'covered-projection-synthesis groups by status and reads rank through a resolved let',
+        passId: 'covered-projection-synthesis',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: standardMixedShapeDocs,
+            },
+        },
+        pipeline: [
+            {
+                $group: {
+                    _id: '$status',
+                    total: {
+                        $sum: {
+                            $let: {
+                                vars: { v: '$rank' },
+                                in: '$$v',
+                            },
+                        },
+                    },
+                },
+            },
+            { $sort: { _id: 1 } },
+        ],
+        observation: 'ordered-bson',
+        expectedOriginalOutcome: 'success',
+    },
+
+    // Polymorphic dead assignment elimination
+    {
+        id: 'mixed-shape-dead-assignment-elimination',
+        description: 'dead-assignment-elimination drops an unread assignment and overwrites a surviving key',
+        passId: 'dead-assignment-elimination',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: standardMixedShapeDocs,
+            },
+        },
+        pipeline: [
+            { $set: { unread: 1, tmp: 1 } },
+            { $set: { kept: '$status', tmp: 'later' } },
+            { $unset: 'unread' },
+        ],
+        observation: 'ordered-bson',
+        expectedOriginalOutcome: 'success',
+    },
+
     // Polymorphic limit advance across error-prone stage
     {
         id: 'mixed-shape-limit-advance',

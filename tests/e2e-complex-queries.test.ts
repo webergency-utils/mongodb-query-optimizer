@@ -1148,7 +1148,7 @@ describe( 'End-to-End Complex Query Suite', () =>
             }
         ];
 
-        it( 'synthesizes minimal leading projection stripping _id and unread payload for covered query execution', () =>
+        it( 'does not synthesize a projection in front of an index-eligible sort', () =>
         {
             const pipeline =
             [
@@ -1167,25 +1167,7 @@ describe( 'End-to-End Complex Query Suite', () =>
                 [ 'covered-projection-synthesis' ]
             );
 
-            // Synthesized projection sits right after $match and before $sort
-            expect( optimized ).toEqual(
-            [
-                { $match: { sensor: 'temperature' } },
-                {
-                    $project: {
-                        _id: 0,
-                        deviceId: 1,
-                        reading: 1
-                    }
-                },
-                { $sort: { reading: -1 } },
-                {
-                    $group: {
-                        _id: '$deviceId',
-                        maxReading: { $max: '$reading' }
-                    }
-                }
-            ]);
+            expect( optimized ).toEqual( pipeline );
 
             const rawResult = runMockPipeline( telemetryDataset, pipeline );
             const optimizedResult = runMockPipeline( telemetryDataset, optimized );

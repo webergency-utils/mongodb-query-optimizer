@@ -17,6 +17,7 @@ const COLLAPSING_OPERATORS = new Set([ '$group', '$count', '$sortByCount' ]);
 const DISALLOWED_PREFIX_OPERATORS = new Set([
     '$project',
     '$unset',
+    '$fill',
     '$replaceRoot',
     '$replaceWith',
     '$facet',
@@ -32,6 +33,17 @@ function isCollapsingStage( stage: unknown ): boolean
     if( !entry ){ return false }
 
     return COLLAPSING_OPERATORS.has( entry[ 0 ]);
+}
+
+function isPrecededOnlyByMatches( pipeline: readonly any[], index: number ): boolean
+{
+    for( let i = 0; i < index; i++ )
+    {
+        const entry = getSingleStageEntry( pipeline[ i ]);
+        if( entry![ 0 ] !== '$match' ){ return false }
+    }
+
+    return true;
 }
 
 export function proveCoveredProjectionSynthesis( pipeline: readonly any[] ): CoveredProjectionProof | null
@@ -92,6 +104,13 @@ export function proveCoveredProjectionSynthesis( pipeline: readonly any[] ): Cov
         {
             return null;
         }
+    }
+
+    for( let i = 0; i < collapseIndex; i++ )
+    {
+        const entry = getSingleStageEntry( pipeline[ i ]);
+        if( entry![ 0 ] !== '$sort' ){ continue }
+        if( isPrecededOnlyByMatches( pipeline, i )){ return null }
     }
 
     let insertIndex = 0;

@@ -112,6 +112,18 @@ describe( 'covered-projection-proofs unit and branch analysis', () =>
         ])).toBeNull();
     });
 
+    it( 'returns null when a prefix $fill writes a field the group reads', () =>
+    {
+        const pipeline =
+        [
+            { $fill: { sortBy: { t: 1 }, output: { price: { method: 'locf' } } } },
+            { $group: { _id: null, total: { $sum: '$price' } } }
+        ];
+
+        expect( proveCoveredProjectionSynthesis( pipeline )).toBeNull();
+        expect( optimizePipeline( pipeline )).toEqual( pipeline );
+    });
+
     it( 'returns null if live fields are empty', () =>
     {
         // $count does not read any input document fields
@@ -150,8 +162,9 @@ describe( 'covered-projection-proofs unit and branch analysis', () =>
             { $group: { _id: '$dept..name' } }
         ])).toBeNull();
 
-        // Intermediate stage with invalid path
+        // Intermediate stage with invalid path. $set keeps the $sort off an index plan.
         expect( proveCoveredProjectionSynthesis([
+            { $set: { extra: 1 } },
             { $sort: { 'invalid..key': 1 } },
             { $group: { _id: '$dept' } }
         ])).toBeNull();
@@ -244,6 +257,7 @@ describe( 'covered-projection-proofs unit and branch analysis', () =>
     {
         const pipeline =
         [
+            { $set: { extra: 1 } },
             { $sort: { 'profile.address.city': 1 } },
             { $group: { _id: '$profile' } }
         ];
@@ -274,6 +288,67 @@ describe( 'covered-projection-proofs unit and branch analysis', () =>
         expect( proof?.synthesizedStage ).toEqual({
             $project: {
                 tag: 1,
+                _id: 0
+            }
+        });
+    });
+
+    it( 'returns null when a $sort before the collapsing stage is preceded only by $match', () =>
+    {
+        const leadingSort =
+        [
+            { $sort: { created: -1 } },
+            { $group: { _id: '$userId', latest: { $first: '$created' } } }
+        ];
+
+        expect( proveCoveredProjectionSynthesis( leadingSort )).toBeNull();
+
+        const optimized = optimizePipeline( leadingSort );
+        let sortIndex = -1;
+
+        for( let i = 0; i < optimized.length; i++ )
+        {
+            if( '$sort' in optimized[ i ] )
+            {
+                sortIndex = i;
+                break;
+            }
+        }
+
+        expect( sortIndex ).toBeGreaterThanOrEqual( 0 );
+
+        for( let i = 0; i < sortIndex; i++ )
+        {
+            expect( '$project' in optimized[ i ] ).toBe( false );
+        }
+
+        const matchThenSort =
+        [
+            { $match: { tenant: 'acme' } },
+            { $sort: { created: -1 } },
+            { $group: { _id: '$userId', n: { $sum: 1 } } }
+        ];
+
+        expect( proveCoveredProjectionSynthesis( matchThenSort )).toBeNull();
+    });
+
+    it( 'still synthesizes a projection when a non-match stage precedes the $sort', () =>
+    {
+        const pipeline =
+        [
+            { $set: { extra: 1 } },
+            { $sort: { created: -1 } },
+            { $group: { _id: '$userId', n: { $sum: 1 } } }
+        ];
+
+        const proof = proveCoveredProjectionSynthesis( pipeline );
+
+        expect( proof ).not.toBeNull();
+        expect( proof?.insertIndex ).toBe( 0 );
+        expect( proof?.synthesizedStage ).toEqual({
+            $project: {
+                created: 1,
+                userId: 1,
                 _id: 0
             }
         });
