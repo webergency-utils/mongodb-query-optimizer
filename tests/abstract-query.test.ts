@@ -730,7 +730,7 @@ describe( 'abstract query shape generator and pretty printer', () =>
             expect( formatted ).toContain( '  { "$sort": { "_id": 1, "createdAt": -1 } },' );
             expect( formatted ).toContain( '  { "$skip": 20 },' );
             expect( formatted ).toContain( '  { "$limit": 10 },' );
-            expect( formatted ).toContain( '  { "$count": <string> }' );
+            expect( formatted ).toContain( '  { "$count": "total" }' );
         });
 
         it( 'inlines accumulator and array index operators', () =>
@@ -801,6 +801,113 @@ describe( 'abstract query shape generator and pretty printer', () =>
             expect( formatted ).toContain( '{ "$lt": ["$events.dropout", <Date>] }' );
             expect( formatted ).toContain( '{ "$sort": { "_id": -1 } }' );
             expect( formatted ).toContain( '{ "$limit": 25 }' );
+        });
+
+        it( 'compacts $unwind when value is only path as string, while keeping options multiline', () =>
+        {
+            const pipelineWithStr = [
+                { $match: { active: true } },
+                { $unwind: '$items' },
+                { $sortByCount: '$status' },
+                { $sample: { size: 5 } }
+            ];
+
+            const formattedCompact = formatAbstractQuery( pipelineWithStr, { format: 'allman' });
+            expect( formattedCompact ).toContain( '  { "$unwind": "$items" },' );
+            expect( formattedCompact ).toContain( '  { "$sortByCount": "$status" },' );
+            expect( formattedCompact ).toContain( '  { "$sample": { "size": 5 } }' );
+
+            const pipelineWithOptions = [
+                {
+                    $unwind: {
+                        path: '$items',
+                        includeArrayIndex: 'index',
+                        preserveNullAndEmptyArrays: true
+                    }
+                }
+            ];
+
+            const formattedMultiline = formatAbstractQuery( pipelineWithOptions, { format: 'allman' });
+            expect( formattedMultiline ).not.toContain( '  { "$unwind":' );
+            expect( formattedMultiline ).toContain( '"$unwind":' );
+            expect( formattedMultiline ).toContain( '"includeArrayIndex": "index"' );
+        });
+
+        it( 'preserves $count alias and field identifiers in $lookup and $graphLookup', () =>
+        {
+            const countPipeline = [
+                { $count: 'totalRecords' }
+            ];
+            expect( toAbstractQuery( countPipeline )).toBe( '[{"$count":"totalRecords"}]' );
+
+            const lookupPipeline = [
+                {
+                    $lookup: {
+                        from: 'departments',
+                        localField: 'deptId',
+                        foreignField: 'code',
+                        as: 'deptInfo'
+                    }
+                }
+            ];
+            expect( toAbstractQuery( lookupPipeline )).toBe(
+                '[{"$lookup":{"as":"deptInfo","foreignField":"code","from":<string>,"localField":"deptId"}}]'
+            );
+
+            const graphLookupPipeline = [
+                {
+                    $graphLookup: {
+                        from: 'employees',
+                        startWith: '$managerId',
+                        connectFromField: 'reportsTo',
+                        connectToField: 'empId',
+                        as: 'chain',
+                        maxDepth: 3,
+                        depthField: 'level'
+                    }
+                }
+            ];
+            expect( toAbstractQuery( graphLookupPipeline )).toBe(
+                '[{"$graphLookup":{"as":"chain","connectFromField":"reportsTo","connectToField":"empId","depthField":"level","from":<string>,"maxDepth":3,"startWith":"$managerId"}}]'
+            );
+        });
+
+        it( 'preserves structural parameters in $bucketAuto, $sample, and window frame boundaries', () =>
+        {
+            const bucketAuto = {
+                $bucketAuto: {
+                    groupBy: '$sales',
+                    buckets: 5,
+                    granularity: 'R10'
+                }
+            };
+            expect( toAbstractQuery( bucketAuto )).toBe(
+                '{"$bucketAuto":{"buckets":5,"granularity":"R10","groupBy":"$sales"}}'
+            );
+
+            const sampleStage = {
+                $sample: {
+                    size: 15
+                }
+            };
+            expect( toAbstractQuery( sampleStage )).toBe( '{"$sample":{"size":15}}' );
+
+            const windowQuery = {
+                $setWindowFields: {
+                    partitionBy: '$department',
+                    sortBy: { hireDate: 1 },
+                    output: {
+                        runningTotal: {
+                            $sum: '$salary',
+                            window: {
+                                documents: [ 'unbounded', 'current' ]
+                            }
+                        }
+                    }
+                }
+            };
+            const windowShape = toAbstractQuery( windowQuery );
+            expect( windowShape ).toContain( '"documents":["unbounded","current"]' );
         });
     });
 });

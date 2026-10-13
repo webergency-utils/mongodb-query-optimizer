@@ -205,10 +205,17 @@ function toAbstractQueryInternal( query: unknown, context: AbstractionContext = 
 
     if( typeof query === 'string' )
     {
-        if( context.isIdentifier || query.startsWith( '$$' ) || ( context.isExpression && query.startsWith( '$' )))
+        if(
+            context.isIdentifier ||
+            query.startsWith( '$$' ) ||
+            ( context.isExpression && query.startsWith( '$' )) ||
+            query === 'unbounded' ||
+            query === 'current'
+        )
         {
             return JSON.stringify( query );
         }
+
         return '<string>';
     }
 
@@ -311,6 +318,12 @@ function toAbstractQueryInternal( query: unknown, context: AbstractionContext = 
             if(( key === '$limit' || key === '$skip' ) && typeof val === 'number' )
             {
                 entries.push( `${ JSON.stringify( key ) }:${ String( val ) }` );
+                continue;
+            }
+
+            if(( key === '$count' || key === '$unwind' ) && typeof val === 'string' )
+            {
+                entries.push( `${ JSON.stringify( key ) }:${ JSON.stringify( val ) }` );
                 continue;
             }
 
@@ -419,7 +432,7 @@ function toAbstractQueryInternal( query: unknown, context: AbstractionContext = 
             {
                 childContext = { ...childContext, isIdentifier: true };
             }
-            else if( key === 'unit' && ( context.parentOperator ?? '' ).startsWith( '$date' ))
+            else if( key === 'unit' && (( context.parentOperator ?? '' ).startsWith( '$date' ) || context.parentStage === '$setWindowFields' || context.parentOperator === '$setWindowFields' || context.parentOperator === 'window' ))
             {
                 childContext = { ...childContext, isIdentifier: true };
             }
@@ -427,9 +440,38 @@ function toAbstractQueryInternal( query: unknown, context: AbstractionContext = 
             {
                 childContext = { ...childContext, isIndex: true };
             }
-            else if( key === 'options' && ( context.parentOperator ?? '' ).startsWith( '$regex' ))
+            else if( key === '$options' || ( key === 'options' && ( context.parentOperator ?? '' ).startsWith( '$regex' )))
             {
                 childContext = { ...childContext, isIdentifier: true };
+            }
+            else if( key === '$type' )
+            {
+                childContext = { ...childContext, isIdentifier: true, isIndex: true };
+            }
+
+            if(( key === 'documents' || key === 'range' ) && (
+                context.parentOperator === 'window' ||
+                context.parentOperator === '$setWindowFields' ||
+                context.parentStage === '$setWindowFields'
+            ) && Array.isArray( val ))
+            {
+                const elements = val.map(( elem ) =>
+                {
+                    if( typeof elem === 'number' )
+                    {
+                        return String( elem );
+                    }
+
+                    if( typeof elem === 'string' )
+                    {
+                        return JSON.stringify( elem );
+                    }
+
+                    return toAbstractQueryInternal( elem, childContext );
+                });
+
+                entries.push( `${ JSON.stringify( key ) }:[${ elements.join( ',' ) }]` );
+                continue;
             }
 
             if( key === '$arrayElemAt' && Array.isArray( val ))
@@ -577,9 +619,81 @@ function toAbstractQueryInternal( query: unknown, context: AbstractionContext = 
             {
                 childContext = { ...childContext, isIdentifier: true };
             }
-            else if( key === 'includeArrayIndex' && (
+            else if(( key === 'includeArrayIndex' || key === 'path' ) && (
                 context.parentStage === '$unwind' ||
                 context.parentOperator === '$unwind'
+            ))
+            {
+                childContext = { ...childContext, isIdentifier: true };
+            }
+            else if(( key === 'localField' || key === 'foreignField' ) && (
+                context.parentStage === '$lookup' ||
+                context.parentOperator === '$lookup'
+            ))
+            {
+                childContext = { ...childContext, isIdentifier: true };
+            }
+            else if(( key === 'connectFromField' || key === 'connectToField' || key === 'depthField' ) && (
+                context.parentStage === '$graphLookup' ||
+                context.parentOperator === '$graphLookup'
+            ))
+            {
+                childContext = { ...childContext, isIdentifier: true };
+            }
+            else if( key === 'maxDepth' && (
+                context.parentStage === '$graphLookup' ||
+                context.parentOperator === '$graphLookup'
+            ))
+            {
+                childContext = { ...childContext, isIndex: true };
+            }
+            else if( key === 'buckets' && (
+                context.parentStage === '$bucketAuto' ||
+                context.parentOperator === '$bucketAuto'
+            ))
+            {
+                childContext = { ...childContext, isIndex: true };
+            }
+            else if( key === 'granularity' && (
+                context.parentStage === '$bucketAuto' ||
+                context.parentOperator === '$bucketAuto'
+            ))
+            {
+                childContext = { ...childContext, isIdentifier: true };
+            }
+            else if( key === 'size' && (
+                context.parentStage === '$sample' ||
+                context.parentOperator === '$sample'
+            ))
+            {
+                childContext = { ...childContext, isIndex: true };
+            }
+            else if(( key === 'into' || key === 'on' || key === 'whenMatched' || key === 'whenNotMatched' ) && (
+                context.parentStage === '$merge' ||
+                context.parentOperator === '$merge'
+            ))
+            {
+                childContext = { ...childContext, isIdentifier: true };
+            }
+            else if(( key === 'coll' || key === 'db' ) && (
+                context.parentStage === '$out' ||
+                context.parentOperator === '$out' ||
+                context.parentStage === '$merge' ||
+                context.parentOperator === '$merge'
+            ))
+            {
+                childContext = { ...childContext, isIdentifier: true };
+            }
+            else if( key === 'to' && (
+                context.parentOperator === '$convert' ||
+                context.parentStage === '$convert'
+            ))
+            {
+                childContext = { ...childContext, isIdentifier: true, isIndex: true };
+            }
+            else if( key === 'method' && (
+                context.parentOperator === '$fill' ||
+                context.parentStage === '$fill'
             ))
             {
                 childContext = { ...childContext, isIdentifier: true };
@@ -875,7 +989,9 @@ const COMPACT_PIPELINE_STAGES = new Set([
     '$limit',
     '$skip',
     '$count',
-    '$sort'
+    '$sort',
+    '$sortByCount',
+    '$out'
 ]);
 
 const ALL_LEAF_OPERATORS = new Set([
@@ -974,6 +1090,18 @@ function isLeafCandidate( node: AstNode, depth: number = 0 ): boolean
         {
             const prop = node.properties[ 0 ];
             const cleanedKey = cleanKey( prop.key );
+
+            if( cleanedKey === '$unwind' )
+            {
+                return prop.value.kind === 'literal';
+            }
+
+            if( cleanedKey === '$sample' )
+            {
+                return prop.value.kind === 'object' &&
+                    prop.value.properties.length === 1 &&
+                    cleanKey( prop.value.properties[ 0 ].key ) === 'size';
+            }
 
             if( ALL_LEAF_OPERATORS.has( cleanedKey ) || COMPACT_PIPELINE_STAGES.has( cleanedKey ))
             {
