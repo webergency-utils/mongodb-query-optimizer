@@ -182,6 +182,9 @@ interface AbstractionContext
 {
     readonly isExpression?: boolean;
     readonly inPipeline?: boolean;
+    readonly isIdentifier?: boolean;
+    readonly parentOperator?: string;
+    readonly parentStage?: string;
 }
 
 function toAbstractQueryInternal( query: unknown, context: AbstractionContext = {}): string
@@ -198,7 +201,7 @@ function toAbstractQueryInternal( query: unknown, context: AbstractionContext = 
 
     if( typeof query === 'string' )
     {
-        if( context.isExpression && query.startsWith( '$' ))
+        if( context.isIdentifier || query.startsWith( '$$' ) || ( context.isExpression && query.startsWith( '$' )))
         {
             return JSON.stringify( query );
         }
@@ -249,22 +252,104 @@ function toAbstractQueryInternal( query: unknown, context: AbstractionContext = 
         {
             const val = ( query as Record<string, any> )[ key ];
 
-            let childContext: AbstractionContext = { ...context };
+            if( key === '$unset' )
+            {
+                if( typeof val === 'string' )
+                {
+                    entries.push( `${ JSON.stringify( key ) }:${ JSON.stringify( val ) }` );
+                    continue;
+                }
+
+                if( Array.isArray( val ))
+                {
+                    const sortedFields = val.map(( field ) =>
+                    {
+                        if( typeof field === 'string' )
+                        {
+                            return JSON.stringify( field );
+                        }
+                        return toAbstractQueryInternal( field, context );
+                    }).sort(( a, b ) => a.localeCompare( b ));
+
+                    entries.push( `${ JSON.stringify( key ) }:[${ sortedFields.join( ',' ) }]` );
+                    continue;
+                }
+            }
+
+            if( key === '$getField' && typeof val === 'string' )
+            {
+                entries.push( `${ JSON.stringify( key ) }:${ JSON.stringify( val ) }` );
+                continue;
+            }
+
+            let childContext: AbstractionContext = {
+                ...context,
+                isIdentifier: false,
+                parentOperator: key.startsWith( '$' ) ? key : context.parentOperator
+            };
 
             if( context.inPipeline )
             {
                 if( key === '$match' )
                 {
-                    childContext = { inPipeline: true, isExpression: false };
+                    childContext = { inPipeline: true, isExpression: false, parentStage: '$match' };
                 }
                 else
                 {
-                    childContext = { inPipeline: true, isExpression: true };
+                    childContext = { inPipeline: true, isExpression: true, parentStage: key, parentOperator: key };
                 }
             }
-            else if( key === '$expr' )
+            else if( key === '$expr' || key === '$map' || key === '$filter' || key === '$getField' || key === '$setField' || key === '$unsetField' || key === '$cond' || key === '$switch' )
             {
-                childContext = { ...context, isExpression: true };
+                childContext = { ...childContext, isExpression: true, parentOperator: key };
+            }
+
+            if( key === 'as' && (
+                context.parentOperator === '$map' ||
+                context.parentOperator === '$filter' ||
+                context.parentStage === '$lookup' ||
+                context.parentStage === '$graphLookup' ||
+                context.parentOperator === '$lookup' ||
+                context.parentOperator === '$graphLookup'
+            ))
+            {
+                childContext = { ...childContext, isIdentifier: true };
+            }
+            else if( key === 'includeArrayIndex' && (
+                context.parentStage === '$unwind' ||
+                context.parentOperator === '$unwind'
+            ))
+            {
+                childContext = { ...childContext, isIdentifier: true };
+            }
+            else if( key === 'field' && (
+                context.parentOperator === '$getField' ||
+                context.parentOperator === '$setField' ||
+                context.parentOperator === '$unsetField' ||
+                context.parentStage === '$densify' ||
+                context.parentOperator === '$densify'
+            ))
+            {
+                childContext = { ...childContext, isIdentifier: true };
+            }
+            else if( key === 'partitionByFields' && (
+                context.parentStage === '$densify' ||
+                context.parentOperator === '$densify' ||
+                context.parentStage === '$fill' ||
+                context.parentOperator === '$fill'
+            ) && Array.isArray( val ))
+            {
+                const sortedFields = val.map(( field ) =>
+                {
+                    if( typeof field === 'string' )
+                    {
+                        return JSON.stringify( field );
+                    }
+                    return toAbstractQueryInternal( field, childContext );
+                }).sort(( a, b ) => a.localeCompare( b ));
+
+                entries.push( `${ JSON.stringify( key ) }:[${ sortedFields.join( ',' ) }]` );
+                continue;
             }
 
             if( COMMUTATIVE_BRANCH_OPERATORS.has( key ) && Array.isArray( val ))

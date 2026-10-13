@@ -227,4 +227,189 @@ describe( 'abstract query shape generator and pretty printer', () =>
             expect( formatted ).toBe( expected );
         });
     });
+
+    describe( 'variable binding and schema identifier preservation', () =>
+    {
+        it( 'preserves variable binding in $map and $filter', () =>
+        {
+            const mapQuery = {
+                $map: {
+                    input: '$contracts',
+                    as: 'contract',
+                    in: '$$contract.status'
+                }
+            };
+            expect( toAbstractQuery( mapQuery )).toBe(
+                '{"$map":{"as":"contract","in":"$$contract.status","input":"$contracts"}}'
+            );
+
+            const filterQuery = {
+                $filter: {
+                    input: '$items',
+                    as: 'item',
+                    cond: { $gt: ['$$item.price', 100] }
+                }
+            };
+            expect( toAbstractQuery( filterQuery )).toBe(
+                '{"$filter":{"as":"item","cond":{"$gt":["$$item.price",<number>]},"input":"$items"}}'
+            );
+        });
+
+        it( 'preserves alias in $lookup and $graphLookup while abstracting collection names', () =>
+        {
+            const lookup = [
+                {
+                    $lookup: {
+                        from: 'users',
+                        as: 'user',
+                        pipeline: []
+                    }
+                },
+                {
+                    $graphLookup: {
+                        from: 'employees',
+                        startWith: '$reportsTo',
+                        connectFromField: 'reportsTo',
+                        connectToField: 'name',
+                        as: 'reportingHierarchy'
+                    }
+                }
+            ];
+
+            const shape = toAbstractQuery( lookup );
+            expect( shape ).toContain( '{"$lookup":{"as":"user","from":<string>,"pipeline":[]}}' );
+            expect( shape ).toContain( '"as":"reportingHierarchy"' );
+            expect( shape ).toContain( '"from":<string>' );
+        });
+
+        it( 'preserves includeArrayIndex in $unwind stage', () =>
+        {
+            const pipeline = [
+                {
+                    $unwind: {
+                        path: '$items',
+                        includeArrayIndex: 'itemIndex',
+                        preserveNullAndEmptyArrays: true
+                    }
+                }
+            ];
+
+            expect( toAbstractQuery( pipeline )).toBe(
+                '[{"$unwind":{"includeArrayIndex":"itemIndex","path":"$items","preserveNullAndEmptyArrays":<boolean>}}]'
+            );
+        });
+
+        it( 'preserves and canonically sorts $unset field lists', () =>
+        {
+            const unsetSingle = { $unset: 'temporaryStatus' };
+            expect( toAbstractQuery( unsetSingle )).toBe( '{"$unset":"temporaryStatus"}' );
+
+            const unsetMulti1 = { $unset: ['zebra', 'apple', 'middle'] };
+            const unsetMulti2 = { $unset: ['apple', 'middle', 'zebra'] };
+
+            expect( toAbstractQuery( unsetMulti1 )).toBe( '{"$unset":["apple","middle","zebra"]}' );
+            expect( toAbstractQuery( unsetMulti2 )).toBe( '{"$unset":["apple","middle","zebra"]}' );
+        });
+
+        it( 'preserves field in $getField, $setField, and $unsetField', () =>
+        {
+            const getFieldShorthand = { $getField: 'zipCode' };
+            expect( toAbstractQuery( getFieldShorthand )).toBe( '{"$getField":"zipCode"}' );
+
+            const getFieldObj = {
+                $getField: {
+                    field: 'zipCode',
+                    input: '$address'
+                }
+            };
+            expect( toAbstractQuery( getFieldObj )).toBe(
+                '{"$getField":{"field":"zipCode","input":"$address"}}'
+            );
+
+            const setFieldObj = {
+                $setField: {
+                    field: 'taxRate',
+                    input: '$pricing',
+                    value: 0.15
+                }
+            };
+            expect( toAbstractQuery( setFieldObj )).toBe(
+                '{"$setField":{"field":"taxRate","input":"$pricing","value":<number>}}'
+            );
+        });
+
+        it( 'preserves partitionByFields in $densify and $fill', () =>
+        {
+            const densify = {
+                $densify: {
+                    field: 'timestamp',
+                    partitionByFields: ['region', 'carrier']
+                }
+            };
+            expect( toAbstractQuery( densify )).toBe(
+                '{"$densify":{"field":"timestamp","partitionByFields":["carrier","region"]}}'
+            );
+        });
+
+        it( 'does not treat literal values in standard $match as identifiers', () =>
+        {
+            const filterWithAsField = {
+                $match: {
+                    as: 'consultant',
+                    field: 'testValue'
+                }
+            };
+            expect( toAbstractQuery( filterWithAsField )).toBe(
+                '{"$match":{"as":<string>,"field":<string>}}'
+            );
+        });
+
+        it( 'formats the full complex real-world pipeline preserving identifiers', () =>
+        {
+            const pipeline = [
+                {
+                    $match: {
+                        deleted: { $ne: true }
+                    }
+                },
+                {
+                    $addFields: {
+                        contracts: {
+                            $sortArray: {
+                                input: '$contracts',
+                                sortBy: {
+                                    'employment.interval.start': -1
+                                }
+                            }
+                        },
+                        statuses: {
+                            $setUnion: [
+                                {
+                                    $map: {
+                                        input: '$contracts',
+                                        as: 'contract',
+                                        in: '$$contract.status'
+                                    }
+                                },
+                                []
+                            ]
+                        }
+                    }
+                },
+                {
+                    $unset: ['statuses']
+                }
+            ];
+
+            const shape = toAbstractQuery( pipeline );
+            expect( shape ).toContain( '"as":"contract"' );
+            expect( shape ).toContain( '"in":"$$contract.status"' );
+            expect( shape ).toContain( '{"$unset":["statuses"]}' );
+
+            const formatted = formatAbstractQuery( pipeline, { format: 'allman' });
+            expect( formatted ).toContain( '"as": "contract"' );
+            expect( formatted ).toContain( '"in": "$$contract.status"' );
+            expect( formatted ).toContain( '"$unset": ["statuses"]' );
+        });
+    });
 });
