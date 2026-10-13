@@ -1,5 +1,6 @@
 import { analyzeExpression } from '../analyzer/expressions';
 import { isExactPath, isExactTopLevelPath, relatePaths } from '../analyzer/paths';
+import { arePathsDisjoint } from './path-disjoint';
 import {
     analyzeProjection,
     projectionVisibility,
@@ -132,42 +133,12 @@ export function parseAddFieldStage(
     };
 }
 
-function pathsArePairwiseDisjoint(
-    left: Iterable<string>,
-    right: Iterable<string>,
-): boolean
-{
-    for (const leftPath of left)
-    {
-        for (const rightPath of right)
-        {
-            if (relatePaths(leftPath, rightPath) !== 'disjoint')
-            {
-                return false;
-            }
-        }
-    }
-
-    return true;
-}
-
 export function dependenciesReadAnyPath(
     semantics: StageSemantics,
     paths: Iterable<string>,
 ): boolean
 {
-    for (const dependency of semantics.dependencies.local)
-    {
-        for (const path of paths)
-        {
-            if (relatePaths(dependency, path) !== 'disjoint')
-            {
-                return true;
-            }
-        }
-    }
-
-    return false;
+    return !arePathsDisjoint(semantics.dependencies.local, paths);
 }
 
 function writesCanSafelyMerge(
@@ -713,7 +684,7 @@ export function proveAddFieldDeferralAcrossSort(
         return false;
     }
 
-    return pathsArePairwiseDisjoint(source.semantics.writes, keys);
+    return arePathsDisjoint(source.semantics.writes, keys);
 }
 
 function prunableSourceFields(source: AddFieldStage): Set<string>
@@ -846,9 +817,9 @@ export function canContinuePastStage(
 
     return (
         !dependenciesReadAnyPath(semantics, live)
-        && pathsArePairwiseDisjoint(semantics.writes, live)
-        && pathsArePairwiseDisjoint(semantics.modifies, live)
-        && pathsArePairwiseDisjoint(semantics.removes, live)
+        && arePathsDisjoint(semantics.writes, live)
+        && arePathsDisjoint(semantics.modifies, live)
+        && arePathsDisjoint(semantics.removes, live)
     );
 }
 

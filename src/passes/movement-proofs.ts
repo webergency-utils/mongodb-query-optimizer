@@ -18,6 +18,7 @@ import {
     isMatchStage,
 } from './helpers.js';
 import { GuaranteeContext, DEFAULT_GUARANTEE_CONTEXT } from '../guarantees.js';
+import { arePathsDisjoint } from './path-disjoint';
 import
 {
     canMoveStageAcrossStage,
@@ -158,36 +159,9 @@ function isSafePassiveSummary(stage: StageSemantics): boolean
     );
 }
 
-function arePathsDisjoint(
-    left: Iterable<string>,
-    right: Iterable<string>,
-): boolean
-{
-    for (const leftPath of left)
-    {
-        for (const rightPath of right)
-        {
-            if (relatePaths(leftPath, rightPath) !== 'disjoint')
-            {
-                return false;
-            }
-        }
-    }
-
-    return true;
-}
-
 function pathOverlaps(path: string, effects: Iterable<string>): boolean
 {
-    for (const effect of effects)
-    {
-        if (relatePaths(path, effect) !== 'disjoint')
-        {
-            return true;
-        }
-    }
-
-    return false;
+    return !arePathsDisjoint([ path ], effects);
 }
 
 function extractDirectAliases(

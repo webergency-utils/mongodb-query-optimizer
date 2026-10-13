@@ -1,10 +1,12 @@
 import { analyzeExpression } from '../analyzer/expressions.js';
-import { relatePaths } from '../analyzer/paths.js';
 import { analyzeStage } from '../analyzer/semantics.js';
 import { GuaranteeContext } from '../guarantees.js';
 import { isPlainObject } from '../utils.js';
 import { isStageProvenErrorFree } from './guarantee-guards.js';
 import { getSingleStageEntry } from './helpers.js';
+import { arePathsDisjoint } from './path-disjoint.js';
+
+export { arePathsDisjoint };
 
 /**
  * Shared proof machinery for heuristic shadow-field rewrites.
@@ -28,25 +30,6 @@ export interface ShadowProviders
 {
     readonly computed : ReadonlyMap<string, ShadowComputedKey>;
     readonly rootKeys : readonly string[];
-}
-
-export function arePathsDisjoint(
-    left  : Iterable<string>,
-    right : Iterable<string>
-): boolean
-{
-    for( const leftPath of left )
-    {
-        for( const rightPath of right )
-        {
-            if( relatePaths( leftPath, rightPath ) !== 'disjoint' )
-            {
-                return false;
-            }
-        }
-    }
-
-    return true;
 }
 
 export function stageTouchesPaths( stage: unknown, paths: Iterable<string> ): boolean

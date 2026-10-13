@@ -1,10 +1,12 @@
 import { analyzeExpression } from '../analyzer/expressions.js';
-import { relatePaths } from '../analyzer/paths.js';
 import { analyzeStage } from '../analyzer/semantics.js';
 import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
 import { isPlainObject } from '../utils.js';
 import { canMoveStageAcrossStage } from './guarantee-guards.js';
 import { getSingleStageEntry } from './helpers.js';
+import { arePathsDisjoint } from './path-disjoint.js';
+
+export { arePathsDisjoint };
 
 export interface AddFieldPushdownProof
 {
@@ -19,25 +21,6 @@ const PASSIVE_PRECEDING_OPERATORS = new Set([
     '$lookup',
     '$unset'
 ]);
-
-export function arePathsDisjoint(
-    left  : Iterable<string>,
-    right : Iterable<string>
-): boolean
-{
-    for( const leftPath of left )
-    {
-        for( const rightPath of right )
-        {
-            if( relatePaths( leftPath, rightPath ) !== 'disjoint' )
-            {
-                return false;
-            }
-        }
-    }
-
-    return true;
-}
 
 export function canPushFieldAcrossStage(
     fieldKey           : string,

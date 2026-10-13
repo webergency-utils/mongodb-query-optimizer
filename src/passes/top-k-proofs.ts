@@ -3,10 +3,10 @@ import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
 import { isPlainObject } from '../utils.js';
 import { canMoveStageAcrossStage, pipelineReadsFieldOrder } from './guarantee-guards.js';
 import { getSingleStageEntry } from './helpers.js';
+import { arePathsDisjoint } from './path-disjoint.js';
 import
 {
     allocateShadowFieldName,
-    arePathsDisjoint,
     findShadowTargetIndex,
     rangeHasCostlyStage,
     resolveShadowProviders,
@@ -14,7 +14,8 @@ import
 }
 from './shadow-proofs.js';
 
-export { arePathsDisjoint, collectExpressionDependencies, isExpressionCompletelyDeterministic } from './shadow-proofs.js';
+export { arePathsDisjoint } from './path-disjoint.js';
+export { collectExpressionDependencies, isExpressionCompletelyDeterministic } from './shadow-proofs.js';
 
 export interface TopKPushdownProof
 {
