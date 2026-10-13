@@ -184,6 +184,8 @@ interface AbstractionContext
     readonly inPipeline?: boolean;
     readonly isIdentifier?: boolean;
     readonly isIndex?: boolean;
+    readonly isSortSpec?: boolean;
+    readonly isProjectionSpec?: boolean;
     readonly parentOperator?: string;
     readonly parentStage?: string;
 }
@@ -209,9 +211,22 @@ function toAbstractQueryInternal( query: unknown, context: AbstractionContext = 
         return '<string>';
     }
 
+    if( typeof query === 'boolean' )
+    {
+        if( context.isProjectionSpec )
+        {
+            return String( query );
+        }
+        return '<boolean>';
+    }
+
     if( typeof query === 'number' || typeof query === 'bigint' )
     {
-        if( context.isIndex )
+        if(
+            context.isIndex ||
+            ( context.isSortSpec && ( query === 1 || query === -1 )) ||
+            ( context.isProjectionSpec && ( query === 0 || query === 1 ))
+        )
         {
             return String( query );
         }
@@ -292,6 +307,12 @@ function toAbstractQueryInternal( query: unknown, context: AbstractionContext = 
                 continue;
             }
 
+            if(( key === '$limit' || key === '$skip' ) && typeof val === 'number' )
+            {
+                entries.push( `${ JSON.stringify( key ) }:${ String( val ) }` );
+                continue;
+            }
+
             let childContext: AbstractionContext = {
                 ...context,
                 isIdentifier: false,
@@ -299,38 +320,115 @@ function toAbstractQueryInternal( query: unknown, context: AbstractionContext = 
                 parentOperator: key.startsWith( '$' ) ? key : context.parentOperator
             };
 
-            if( context.inPipeline )
+            if( key.startsWith( '$' ))
             {
-                if( key === '$match' )
+                childContext = {
+                    ...childContext,
+                    isProjectionSpec: false,
+                    isSortSpec: false,
+                    isExpression: true,
+                    parentOperator: key
+                };
+
+                if( context.inPipeline )
                 {
-                    childContext = { inPipeline: true, isExpression: false, parentStage: '$match' };
+                    if( key === '$match' )
+                    {
+                        childContext = { inPipeline: true, isExpression: false, parentStage: '$match', parentOperator: '$match' };
+                    }
+                    else if( key === '$project' )
+                    {
+                        childContext = {
+                            inPipeline: true,
+                            isExpression: false,
+                            isProjectionSpec: true,
+                            parentStage: '$project',
+                            parentOperator: '$project'
+                        };
+                    }
+                    else if( key === '$sort' )
+                    {
+                        childContext = {
+                            inPipeline: true,
+                            isExpression: false,
+                            isSortSpec: true,
+                            parentStage: '$sort',
+                            parentOperator: '$sort'
+                        };
+                    }
+                    else
+                    {
+                        childContext = { inPipeline: true, isExpression: true, parentStage: key, parentOperator: key };
+                    }
                 }
-                else
+                else if( key === '$sort' )
                 {
-                    childContext = { inPipeline: true, isExpression: true, parentStage: key, parentOperator: key };
+                    childContext = { ...childContext, isExpression: false, isSortSpec: true, parentOperator: key };
+                }
+                else if( key === '$project' )
+                {
+                    childContext = { ...childContext, isExpression: false, isProjectionSpec: true, parentOperator: key };
+                }
+                else if(
+                    key === '$expr' ||
+                    key === '$map' ||
+                    key === '$filter' ||
+                    key === '$getField' ||
+                    key === '$setField' ||
+                    key === '$unsetField' ||
+                    key === '$cond' ||
+                    key === '$switch' ||
+                    key === '$arrayElemAt' ||
+                    key === '$slice' ||
+                    key === '$indexOfArray' ||
+                    key === '$indexOfCP' ||
+                    key === '$indexOfBytes' ||
+                    key === '$substrCP' ||
+                    key === '$substrBytes' ||
+                    key === '$substr' ||
+                    key === '$range'
+                )
+                {
+                    childContext = { ...childContext, isExpression: true, parentOperator: key };
                 }
             }
-            else if(
-                key === '$expr' ||
-                key === '$map' ||
-                key === '$filter' ||
-                key === '$getField' ||
-                key === '$setField' ||
-                key === '$unsetField' ||
-                key === '$cond' ||
-                key === '$switch' ||
-                key === '$arrayElemAt' ||
-                key === '$slice' ||
-                key === '$indexOfArray' ||
-                key === '$indexOfCP' ||
-                key === '$indexOfBytes' ||
-                key === '$substrCP' ||
-                key === '$substrBytes' ||
-                key === '$substr' ||
-                key === '$range'
-            )
+
+            if( key === 'sortBy' )
             {
-                childContext = { ...childContext, isExpression: true, parentOperator: key };
+                childContext = { ...childContext, isSortSpec: true };
+            }
+
+            const COUNT_LIMIT_OPERATORS = new Set([
+                '$firstN', '$lastN', '$topN', '$bottomN', '$maxN', '$minN'
+            ]);
+            if( key === 'n' && (
+                COUNT_LIMIT_OPERATORS.has( context.parentOperator ?? '' ) ||
+                COUNT_LIMIT_OPERATORS.has( context.parentStage ?? '' )
+            ))
+            {
+                childContext = { ...childContext, isIndex: true };
+            }
+
+            if( key === 'size' && ( context.parentStage === '$sample' || context.parentOperator === '$sample' ))
+            {
+                childContext = { ...childContext, isIndex: true };
+            }
+
+            if( key === 'format' && context.parentOperator === '$dateToString' )
+            {
+                childContext = { ...childContext, isIdentifier: true };
+            }
+            else if( key === 'unit' && ( context.parentOperator ?? '' ).startsWith( '$date' ))
+            {
+                childContext = { ...childContext, isIdentifier: true };
+            }
+            else if( key === 'binSize' && ( context.parentOperator ?? '' ).startsWith( '$date' ))
+            {
+                childContext = { ...childContext, isIndex: true };
+            }
+            else if( key === 'options' && ( context.parentOperator ?? '' ).startsWith( '$regex' ))
+            {
+                childContext = { ...childContext, isIdentifier: true };
             }
 
             if( key === '$arrayElemAt' && Array.isArray( val ))

@@ -45,6 +45,14 @@ const optimizedFilter = optimizeFilter({
 
 // Result:
 // { age: 30, tags: 'mongodb', active: true }
+
+// 3. Generate canonical abstract query shapes and pretty-print in Allman style
+import { formatAbstractQuery, toAbstractQuery } from '@webergency-utils/mongodb-query-optimizer';
+
+const shape = toAbstractQuery(optimizedPipeline);
+// '[{"$match":{"status":<string>,"tenantId":<string>}},{"$project":{"email":1,"name":1}}]'
+
+const formatted = formatAbstractQuery(shape, { format: 'allman' });
 ```
 
 ## Installation & Setup
@@ -149,6 +157,8 @@ In MongoDB, `{ tags: { $gt: 5, $lt: 10 } }` requires a single array element to s
 
 - **`optimizePipeline`**: Public entry point that executes fixed-point pipeline optimization passes.
 - **`optimizeFilter`**: Public entry point that normalizes query filter expressions.
+- **`toAbstractQuery`**: Generates a canonical, whitespace-free abstract query shape with type tags, commutative sorting, and preserved structural identifiers.
+- **`formatAbstractQuery`**: Formats an abstract query shape or raw query AST into an indented, human-readable string in Allman or same-line bracket style.
 - **`getStageInfo`**: AST analyzer utility returning metadata and field dependencies for any pipeline stage.
 - **`StageSemantics`**: Immutable representation of paths read, written, preserved, or removed by a stage.
 - **`FilterRule`**: An atomic rule for simplifying a specific BSON filter pattern.
@@ -214,6 +224,93 @@ const filter = {
 
 const optimized = optimizeFilter(filter);
 // { status: 'pending', tags: 'urgent' }
+```
+
+---
+
+### `toAbstractQuery(query: unknown, options?: ToAbstractQueryOptions): string`
+
+Generates a canonical, whitespace-free abstract query shape for query classification, caching, and execution fingerprinting.
+
+Replaces literal runtime data with unquoted type placeholders (`<string>`, `<number>`, `<boolean>`, `<Date>`, `<ObjectId>`, `<RegExp>`, `<Binary>`, `<Timestamp>`, `<MinKey>`, `<MaxKey>`), collapses literal arrays into sorted unique type sets, deterministically sorts object keys and commutative logical operator branches (`$or`, `$and`, `$nor`), while preserving variable names (`as`, `$$`), schema field paths (`$unset`, `$getField`), positional indexes (`$arrayElemAt`, `$slice`, `$range`), sort directions (`1`, `-1`), projection flags (`1`, `0`, `true`, `false`), and limit counts (`$limit`, `$skip`, `n`).
+
+#### Parameters
+- `query` (`unknown`, required): A MongoDB filter document or aggregation pipeline array.
+- `options` (`ToAbstractQueryOptions`, optional): Configuration options (reserved for future extensions).
+
+#### Returns
+- `string`: A deterministic, whitespace-free canonical JSON-like shape string.
+
+#### Code Example
+```typescript
+import { toAbstractQuery } from '@webergency-utils/mongodb-query-optimizer';
+
+const query = {
+    $match: {
+        status: 'active',
+        tags: { $in: ['urgent', 'high-priority'] },
+        score: { $gt: 90 }
+    }
+};
+
+const shape = toAbstractQuery(query);
+// '{"$match":{"score":{"$gt":<number>},"status":<string>,"tags":{"$in":[<string>]}}}'
+```
+
+---
+
+### `formatAbstractQuery(queryOrShape: unknown, options?: FormatAbstractQueryOptions): string`
+
+Formats an abstract query shape or a raw MongoDB query AST into an indented, human-readable string.
+
+#### Parameters
+- `queryOrShape` (`unknown`, required): A query object, aggregation pipeline, or a pre-generated abstract shape string.
+- `options` (`FormatAbstractQueryOptions`, optional):
+  - `format` (`'allman' | 'same-line'`, default: `'same-line'`): Bracket placement style. `'allman'` places opening brackets on their own line.
+  - `tabSize` (`number`, default: `2`): Indentation spaces per level.
+
+#### Returns
+- `string`: An indented, human-readable query string.
+
+#### Code Example
+```typescript
+import { formatAbstractQuery } from '@webergency-utils/mongodb-query-optimizer';
+
+const pipeline = [
+    { $match: { deleted: { $ne: true } } },
+    { $project: { _id: 0, name: 1 } },
+    { $sort: { name: 1 } },
+    { $limit: 10 }
+];
+
+console.log(formatAbstractQuery(pipeline, { format: 'allman', tabSize: 2 }));
+// [
+//   {
+//     "$match":
+//     {
+//       "deleted":
+//       {
+//         "$ne": <boolean>
+//       }
+//     }
+//   },
+//   {
+//     "$project":
+//     {
+//       "_id": 0,
+//       "name": 1
+//     }
+//   },
+//   {
+//     "$sort":
+//     {
+//       "name": 1
+//     }
+//   },
+//   {
+//     "$limit": 10
+//   }
+// ]
 ```
 
 ---

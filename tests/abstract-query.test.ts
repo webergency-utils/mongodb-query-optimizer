@@ -546,5 +546,146 @@ describe( 'abstract query shape generator and pretty printer', () =>
             expect( sameLine ).toContain( '"$arrayElemAt": ["$contracts", 0]' );
         });
     });
+
+    describe( 'structural query operators: sort, projection, limits, and date specs', () =>
+    {
+        it( 'preserves sort directions (1 and -1) in $sort and sortBy', () =>
+        {
+            const sortStage = {
+                $sort: {
+                    createdAt: -1,
+                    _id: 1
+                }
+            };
+            expect( toAbstractQuery( sortStage )).toBe( '{"$sort":{"_id":1,"createdAt":-1}}' );
+
+            const sortArrayExpr = {
+                $sortArray: {
+                    input: '$contracts',
+                    sortBy: {
+                        'employment.start': -1,
+                        tier: 1
+                    }
+                }
+            };
+            expect( toAbstractQuery( sortArrayExpr )).toBe(
+                '{"$sortArray":{"input":"$contracts","sortBy":{"employment.start":-1,"tier":1}}}'
+            );
+        });
+
+        it( 'preserves projection inclusion and exclusion flags (1, 0, true, false)', () =>
+        {
+            const projNumeric = {
+                $project: {
+                    _id: 0,
+                    name: 1,
+                    email: 1
+                }
+            };
+            expect( toAbstractQuery( projNumeric )).toBe( '{"$project":{"_id":0,"email":1,"name":1}}' );
+
+            const projBoolean = {
+                $project: {
+                    _id: false,
+                    active: true
+                }
+            };
+            expect( toAbstractQuery( projBoolean )).toBe( '{"$project":{"_id":false,"active":true}}' );
+
+            const projWithExpression = {
+                $project: {
+                    _id: 0,
+                    fullName: {
+                        $concat: [ '$first', ' ', '$last' ]
+                    },
+                    status: 1
+                }
+            };
+            expect( toAbstractQuery( projWithExpression )).toBe(
+                '{"$project":{"_id":0,"fullName":{"$concat":["$first","$last",<string>]},"status":1}}'
+            );
+        });
+
+        it( 'preserves exact numbers in $limit and $skip', () =>
+        {
+            const paginationPipeline = [
+                { $skip: 10 },
+                { $limit: 25 }
+            ];
+            expect( toAbstractQuery( paginationPipeline )).toBe( '[{"$skip":10},{"$limit":25}]' );
+
+            const singleLimit = { $limit: 50 };
+            expect( toAbstractQuery( singleLimit )).toBe( '{"$limit":50}' );
+        });
+
+        it( 'preserves n count limits in window and accumulator operators ($firstN, $topN)', () =>
+        {
+            const firstN = {
+                $firstN: {
+                    input: '$items',
+                    n: 5
+                }
+            };
+            expect( toAbstractQuery( firstN )).toBe( '{"$firstN":{"input":"$items","n":5}}' );
+
+            const topN = {
+                $topN: {
+                    n: 3,
+                    sortBy: { score: -1 },
+                    output: '$name'
+                }
+            };
+            expect( toAbstractQuery( topN )).toBe( '{"$topN":{"n":3,"output":"$name","sortBy":{"score":-1}}}' );
+        });
+
+        it( 'preserves date unit enums and format strings in date operators', () =>
+        {
+            const dateToString = {
+                $dateToString: {
+                    format: '%Y-%m-%d',
+                    date: '$createdAt'
+                }
+            };
+            expect( toAbstractQuery( dateToString )).toBe(
+                '{"$dateToString":{"date":"$createdAt","format":"%Y-%m-%d"}}'
+            );
+
+            const dateTrunc = {
+                $dateTrunc: {
+                    date: '$createdAt',
+                    unit: 'day',
+                    binSize: 1
+                }
+            };
+            expect( toAbstractQuery( dateTrunc )).toBe(
+                '{"$dateTrunc":{"binSize":1,"date":"$createdAt","unit":"day"}}'
+            );
+        });
+
+        it( 'formats pipeline with sort, projection, and limit in Allman style', () =>
+        {
+            const pipeline = [
+                {
+                    $project: {
+                        _id: 0,
+                        name: 1
+                    }
+                },
+                {
+                    $sort: {
+                        name: 1
+                    }
+                },
+                {
+                    $limit: 10
+                }
+            ];
+
+            const formatted = formatAbstractQuery( pipeline, { format: 'allman' });
+            expect( formatted ).toContain( '"$limit": 10' );
+            expect( formatted ).toContain( '"_id": 0' );
+            expect( formatted ).toContain( '"name": 1' );
+        });
+    });
 });
 
