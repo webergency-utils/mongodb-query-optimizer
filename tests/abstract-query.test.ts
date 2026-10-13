@@ -412,4 +412,139 @@ describe( 'abstract query shape generator and pretty printer', () =>
             expect( formatted ).toContain( '"$unset": ["statuses"]' );
         });
     });
+
+    describe( 'array and string index preservation', () =>
+    {
+        it( 'preserves integer indexes in $arrayElemAt for both head and tail access', () =>
+        {
+            const headAccess = {
+                $arrayElemAt: [ '$contracts', 0 ]
+            };
+            expect( toAbstractQuery( headAccess )).toBe( '{"$arrayElemAt":["$contracts",0]}' );
+
+            const tailAccess = {
+                $arrayElemAt: [ '$contracts', -1 ]
+            };
+            expect( toAbstractQuery( tailAccess )).toBe( '{"$arrayElemAt":["$contracts",-1]}' );
+
+            const specificIndex = {
+                $arrayElemAt: [ '$contracts', 2 ]
+            };
+            expect( toAbstractQuery( specificIndex )).toBe( '{"$arrayElemAt":["$contracts",2]}' );
+
+            const nestedExpr = {
+                $arrayElemAt: [
+                    {
+                        $filter: {
+                            input: '$contracts',
+                            as: 'c',
+                            cond: { $eq: [ '$$c.active', true ] }
+                        }
+                    },
+                    0
+                ]
+            };
+            expect( toAbstractQuery( nestedExpr )).toBe(
+                '{"$arrayElemAt":[{"$filter":{"as":"c","cond":{"$eq":["$$c.active",<boolean>]},"input":"$contracts"}},0]}'
+            );
+        });
+
+        it( 'preserves slice counts and offsets in aggregation $slice', () =>
+        {
+            const sliceCount = {
+                $slice: [ '$contracts', 5 ]
+            };
+            expect( toAbstractQuery( sliceCount )).toBe( '{"$slice":["$contracts",5]}' );
+
+            const sliceNegative = {
+                $slice: [ '$contracts', -1 ]
+            };
+            expect( toAbstractQuery( sliceNegative )).toBe( '{"$slice":["$contracts",-1]}' );
+
+            const sliceOffsetAndCount = {
+                $slice: [ '$contracts', 0, 10 ]
+            };
+            expect( toAbstractQuery( sliceOffsetAndCount )).toBe( '{"$slice":["$contracts",0,10]}' );
+        });
+
+        it( 'preserves slice limits and bounds in projection $slice', () =>
+        {
+            const projSliceInt = {
+                comments: { $slice: 5 }
+            };
+            expect( toAbstractQuery( projSliceInt )).toBe( '{"comments":{"$slice":5}}' );
+
+            const projSliceNegative = {
+                comments: { $slice: -5 }
+            };
+            expect( toAbstractQuery( projSliceNegative )).toBe( '{"comments":{"$slice":-5}}' );
+
+            const projSliceArray = {
+                comments: { $slice: [ 20, 10 ] }
+            };
+            expect( toAbstractQuery( projSliceArray )).toBe( '{"comments":{"$slice":[20,10]}}' );
+        });
+
+        it( 'preserves start and end index bounds in $indexOfArray', () =>
+        {
+            const indexOfSimple = {
+                $indexOfArray: [ '$tags', 'admin' ]
+            };
+            expect( toAbstractQuery( indexOfSimple )).toBe( '{"$indexOfArray":["$tags",<string>]}' );
+
+            const indexOfWithStart = {
+                $indexOfArray: [ '$tags', 'admin', 0 ]
+            };
+            expect( toAbstractQuery( indexOfWithStart )).toBe( '{"$indexOfArray":["$tags",<string>,0]}' );
+
+            const indexOfWithBounds = {
+                $indexOfArray: [ '$tags', 'admin', 1, 10 ]
+            };
+            expect( toAbstractQuery( indexOfWithBounds )).toBe( '{"$indexOfArray":["$tags",<string>,1,10]}' );
+        });
+
+        it( 'preserves string slice and index offsets in $substrCP and $indexOfCP', () =>
+        {
+            const substr = {
+                $substrCP: [ '$createdAt', 0, 10 ]
+            };
+            expect( toAbstractQuery( substr )).toBe( '{"$substrCP":["$createdAt",0,10]}' );
+
+            const indexOfCP = {
+                $indexOfCP: [ '$name', 'Doe', 0, 50 ]
+            };
+            expect( toAbstractQuery( indexOfCP )).toBe( '{"$indexOfCP":["$name",<string>,0,50]}' );
+        });
+
+        it( 'preserves integer boundaries and steps in $range', () =>
+        {
+            const literalRange = {
+                $range: [ 0, 10, 1 ]
+            };
+            expect( toAbstractQuery( literalRange )).toBe( '{"$range":[0,10,1]}' );
+
+            const exprRange = {
+                $range: [ 0, { $size: '$contracts' }, 1 ]
+            };
+            expect( toAbstractQuery( exprRange )).toBe( '{"$range":[0,{"$size":"$contracts"},1]}' );
+        });
+
+        it( 'formats abstract query with $arrayElemAt in Allman and same-line styles', () =>
+        {
+            const query = {
+                $addFields: {
+                    latestContract: {
+                        $arrayElemAt: [ '$contracts', 0 ]
+                    }
+                }
+            };
+
+            const allman = formatAbstractQuery( query, { format: 'allman' });
+            expect( allman ).toContain( '"$arrayElemAt": ["$contracts", 0]' );
+
+            const sameLine = formatAbstractQuery( query, { format: 'same-line' });
+            expect( sameLine ).toContain( '"$arrayElemAt": ["$contracts", 0]' );
+        });
+    });
 });
+

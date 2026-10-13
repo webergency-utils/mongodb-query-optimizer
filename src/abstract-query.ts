@@ -183,6 +183,7 @@ interface AbstractionContext
     readonly isExpression?: boolean;
     readonly inPipeline?: boolean;
     readonly isIdentifier?: boolean;
+    readonly isIndex?: boolean;
     readonly parentOperator?: string;
     readonly parentStage?: string;
 }
@@ -206,6 +207,15 @@ function toAbstractQueryInternal( query: unknown, context: AbstractionContext = 
             return JSON.stringify( query );
         }
         return '<string>';
+    }
+
+    if( typeof query === 'number' || typeof query === 'bigint' )
+    {
+        if( context.isIndex )
+        {
+            return String( query );
+        }
+        return '<number>';
     }
 
     if( isScalarLiteral( query ))
@@ -285,6 +295,7 @@ function toAbstractQueryInternal( query: unknown, context: AbstractionContext = 
             let childContext: AbstractionContext = {
                 ...context,
                 isIdentifier: false,
+                isIndex: false,
                 parentOperator: key.startsWith( '$' ) ? key : context.parentOperator
             };
 
@@ -299,9 +310,161 @@ function toAbstractQueryInternal( query: unknown, context: AbstractionContext = 
                     childContext = { inPipeline: true, isExpression: true, parentStage: key, parentOperator: key };
                 }
             }
-            else if( key === '$expr' || key === '$map' || key === '$filter' || key === '$getField' || key === '$setField' || key === '$unsetField' || key === '$cond' || key === '$switch' )
+            else if(
+                key === '$expr' ||
+                key === '$map' ||
+                key === '$filter' ||
+                key === '$getField' ||
+                key === '$setField' ||
+                key === '$unsetField' ||
+                key === '$cond' ||
+                key === '$switch' ||
+                key === '$arrayElemAt' ||
+                key === '$slice' ||
+                key === '$indexOfArray' ||
+                key === '$indexOfCP' ||
+                key === '$indexOfBytes' ||
+                key === '$substrCP' ||
+                key === '$substrBytes' ||
+                key === '$substr' ||
+                key === '$range'
+            )
             {
                 childContext = { ...childContext, isExpression: true, parentOperator: key };
+            }
+
+            if( key === '$arrayElemAt' && Array.isArray( val ))
+            {
+                const exprContext: AbstractionContext = {
+                    ...childContext,
+                    isExpression: true,
+                    parentOperator: key
+                };
+                const elements = val.map(( elem, idx ) =>
+                {
+                    if( idx === 1 && typeof elem === 'number' )
+                    {
+                        return String( elem );
+                    }
+                    return toAbstractQueryInternal( elem, {
+                        ...exprContext,
+                        isIndex: idx === 1
+                    });
+                });
+                entries.push( `${ JSON.stringify( key ) }:[${ elements.join( ',' ) }]` );
+                continue;
+            }
+
+            if( key === '$slice' )
+            {
+                if( typeof val === 'number' )
+                {
+                    entries.push( `${ JSON.stringify( key ) }:${ String( val ) }` );
+                    continue;
+                }
+
+                if( Array.isArray( val ))
+                {
+                    const isProjectionSlice = val.length === 2 && typeof val[ 0 ] === 'number' && typeof val[ 1 ] === 'number';
+                    const exprContext: AbstractionContext = {
+                        ...childContext,
+                        isExpression: true,
+                        parentOperator: key
+                    };
+                    const elements = val.map(( elem, idx ) =>
+                    {
+                        if( isProjectionSlice )
+                        {
+                            return typeof elem === 'number'
+                                ? String( elem )
+                                : toAbstractQueryInternal( elem, { ...exprContext, isIndex: true });
+                        }
+
+                        if( idx > 0 && typeof elem === 'number' )
+                        {
+                            return String( elem );
+                        }
+                        return toAbstractQueryInternal( elem, { ...exprContext, isIndex: idx > 0 });
+                    });
+                    entries.push( `${ JSON.stringify( key ) }:[${ elements.join( ',' ) }]` );
+                    continue;
+                }
+            }
+
+            if( key === '$indexOfArray' && Array.isArray( val ))
+            {
+                const exprContext: AbstractionContext = {
+                    ...childContext,
+                    isExpression: true,
+                    parentOperator: key
+                };
+                const elements = val.map(( elem, idx ) =>
+                {
+                    if( idx >= 2 && typeof elem === 'number' )
+                    {
+                        return String( elem );
+                    }
+                    return toAbstractQueryInternal( elem, { ...exprContext, isIndex: idx >= 2 });
+                });
+                entries.push( `${ JSON.stringify( key ) }:[${ elements.join( ',' ) }]` );
+                continue;
+            }
+
+            if(( key === '$indexOfCP' || key === '$indexOfBytes' ) && Array.isArray( val ))
+            {
+                const exprContext: AbstractionContext = {
+                    ...childContext,
+                    isExpression: true,
+                    parentOperator: key
+                };
+                const elements = val.map(( elem, idx ) =>
+                {
+                    if( idx >= 2 && typeof elem === 'number' )
+                    {
+                        return String( elem );
+                    }
+                    return toAbstractQueryInternal( elem, { ...exprContext, isIndex: idx >= 2 });
+                });
+                entries.push( `${ JSON.stringify( key ) }:[${ elements.join( ',' ) }]` );
+                continue;
+            }
+
+            if(( key === '$substrCP' || key === '$substrBytes' || key === '$substr' ) && Array.isArray( val ))
+            {
+                const exprContext: AbstractionContext = {
+                    ...childContext,
+                    isExpression: true,
+                    parentOperator: key
+                };
+                const elements = val.map(( elem, idx ) =>
+                {
+                    if( idx >= 1 && typeof elem === 'number' )
+                    {
+                        return String( elem );
+                    }
+                    return toAbstractQueryInternal( elem, { ...exprContext, isIndex: idx >= 1 });
+                });
+                entries.push( `${ JSON.stringify( key ) }:[${ elements.join( ',' ) }]` );
+                continue;
+            }
+
+            if( key === '$range' && Array.isArray( val ))
+            {
+                const exprContext: AbstractionContext = {
+                    ...childContext,
+                    isExpression: true,
+                    parentOperator: key
+                };
+                const elements = val.map(( elem ) =>
+                {
+                    if( typeof elem === 'number' )
+                    {
+                        return String( elem );
+                    }
+                    return toAbstractQueryInternal( elem, { ...exprContext, isIndex: true });
+                });
+                entries.push( `${ JSON.stringify( key ) }:[${ elements.join( ',' ) }]` );
+                continue;
             }
 
             if( key === 'as' && (

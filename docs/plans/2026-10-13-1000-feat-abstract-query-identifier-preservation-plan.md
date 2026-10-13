@@ -35,6 +35,8 @@ However, in expressions like `$map: { input: "$contracts", as: "contract", in: "
   *(session-settled: user-approved — chosen over abstracting all string arguments: keeps schema field definitions intact while preserving data abstraction)*. Governs R4, R6, R7.
 - **KD3 (Deterministic sorting for `$unset` arrays):** Arrays of field names in `$unset` must be sorted alphabetically to guarantee canonical shape equality regardless of input order. Governs R5.
 - **KD4 (Runtime data values remain `<string>`):** Literal strings in equality comparisons, `$match` filters, `$switch.then`, `$switch.default`, and collection names (`from`, `coll`) remain abstracted to `<string>`. Governs R8.
+- **KD5 (Positional index and slice bound preservation):** Literal integer arguments denoting array element positions or slice boundaries (in `$arrayElemAt`, `$slice`, `$indexOfArray`, `$substrCP`/`$substrBytes`/`$substr`, `$indexOfCP`/`$indexOfBytes`, and `$range`) must be preserved verbatim without deduplication or reordering.
+  *(session-settled: user-directed via interactive consultation — chosen over `<number>` abstraction: array/string indexes denote query structure and access positions, such as head/tail element access)*. Governs R9, R10, R11, R12, R13.
 
 ### Requirements
 
@@ -51,17 +53,26 @@ However, in expressions like `$map: { input: "$contracts", as: "contract", in: "
 - R6. The generator MUST preserve string values assigned to `"field"` in `$getField`, `$setField`, and `$unsetField` expressions verbatim as JSON string literals.
 - R7. The generator MUST preserve string values in `"field"` and `"partitionByFields"` properties in `$densify` and `$fill` stages verbatim.
 
+#### Array & String Index Preservation
+
+- R9. The generator MUST preserve literal integer indexes in `$arrayElemAt` expressions (e.g. `0`, `-1`, `2`) and preserve strict positional argument order.
+- R10. The generator MUST preserve literal integer slice counts and offsets in aggregation and projection `$slice` expressions (e.g. `5`, `-1`, `[20, 10]`, `[ "$contracts", 0, 10 ]`).
+- R11. The generator MUST preserve literal integer start and end index bounds in `$indexOfArray` expressions.
+- R12. The generator MUST preserve literal integer start and length/end bounds in string slicing and indexing expressions (`$substrCP`, `$substrBytes`, `$substr`, `$indexOfCP`, `$indexOfBytes`).
+- R13. The generator MUST preserve literal integer boundaries and step increments in `$range` expressions.
+
 #### Formatter & Integration
 
-- R8. The formatter `formatAbstractQuery` MUST format preserved identifier string literals verbatim with proper JSON string quotes and indentation in both `'allman'` and `'same-line'` modes.
+- R8. The formatter `formatAbstractQuery` MUST format preserved identifier string literals and integer indexes verbatim with proper JSON string quotes/formatting and indentation in both `'allman'` and `'same-line'` modes.
 
 ### Scope Boundaries
 
 - **In Scope:**
   - Preserving variable bindings: `$map.as`, `$filter.as`, `$lookup.as`, `$graphLookup.as`, `$unwind.includeArrayIndex`.
   - Preserving schema field references: `$unset` field paths, `$getField.field`, `$setField.field`, `$unsetField.field`, `$densify.field`/`partitionByFields`, `$fill.field`/`partitionByFields`.
+  - Preserving array and string positional indexes: `$arrayElemAt`, `$slice`, `$indexOfArray`, `$substrCP`/`$substrBytes`/`$substr`, `$indexOfCP`/`$indexOfBytes`, `$range`.
   - Canonical alphabetical sorting of `$unset` field arrays.
-  - Multi-style formatting support for preserved identifiers.
+  - Multi-style formatting support for preserved identifiers and indexes.
 - **Out of Scope:**
   - Collection names in `$lookup.from`, `$unionWith.coll`, `$out`, and `$merge` (remain abstracted to `<string>`).
   - Literal data values in comparisons or stage payloads (remain abstracted to `<string>`).
@@ -80,6 +91,12 @@ However, in expressions like `$map: { input: "$contracts", as: "contract", in: "
   - **Steps:** `toAbstractQuery` identifies `$unset` stage; preserves field names verbatim; sorts array elements alphabetically.
   - **Outcome:** Canonical shape outputs `{"$unset":["statuses","temp"]}` or `{"$unset":"statuses"}`.
   - **Covers:** R4, R5, R8.
+
+- F3. Positional element access via `$arrayElemAt` and `$slice`:
+  - **Trigger:** Pipeline accesses the head or tail of an array via `$arrayElemAt: ["$contracts", 0]` or `$slice: ["$contracts", 0, 10]`.
+  - **Steps:** `toAbstractQuery` preserves literal integer indexes (`0`, `-1`, `10`) without `<number>` abstraction; preserves positional order.
+  - **Outcome:** Generated shape outputs `{"$arrayElemAt":["$contracts",0]}` or `{"$slice":["$contracts",0,10]}`.
+  - **Covers:** R9, R10, R8.
 
 ### Acceptance Examples
 
@@ -113,9 +130,33 @@ However, in expressions like `$map: { input: "$contracts", as: "contract", in: "
   - **Then:** Shape is `{"$getField":{"field":"zip","input":"$address"}}`.
   - **Covers:** R6.
 
+- AE6. Array element access preservation:
+  - **Given:** `{ $arrayElemAt: ["$contracts", 0] }` and `{ $arrayElemAt: ["$contracts", -1] }`
+  - **When:** `toAbstractQuery` is called.
+  - **Then:** Shapes are `{"$arrayElemAt":["$contracts",0]}` and `{"$arrayElemAt":["$contracts",-1]}`.
+  - **Covers:** R9.
+
+- AE7. Array and projection slicing:
+  - **Given:** `{ $slice: ["$contracts", 0, 10] }` and `{ comments: { $slice: [20, 10] } }`
+  - **When:** `toAbstractQuery` is called.
+  - **Then:** Shapes are `{"$slice":["$contracts",0,10]}` and `{"comments":{"$slice":[20,10]}}`.
+  - **Covers:** R10.
+
+- AE8. Array search bounds:
+  - **Given:** `{ $indexOfArray: ["$items", "admin", 0, 10] }`
+  - **When:** `toAbstractQuery` is called.
+  - **Then:** Shape is `{"$indexOfArray":["$items",<string>,0,10]}`.
+  - **Covers:** R11.
+
+- AE9. String slicing and range generation:
+  - **Given:** `{ $substrCP: ["$createdAt", 0, 10] }` and `{ $range: [0, 10, 1] }`
+  - **When:** `toAbstractQuery` is called.
+  - **Then:** Shapes are `{"$substrCP":["$createdAt",0,10]}` and `{"$range":[0,10,1]}`.
+  - **Covers:** R12, R13.
+
 ### Outstanding Questions
 
-None. All product questions were settled during Phase 1.3 collaborative dialogue.
+None. Settled via interactive user consultation.
 
 ---
 
