@@ -306,36 +306,56 @@ describe('lookup delay proofs', () =>
 
 describe('lookup delay', () =>
 {
-    it('keeps pipeline-form lookup contained', () =>
+    it('delays deterministic pipeline-form and correlated lookup past sort', () =>
     {
-        const pipeline = [
-            {
-                $lookup: {
-                    ...makeLookup().$lookup,
-                    pipeline: [],
-                },
+        const correlatedLookup = {
+            $lookup: {
+                ...makeLookup().$lookup,
+                pipeline: [],
             },
-            { $sort: { score: -1 } },
-        ];
+        };
+        const pipelineLookup = {
+            $lookup: {
+                from: 'orders',
+                let: { cid: '$customerId' },
+                pipeline: [
+                    { $match: { $expr: { $eq: ['$customerId', '$$cid'] } } },
+                ],
+                as: 'orders',
+            },
+        };
 
         expect(optimizePipelineWithCandidateProfile(
-            pipeline,
+            [correlatedLookup, { $sort: { score: -1 } }],
             LOOKUP_DELAY,
             [],
-        )).toEqual(pipeline);
+        )).toEqual([
+            { $sort: { score: -1 } },
+            correlatedLookup,
+        ]);
+        expect(optimizePipelineWithCandidateProfile(
+            [pipelineLookup, { $sort: { score: -1 } }],
+            LOOKUP_DELAY,
+            [],
+        )).toEqual([
+            { $sort: { score: -1 } },
+            pipelineLookup,
+        ]);
     });
 
-    it('keeps malformed and extended lookup forms contained', () =>
+    it('keeps malformed, volatile, and extended lookup forms contained', () =>
     {
         const invalidSpecifications = [
             { from: 'orders', foreignField: 'customerId', as: 'orders' },
+            { from: 'orders', as: 'orders' },
             { ...makeLookup().$lookup, from: '' },
             { ...makeLookup().$lookup, localField: '' },
             { ...makeLookup().$lookup, foreignField: '' },
             { ...makeLookup().$lookup, as: '' },
             { ...makeLookup().$lookup, from: 1 },
             { ...makeLookup().$lookup, let: { id: '$customerId' } },
-            { ...makeLookup().$lookup, pipeline: [] },
+            { ...makeLookup().$lookup, pipeline: 'invalid' },
+            { ...makeLookup().$lookup, pipeline: [{ $sample: { size: 1 } }] },
             { ...makeLookup().$lookup, extraOption: true },
         ];
 
@@ -1087,6 +1107,32 @@ describe('proveLookupMatchSplit', () =>
             },
         });
     });
+
+    it('refuses splitting match across error-prone pipeline lookup under strictErrors', () =>
+    {
+        const lookupWithError = {
+            $lookup: {
+                from: 'orders',
+                as: 'orders',
+                pipeline: [
+                    { $addFields: { parsed: { $toInt: '$str' } } },
+                ],
+            },
+        };
+        const match = {
+            $match: {
+                status: 'active',
+                'orders.total': { $gt: 100 },
+            },
+        };
+
+        expect(proveLookupMatchSplit(
+            lookupWithError,
+            match,
+            { strictErrors: true, strictFieldOrder: false },
+        )).toBeNull();
+        expect(proveLookupMatchSplit(lookupWithError, match)).not.toBeNull();
+    });
 });
 
 describe('proveLookupSubpipelinePushdown', () =>
@@ -1384,7 +1430,7 @@ describe('LookupDelayPass mixed match splitting and subpipeline pushdown', () =>
         ]);
     });
 
-    it('pushes filter into subpipeline when match stage precedes unwind and leaves residual', () =>
+    it('splits disjoint conjuncts before lookup and pushes alias filter into subpipeline when match precedes unwind', () =>
     {
         const pipeline = [
             {
@@ -1396,8 +1442,11 @@ describe('LookupDelayPass mixed match splitting and subpipeline pushdown', () =>
             },
             {
                 $match: {
-                    orders: { $elemMatch: { status: 'completed' } },
-                    country: 'US',
+                    $and: [
+                        { orders: { $elemMatch: { status: 'completed' } } },
+                        { orders: { $size: 1 } },
+                        { country: 'US' },
+                    ],
                 },
             },
             { $unwind: '$orders' },
@@ -1405,6 +1454,7 @@ describe('LookupDelayPass mixed match splitting and subpipeline pushdown', () =>
 
         const result = pass.execute(pipeline);
         expect(result).toEqual([
+            { $match: { country: 'US' } },
             {
                 $lookup: {
                     from: 'orders',
@@ -1412,7 +1462,7 @@ describe('LookupDelayPass mixed match splitting and subpipeline pushdown', () =>
                     pipeline: [{ $match: { status: 'completed' } }],
                 },
             },
-            { $match: { country: 'US' } },
+            { $match: { orders: { $size: 1 } } },
             { $unwind: '$orders' },
         ]);
     });

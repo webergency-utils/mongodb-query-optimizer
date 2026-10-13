@@ -480,7 +480,7 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'feat-covered-projection-synthesis-oracle',
         {
             status: 'active',
-            proofRecheckNote: 'Proof audited: inserts an inclusion projection before a collapsing stage for fields that stage reads, including a resolved variable or plain field copy. An unresolved name blocks the rewrite. Unknown errors block it even when strictErrors is false. Final key order comes from the collapsing stage, so strictFieldOrder does not skip it.',
+            proofRecheckNote: 'Proof audited: inserts an inclusion projection before a collapsing stage for fields that stage reads, including a resolved variable or plain field copy, and trims row-count-neutral prefixes before $count and zero-dependency $group stages under strictErrors: false. Unknown errors block synthesis even when strictErrors is false.',
             mixedShapeCaseIds: {
                 default: 'mixed-shape-covered-projection-synthesis',
                 strictFieldOrder: 'mixed-shape-covered-projection-synthesis',
@@ -497,7 +497,7 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'feat-dead-assignment-elimination-oracle',
         {
             status: 'active',
-            proofRecheckNote: 'Proof audited: removes an exact top-level assignment only after a later drop and no resolved read, including a plain copy or bound variable. An unresolved name blocks the rewrite. Throwing assignments stay even when strictErrors is false. strictFieldOrder refuses a removal that would move a surviving key.',
+            proofRecheckNote: 'Proof audited: removes exact top-level $addFields/$set assignments, computed inclusion $project fields, and redundant $unset specifications after a later drop and no resolved read. Throwing assignments are preserved under strictErrors: true and pruned under strictErrors: false. strictFieldOrder refuses a removal that would move a surviving key.',
             mixedShapeCaseIds: {
                 default: 'mixed-shape-dead-assignment-elimination',
                 strictFieldOrder: 'mixed-shape-dead-assignment-elimination',
@@ -548,7 +548,7 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'u7-lookup-delay-match-error-timing-barrier',
         {
             status: 'active',
-            proofRecheckNote: 'Proof audited: delays simple equality lookups past sort, limit, skip, and match; alias movement respects strictFieldOrder when crossing field-adding stages; sub-pipeline and crossed stage error checks enforce strictErrors.',
+            proofRecheckNote: 'Proof audited: delays deterministic equality and pipeline-form lookups past sort, limit, skip, and match; splits post-lookup match conjuncts; alias movement respects strictFieldOrder when crossing field-adding stages; sub-pipeline and crossed stage error checks enforce strictErrors.',
             mixedShapeCaseIds: {
                 default: 'mixed-shape-lookup-delay',
                 strictFieldOrder: 'mixed-shape-lookup-delay',
@@ -565,7 +565,7 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         'u7-redundant-lookup-discarded-project',
         {
             status: 'active',
-            proofRecheckNote: 'Proof audited: eliminates simple equality lookups whose alias is immediately discarded by following stage; under strictErrors, error-prone stages cannot be removed.',
+            proofRecheckNote: 'Proof audited: eliminates deterministic equality and pipeline-form lookups whose alias is immediately discarded by following stage; under strictErrors, error-prone stages cannot be removed.',
             mixedShapeCaseIds: {
                 default: 'mixed-shape-redundant-lookup-elimination',
                 strictFieldOrder: 'mixed-shape-redundant-lookup-elimination',

@@ -799,47 +799,90 @@ export function proveLimitAdvanceAcrossStage(
     );
 }
 
-function isSimpleEqualityLookup(stage: unknown): stage is {
+const ALLOWED_LOOKUP_KEYS = new Set([
+    'from',
+    'localField',
+    'foreignField',
+    'let',
+    'pipeline',
+    'as'
+]);
+
+function isSupportedLookupStage( stage: unknown ): stage is {
     readonly $lookup: {
-        readonly from: string;
-        readonly localField: string;
-        readonly foreignField: string;
-        readonly as: string;
+        readonly from          : string;
+        readonly as            : string;
+        readonly localField?   : string;
+        readonly foreignField? : string;
+        readonly let?          : Record<string, unknown>;
+        readonly pipeline?     : readonly unknown[];
     };
 }
 {
-    if (
-        !isPlainObject(stage)
-        || Object.keys(stage).length !== 1
-        || !isPlainObject(stage.$lookup)
+    if(
+        !isPlainObject( stage )
+        || Object.keys( stage ).length !== 1
+        || !isPlainObject( stage.$lookup )
     )
     {
         return false;
     }
 
     const specification = stage.$lookup;
-    const keys = Object.keys(specification);
+    const keys = Object.keys( specification );
+
+    if(
+        keys.some(( key ) => !ALLOWED_LOOKUP_KEYS.has( key ))
+        || typeof specification.from !== 'string'
+        || specification.from.length === 0
+        || typeof specification.as !== 'string'
+        || relatePaths( specification.as, specification.as ) !== 'exact'
+    )
+    {
+        return false;
+    }
+
+    const hasLocalField = 'localField' in specification;
+    const hasForeignField = 'foreignField' in specification;
+
+    if( hasLocalField !== hasForeignField )
+    {
+        return false;
+    }
+
+    if(
+        hasLocalField
+        && (
+            typeof specification.localField !== 'string'
+            || relatePaths( specification.localField, specification.localField ) !== 'exact'
+            || typeof specification.foreignField !== 'string'
+            || specification.foreignField.length === 0
+        )
+    )
+    {
+        return false;
+    }
+
+    const hasPipeline = 'pipeline' in specification;
+
+    if( ( !hasLocalField && !hasPipeline ) || ( 'let' in specification && !hasPipeline ))
+    {
+        return false;
+    }
+
+    const semantics = analyzeStage( stage );
+
     return (
-        keys.length === 4
-        && keys.includes("from")
-        && keys.includes("localField")
-        && keys.includes("foreignField")
-        && keys.includes("as")
-        && typeof specification.from === "string"
-        && specification.from.length > 0
-        && typeof specification.foreignField === "string"
-        && specification.foreignField.length > 0
-        && typeof specification.localField === "string"
-        && relatePaths(specification.localField, specification.localField) === "exact"
-        && typeof specification.as === "string"
-        && relatePaths(specification.as, specification.as) === "exact"
+        !semantics.malformed
+        && !semantics.unknown
+        && !semantics.observable.unknown
+        && semantics.observable.determinism === 'deterministic'
     );
 }
 
 /**
- * Delays a simple equality lookup past an adjacent row-preserving or
- * row-reducing stage when the follower does not read the alias. Lookup
- * execution errors are treated as out of scope for this proof.
+ * Delays a supported equality or pipeline lookup past an adjacent row-preserving
+ * or row-reducing stage when the follower does not read the alias.
  */
 export function proveLookupDelayAcrossStage(
     lookupStage        : unknown,
@@ -848,7 +891,7 @@ export function proveLookupDelayAcrossStage(
     downstreamPipeline : readonly unknown[] = []
 ): boolean
 {
-    if( !isSimpleEqualityLookup( lookupStage ))
+    if( !isSupportedLookupStage( lookupStage ))
     {
         return false;
     }
@@ -898,8 +941,8 @@ export function proveLookupDelayAcrossStage(
 }
 
 /**
- * Removes a simple equality lookup when the next stage drops the alias from
- * the successful output. Lookup execution errors are out of scope.
+ * Removes a supported equality or pipeline lookup when the next stage drops the
+ * alias from the successful output.
  */
 export function proveRedundantLookupElimination(
     lookupStage    : unknown,
@@ -912,7 +955,7 @@ export function proveRedundantLookupElimination(
         return false;
     }
 
-    if( !isSimpleEqualityLookup( lookupStage ))
+    if( !isSupportedLookupStage( lookupStage ))
     {
         return false;
     }
@@ -953,7 +996,7 @@ export function proveLookupMatchSplit(
     downstreamPipeline : readonly unknown[] = []
 ): LookupMatchSplitProof | null
 {
-    if( !isSimpleEqualityLookup( lookupStage ))
+    if( !isSupportedLookupStage( lookupStage ))
     {
         return null;
     }
@@ -989,11 +1032,13 @@ export function proveLookupMatchSplit(
 
     for( const conjunct of conjuncts )
     {
-        const conjunctSemantics = analyzeStage( { $match: conjunct } );
+        const conjunctStage = { $match: conjunct };
+        const conjunctSemantics = analyzeStage( conjunctStage );
 
         if(
             isSafeMatchSummary( conjunctSemantics )
             && arePathsDisjoint( conjunctSemantics.dependencies.local, [ alias ] )
+            && !stageReadsFieldOrder( conjunctStage )
         )
         {
             pushable.push( conjunct );
@@ -1009,8 +1054,15 @@ export function proveLookupMatchSplit(
         return null;
     }
 
+    const pushableStage = { $match: combineConjuncts( pushable ) };
+
+    if( !canMoveStageAcrossStage( pushableStage, lookupStage, 'earlier', context, downstreamPipeline ))
+    {
+        return null;
+    }
+
     return {
-        pushableStage: { $match: combineConjuncts( pushable ) },
+        pushableStage,
         residualStage: { $match: combineConjuncts( residual ) }
     };
 }

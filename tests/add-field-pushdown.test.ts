@@ -722,4 +722,52 @@ describe('AddFieldPushdownPass', () =>
         expect( proveAddFieldPushdown( errorPipeline, 1, seContext )).toBeNull();
         expect( pass.execute( errorPipeline, seContext )).toEqual( errorPipeline );
     });
+
+    it( 'pushes demanded fields across intermediate disjoint $set and exclusion $project to reach $lookup', () =>
+    {
+        const lookupStage =
+        {
+            $lookup:
+            {
+                from         : 'orders',
+                localField   : '_id',
+                foreignField : 'customerId',
+                as           : 'orders'
+            }
+        };
+
+        const pipeline =
+        [
+            lookupStage,
+            { $project: { secret: 0 } },
+            { $set: { 'orders.count': { $size: '$orders' } } },
+            { $addFields: { rank: { $add: [ '$score', 5 ] } } },
+            { $sort: { rank: -1, _id: 1 } },
+            { $limit: 5 }
+        ];
+
+        const pass = new AddFieldPushdownPass();
+        const pushed = pass.execute( pipeline );
+
+        expect( pushed[ 0 ] ).toEqual({
+            $addFields: { rank: { $add: [ '$score', 5 ] } }
+        });
+        expect( pushed[ 1 ] ).toEqual( lookupStage );
+        expect( pushed[ 2 ] ).toEqual({ $project: { secret: 0 } });
+        expect( pushed[ 3 ] ).toEqual({ $set: { 'orders.count': { $size: '$orders' } } });
+
+        // Rejects inclusion or colliding $project
+        expect( canPushFieldAcrossStage( 'rank', '$score', { $project: { score: 1 } } )).toBe( false );
+        expect( canPushFieldAcrossStage( 'rank', '$score', { $project: { a: 0, 'a.b': 0 } } )).toBe( false );
+
+        // Does not swap adjacent $addFields when no $lookup or $unset is crossed
+        expect( proveAddFieldPushdown(
+            [
+                { $addFields: { a: '$x' } },
+                { $addFields: { b: '$y' } },
+                { $sort: { a: 1, b: 1 } }
+            ],
+            1
+        )).toBeNull();
+    });
 });

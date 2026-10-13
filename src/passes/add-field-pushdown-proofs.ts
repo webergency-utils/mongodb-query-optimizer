@@ -17,6 +17,14 @@ export interface AddFieldPushdownProof
 
 const PASSIVE_PRECEDING_OPERATORS = new Set([
     '$lookup',
+    '$unset',
+    '$addFields',
+    '$set',
+    '$project'
+]);
+
+const TARGET_PRECEDING_OPERATORS = new Set([
+    '$lookup',
     '$unset'
 ]);
 
@@ -43,15 +51,19 @@ export function canPushFieldAcrossStage(
     }
 
     const precedingSemantics = analyzeStage( precedingStage );
+    const isExclusionProject = precedingEntry[ 0 ] === '$project';
 
-    if( precedingSemantics.malformed )
+    if(
+        precedingSemantics.malformed
+        || ( isExclusionProject && precedingSemantics.projection?.mode !== 'exclusion' )
+    )
     {
         return false;
     }
 
     if(
         precedingSemantics.dependencies.unknown
-        || precedingSemantics.dependencies.local.has( '*' )
+        || ( !isExclusionProject && precedingSemantics.dependencies.local.has( '*' ))
     )
     {
         return false;
@@ -80,7 +92,7 @@ export function canPushFieldAcrossStage(
     const fieldKeyList = [ fieldKey ];
 
     if(
-        !arePathsDisjoint( fieldKeyList, precedingSemantics.dependencies.local )
+        ( !isExclusionProject && !arePathsDisjoint( fieldKeyList, precedingSemantics.dependencies.local ))
         || !arePathsDisjoint( fieldKeyList, precedingSemantics.writes )
         || !arePathsDisjoint( fieldKeyList, precedingSemantics.modifies )
         || !arePathsDisjoint( fieldKeyList, precedingSemantics.removes )
@@ -192,7 +204,10 @@ export function proveAddFieldPushdown(
                 break;
             }
 
-            target = i;
+            if( TARGET_PRECEDING_OPERATORS.has( getSingleStageEntry( pipeline[ i ] )![ 0 ] ))
+            {
+                target = i;
+            }
         }
 
         if( target < stageIndex )

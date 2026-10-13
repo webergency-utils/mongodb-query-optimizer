@@ -1223,6 +1223,16 @@ describe('successful-result movement proofs', () =>
                 },
             },
             { $project: { name: 1 } },
+        )).toBe(true);
+        expect(proveRedundantLookupElimination(
+            {
+                $lookup: {
+                    from: 'orders',
+                    pipeline: [{ $sample: { size: 1 } }],
+                    as: 'orders',
+                },
+            },
+            { $project: { name: 1 } },
         )).toBe(false);
         expect(proveRedundantLookupElimination(
             lookup,

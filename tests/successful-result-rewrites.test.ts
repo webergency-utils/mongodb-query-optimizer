@@ -282,7 +282,7 @@ describe('redundant lookup elimination proofs', () =>
     it.each([
         [null],
         [{ $lookup: 'orders' }],
-        [lookup({ pipeline: [] })],
+        [lookup({ pipeline: 'invalid' })],
         [lookup({ let: { id: '$customerId' } })],
         [lookup({ extraOption: true })],
         [lookup({ from: '' })],
@@ -402,7 +402,7 @@ describe('lookup delay proofs', () =>
     });
 
     it.each([
-        [lookup({ pipeline: [] }), { $sort: { score: -1 } }],
+        [lookup({ pipeline: 'invalid' }), { $sort: { score: -1 } }],
         [lookup({ let: { id: '$customerId' } }), { $limit: 1 }],
         [lookup({ as: '' }), { $match: { status: 'active' } }],
         [lookup(), { $match: { orders: { $ne: [] } } }],
