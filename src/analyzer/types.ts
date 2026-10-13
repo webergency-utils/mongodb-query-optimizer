@@ -75,6 +75,11 @@ export interface SemanticAnalysisContext {
     readonly variables?: ReadonlyMap<string, DocumentBinding>;
     readonly elementPath?: string;
     readonly inputProvenance?: StreamProvenance;
+    /**
+     * Pipelines currently being analyzed. A nested pipeline that points back
+     * at one of these arrays is a cycle and is not walked again.
+     */
+    readonly activePipelines?: WeakSet<object>;
 }
 
 export interface ExpressionSummary {

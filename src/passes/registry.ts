@@ -233,7 +233,9 @@ interface SweepResult
 function optimizeStageChildrenForSweep(
     stage   : any,
     passes  : readonly PipelinePass[],
-    context : GuaranteeContext
+    context : GuaranteeContext,
+    active  : WeakSet<object>,
+    cyclic  : WeakSet<object>
 ): any
 {
     if( !stage || typeof stage !== 'object' || Array.isArray( stage ))
@@ -253,7 +255,7 @@ function optimizeStageChildrenForSweep(
         {
             if( Array.isArray( subpipeline ))
             {
-                const optimizedSub = applyGlobalSweep( subpipeline, passes, context );
+                const optimizedSub = applyGlobalSweep( subpipeline, passes, context, active, cyclic );
 
                 if( !pipelinesShallowEqual( optimizedSub, subpipeline ))
                 {
@@ -286,7 +288,7 @@ function optimizeStageChildrenForSweep(
         && Array.isArray( lookup.pipeline )
     )
     {
-        const optimizedLookupPipeline = applyGlobalSweep( lookup.pipeline, passes, context );
+        const optimizedLookupPipeline = applyGlobalSweep( lookup.pipeline, passes, context, active, cyclic );
 
         if( !pipelinesShallowEqual( optimizedLookupPipeline, lookup.pipeline ))
         {
@@ -309,7 +311,7 @@ function optimizeStageChildrenForSweep(
         && Array.isArray( unionWith.pipeline )
     )
     {
-        const optimizedUnionPipeline = applyGlobalSweep( unionWith.pipeline, passes, context );
+        const optimizedUnionPipeline = applyGlobalSweep( unionWith.pipeline, passes, context, active, cyclic );
 
         if( !pipelinesShallowEqual( optimizedUnionPipeline, unionWith.pipeline ))
         {
@@ -329,7 +331,47 @@ function optimizeStageChildrenForSweep(
 function applyGlobalSweepWithDirty(
     pipeline : any[],
     passes   : readonly PipelinePass[],
-    context  : GuaranteeContext
+    context  : GuaranteeContext,
+    active   : WeakSet<object>,
+    cyclic   : WeakSet<object>
+): SweepResult
+{
+    if( cyclic.has( pipeline ))
+    {
+        return {
+            pipeline,
+            modified : false
+        };
+    }
+
+    if( active.has( pipeline ))
+    {
+        cyclic.add( pipeline );
+
+        return {
+            pipeline,
+            modified : false
+        };
+    }
+
+    active.add( pipeline );
+
+    try
+    {
+        return sweepPipeline( pipeline, passes, context, active, cyclic );
+    }
+    finally
+    {
+        active.delete( pipeline );
+    }
+}
+
+function sweepPipeline(
+    pipeline : any[],
+    passes   : readonly PipelinePass[],
+    context  : GuaranteeContext,
+    active   : WeakSet<object>,
+    cyclic   : WeakSet<object>
 ): SweepResult
 {
     let modified = false;
@@ -338,7 +380,7 @@ function applyGlobalSweepWithDirty(
     for( let i = 0; i < pipeline.length; i++ )
     {
         const origStage = pipeline[ i ];
-        const optStage = optimizeStageChildrenForSweep( origStage, passes, context );
+        const optStage = optimizeStageChildrenForSweep( origStage, passes, context, active, cyclic );
 
         if( optStage !== origStage )
         {
@@ -409,10 +451,12 @@ function hasUnionWithAfter( pipeline: readonly any[], fromIndex: number ): boole
 function applyGlobalSweep(
     pipeline : any[],
     passes   : readonly PipelinePass[],
-    context  : GuaranteeContext
+    context  : GuaranteeContext,
+    active   : WeakSet<object>,
+    cyclic   : WeakSet<object>
 ): any[]
 {
-    return applyGlobalSweepWithDirty( pipeline, passes, context ).pipeline;
+    return applyGlobalSweepWithDirty( pipeline, passes, context, active, cyclic ).pipeline;
 }
 
 /**
@@ -459,9 +503,17 @@ export function optimizePipelineWithPasses(
         let currentFingerprint: string | null = null;
         let history: Set<string> | null = null;
 
+        const cyclic = new WeakSet<object>();
+
         for( let sweep = 0; sweep < sweepBudget; sweep++ )
         {
-            const sweepResult = applyGlobalSweepWithDirty( current, passes, context );
+            const sweepResult = applyGlobalSweepWithDirty(
+                current,
+                passes,
+                context,
+                new WeakSet(),
+                cyclic
+            );
 
             if( !sweepResult.modified )
             {

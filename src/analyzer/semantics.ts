@@ -178,6 +178,7 @@ function normalizeContext(
         elementPath: context?.elementPath,
         inputProvenance: context?.inputProvenance
             ?? scopeProvenance(documentScope),
+        activePipelines: context?.activePipelines,
     };
 }
 
@@ -802,6 +803,7 @@ function analyzeLookupStage(
             documentScope: "foreign",
             variables,
             inputProvenance: "foreign",
+            activePipelines: context.activePipelines,
         });
         addChild(
             stage,
@@ -890,6 +892,7 @@ function analyzeFacetStage(
         const childSummary = analyzePipeline(pipeline, {
             ...context,
             inputProvenance: context.inputProvenance!,
+            activePipelines: context.activePipelines,
         });
         stage.writes.add(name);
         stage.modifies.add(name);
@@ -912,6 +915,7 @@ function analyzeFacetStage(
 function analyzeUnionWithStage(
     value: unknown,
     stage: StageSemantics,
+    context: SemanticAnalysisContext,
 ): void
 {
     if (typeof value !== "string" && !isPlainObject(value))
@@ -933,6 +937,7 @@ function analyzeUnionWithStage(
         const childSummary = analyzePipeline(value.pipeline, {
             documentScope: "foreign",
             inputProvenance: "foreign",
+            activePipelines: context.activePipelines,
         });
         addChild(
             stage,
@@ -1228,7 +1233,7 @@ function analyzeKnownStage(
             analyzeFacetStage(value, stage, context);
             break;
         case "$unionWith":
-            analyzeUnionWithStage(value, stage);
+            analyzeUnionWithStage(value, stage, context);
             break;
         case "$densify":
             analyzeDensifyStage(value, stage, context);
@@ -1287,6 +1292,35 @@ export function analyzeStage(
     return summary;
 }
 
+function unknownPipeline(context: SemanticAnalysisContext): PipelineSemantics
+{
+    const dependencies = createDependencies();
+    dependencies[context.documentScope].add("*");
+    dependencies.unknown = true;
+    return {
+        stages: [],
+        dependencies,
+        writes: new Set(["?"]),
+        modifies: new Set(["?"]),
+        removes: new Set(["?"]),
+        cardinality: "unknown",
+        order: "unknown",
+        provenance: "unknown",
+        determinism: "unknown",
+        errors: "unknown",
+        unknown: true,
+        malformed: true,
+        observable: {
+            cardinality: "unknown",
+            order: "unknown",
+            provenance: "unknown",
+            determinism: "unknown",
+            errors: "unknown",
+            unknown: true,
+        },
+    };
+}
+
 export function analyzePipeline(
     pipeline: unknown,
     suppliedContext?: Partial<SemanticAnalysisContext>,
@@ -1295,33 +1329,36 @@ export function analyzePipeline(
     const context = normalizeContext(suppliedContext);
     if (!Array.isArray(pipeline))
     {
-        const dependencies = createDependencies();
-        dependencies[context.documentScope].add("*");
-        dependencies.unknown = true;
-        return {
-            stages: [],
-            dependencies,
-            writes: new Set(["?"]),
-            modifies: new Set(["?"]),
-            removes: new Set(["?"]),
-            cardinality: "unknown",
-            order: "unknown",
-            provenance: "unknown",
-            determinism: "unknown",
-            errors: "unknown",
-            unknown: true,
-            malformed: true,
-            observable: {
-                cardinality: "unknown",
-                order: "unknown",
-                provenance: "unknown",
-                determinism: "unknown",
-                errors: "unknown",
-                unknown: true,
-            },
-        };
+        return unknownPipeline(context);
     }
 
+    const activePipelines = context.activePipelines ?? new WeakSet<object>();
+    if (activePipelines.has(pipeline))
+    {
+        return unknownPipeline(context);
+    }
+
+    activePipelines.add(pipeline);
+    const activeContext: SemanticAnalysisContext = {
+        ...context,
+        activePipelines,
+    };
+
+    try
+    {
+        return analyzePipelineStages(pipeline, activeContext);
+    }
+    finally
+    {
+        activePipelines.delete(pipeline);
+    }
+}
+
+function analyzePipelineStages(
+    pipeline: readonly unknown[],
+    context: SemanticAnalysisContext,
+): PipelineSemantics
+{
     const dependencies = createDependencies();
     const writes = new Set<string>();
     const modifies = new Set<string>();
