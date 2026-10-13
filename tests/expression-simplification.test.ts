@@ -370,6 +370,30 @@ describe( 'ExpressionSimplificationPass unit and proof tests', () =>
         expect( simplifyExpression({ $eq: [ 5, '5' ] })).toEqual({ $eq: [ 5, '5' ] });
         expect( simplifyExpression({ $gt: [ '$x', 5 ] })).toEqual({ $gt: [ '$x', 5 ] });
         expect( simplifyExpression({ $eq: [ 1 ] })).toEqual({ $eq: [ 1 ] });
+
+        // Constant $abs, $ceil, $floor (including -0 normalization and array/scalar operand forms)
+        expect( simplifyExpression({ $abs: -42 })).toBe( 42 );
+        expect( simplifyExpression({ $abs: [ -0 ] })).toBe( 0 );
+        expect( simplifyExpression({ $ceil: 1.2 })).toBe( 2 );
+        expect( simplifyExpression({ $ceil: [ -0.5 ] })).toBe( 0 );
+        expect( simplifyExpression({ $floor: [ 1.8 ] })).toBe( 1 );
+        expect( simplifyExpression({ $abs: '$x' })).toEqual({ $abs: '$x' });
+        expect( simplifyExpression({ $abs: [ 1, 2 ] })).toEqual({ $abs: [ 1, 2 ] });
+
+        // Constant ASCII $toLower and $toUpper
+        expect( simplifyExpression({ $toLower: 'HELLO' })).toBe( 'hello' );
+        expect( simplifyExpression({ $toUpper: [ 'hello' ] })).toBe( 'HELLO' );
+        expect( simplifyExpression({ $toLower: { $literal: '$FOO' } })).toEqual({ $literal: '$foo' });
+        expect( simplifyExpression({ $toLower: 'ümlaut' })).toEqual({ $toLower: 'ümlaut' });
+        expect( simplifyExpression({ $toLower: '$field' })).toEqual({ $toLower: '$field' });
+        expect( simplifyExpression({ $toLower: [ 'a', 'b' ] })).toEqual({ $toLower: [ 'a', 'b' ] });
+
+        // Constant $in membership
+        expect( simplifyExpression({ $in: [ 'b', [ 'a', 'b', 'c' ] ] })).toBe( true );
+        expect( simplifyExpression({ $in: [ 4, [ 1, 2, 3 ] ] })).toBe( false );
+        expect( simplifyExpression({ $in: [ true, [ false, null, true ] ] })).toBe( true );
+        expect( simplifyExpression({ $in: [ '$x', [ 'a', 'b' ] ] })).toEqual({ $in: [ '$x', [ 'a', 'b' ] ] });
+        expect( simplifyExpression({ $in: [ 'a', [ '$x', 'b' ] ] })).toEqual({ $in: [ 'a', [ '$x', 'b' ] ] });
     });
 
     it( 'never simplifies or inspects inside $literal subtrees', () =>
@@ -407,7 +431,7 @@ describe( 'ExpressionSimplificationPass unit and proof tests', () =>
         expect( executed ).toBe( pipeline );
     });
 
-    it( 'simplifies expressions in $addFields, $set, and computed $project fields', () =>
+    it( 'simplifies expressions in $addFields, $set, computed $project, $group, and $match.$expr', () =>
     {
         const pipeline = [
             {
@@ -449,6 +473,19 @@ describe( 'ExpressionSimplificationPass unit and proof tests', () =>
                         }
                     }
                 }
+            },
+            {
+                $group: {
+                    _id: { $cond: [ true, '$dept', '$fallback' ] },
+                    total: { $sum: { $add: [ 0, 1 ] } },
+                    unchanged: { $max: '$score' },
+                    countDoc: { $count: {} }
+                }
+            },
+            {
+                $match: {
+                    $expr: { $and: [ true, { $eq: [ '$dept', 'eng' ] } ] }
+                }
             }
         ];
 
@@ -472,6 +509,47 @@ describe( 'ExpressionSimplificationPass unit and proof tests', () =>
                 total: { $size: '$items' }
             }
         });
+        expect( optimized[ 3 ] ).toEqual({
+            $group: {
+                _id: '$dept',
+                total: { $sum: 1 },
+                unchanged: { $max: '$score' },
+                countDoc: { $count: {} }
+            }
+        });
+        expect( optimized[ 4 ] ).toEqual({
+            $match: {
+                $expr: { $and: [ { $eq: [ '$dept', 'eng' ] } ] }
+            }
+        });
+
+        // Also handles $group with _id: null and $match.$expr tautologies/contradictions/nested branches
+        expect( simplifyExpression({ $add: [ '$x', { $add: [ 1, 2 ] } ] })).toEqual({ $add: [ '$x', 3 ] });
+        expect( pass.execute([
+            { $group: { _id: null, c: { $sum: 1 }, invalidAcc: 123 } },
+            { $match: { $expr: { $eq: [ 1, 1 ] } } },
+            { $match: { $expr: { $eq: [ 1, 2 ] } } },
+            { $match: { $expr: { $eq: [ '$a', '$b' ] } } },
+            { $match: { status: 'active', $expr: { $eq: [ 1, 1 ] } } },
+            { $match: { status: 'active', $expr: { $eq: [ 1, 2 ] } } },
+            { $match: { status: 'active', $expr: { $eq: [ '$a', '$b' ] } } },
+            { $match: { status: 'active', $expr: { $and: [ true, { $eq: [ '$a', '$b' ] } ] } } },
+            { $match: { $and: [ { a: 1 }, { $expr: { $eq: [ 1, 1 ] } } ] } },
+            { $match: { $and: [ { a: 1 }, { b: 2 } ] } },
+            { $match: { a: { $in: 1 } } }
+        ], defaultContext )).toEqual([
+            { $group: { _id: null, c: { $sum: 1 }, invalidAcc: 123 } },
+            { $match: {} },
+            { $match: { _id: { $in: [] } } },
+            { $match: { $expr: { $eq: [ '$a', '$b' ] } } },
+            { $match: { status: 'active' } },
+            { $match: { _id: { $in: [] } } },
+            { $match: { status: 'active', $expr: { $eq: [ '$a', '$b' ] } } },
+            { $match: { status: 'active', $expr: { $and: [ { $eq: [ '$a', '$b' ] } ] } } },
+            { $match: { $and: [ { a: 1 }, {} ] } },
+            { $match: { $and: [ { a: 1 }, { b: 2 } ] } },
+            { $match: { a: { $in: 1 } } }
+        ]);
     });
 
     it( 'preserves execution equivalence on mock engine', () =>

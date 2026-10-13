@@ -14,7 +14,7 @@ from './projection-proofs.js';
 export class SortProjectCommutePass implements PipelinePass
 {
     readonly name       = 'sort-project-commute';
-    readonly stageTypes = [ '$project', '$sort' ] as const;
+    readonly stageTypes = [ '$project', '$unset', '$sort' ] as const;
 
     execute( pipeline: any[], _context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {

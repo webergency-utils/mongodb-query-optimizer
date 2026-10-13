@@ -154,6 +154,49 @@ describe('limit and skip coalescing scheduling', () =>
             { $match: { status: 'active' } },
             { $limit: 5 },
         ]);
+
+        // Normalizes { $limit: L }, { $skip: S } (with L > S > 0) into { $skip: S }, { $limit: L - S }
+        expect(
+            new LimitSkipCoalescingPass().execute([
+                { $limit: 10 },
+                { $skip: 3 },
+            ]),
+        ).toEqual([
+            { $skip: 3 },
+            { $limit: 7 },
+        ]);
+
+        // Coalesces multi-layer pagination chains to a fixed point
+        expect(
+            optimizePipelineWithCandidateProfile(
+                [
+                    { $skip: 10 },
+                    { $limit: 20 },
+                    { $skip: 5 },
+                    { $limit: 10 },
+                ],
+                LIMIT_SKIP,
+                [],
+            ),
+        ).toEqual([
+            { $skip: 15 },
+            { $limit: 10 },
+        ]);
+
+        // Leaves { $limit: L }, { $skip: S } untouched when S >= L
+        expect(
+            optimizePipelineWithCandidateProfile(
+                [
+                    { $limit: 5 },
+                    { $skip: 5 },
+                ],
+                LIMIT_SKIP,
+                [],
+            ),
+        ).toEqual([
+            { $limit: 5 },
+            { $skip: 5 },
+        ]);
     });
 
     it('preserves every unproved value and the caller input', () =>

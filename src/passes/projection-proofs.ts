@@ -670,8 +670,8 @@ export function parseProjectionCommuteSortKeys(sortStage: unknown): string[] | n
 }
 
 /**
- * Proves that a simple flag project keeps every sort key visible, so the
- * project may move before the sort without changing successful order.
+ * Proves that a simple flag project or exact top-level unset keeps every sort
+ * key visible, so it may move before the sort without changing successful order.
  */
 export function proveSimpleProjectAdvanceAcrossSort(
     sortStage: unknown,
@@ -682,6 +682,12 @@ export function proveSimpleProjectAdvanceAcrossSort(
     if (!keys)
     {
         return false;
+    }
+
+    const unsetFields = exactUnsetFields(projectStage);
+    if (unsetFields)
+    {
+        return arePathsDisjoint(unsetFields, keys);
     }
 
     const project = parseSimpleProject(projectStage);

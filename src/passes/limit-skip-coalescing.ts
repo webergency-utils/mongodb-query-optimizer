@@ -118,6 +118,44 @@ export function proveLimitSkipCoalescing(
     };
 }
 
+export interface LimitBeforeSkipNormalizationProof
+{
+    readonly skipStage: Readonly<{ $skip: number }>;
+    readonly limitStage: Readonly<{ $limit: number }>;
+}
+
+/**
+ * Proves that `{ $limit: L }, { $skip: S }` with `L > S > 0` can be rewritten
+ * to `{ $skip: S }, { $limit: L - S }` while pulling the exact same number of
+ * upstream documents (`S + (L - S) = L`).
+ */
+export function proveLimitBeforeSkipNormalization(
+    leftStage: unknown,
+    rightStage: unknown,
+): LimitBeforeSkipNormalizationProof | null
+{
+    const left = parseStrictStage(leftStage);
+    const right = parseStrictStage(rightStage);
+    if (
+        !left
+        || !right
+        || left.operator !== '$limit'
+        || right.operator !== '$skip'
+        || !isValidOperand('$limit', left.value)
+        || !isValidOperand('$skip', right.value)
+        || right.value <= 0
+        || left.value <= right.value
+    )
+    {
+        return null;
+    }
+
+    return {
+        skipStage: { $skip: right.value },
+        limitStage: { $limit: left.value - right.value },
+    };
+}
+
 export function isZeroSkip(stage: unknown): boolean
 {
     const parsed = parseStrictStage(stage);
@@ -139,13 +177,21 @@ export class LimitSkipCoalescingPass implements PipelinePass
                 result[index],
                 result[index + 1],
             );
-            if (!proof)
+            if (proof)
             {
-                continue;
+                result.splice(index, 2, proof.replacementStage);
+                return result;
             }
 
-            result.splice(index, 2, proof.replacementStage);
-            return result;
+            const normProof = proveLimitBeforeSkipNormalization(
+                result[index],
+                result[index + 1],
+            );
+            if (normProof)
+            {
+                result.splice(index, 2, normProof.skipStage, normProof.limitStage);
+                return result;
+            }
         }
 
         for (let index = 0; index < result.length; index++)

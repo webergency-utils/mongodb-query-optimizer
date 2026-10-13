@@ -460,6 +460,8 @@ describe('sort-project commute proofs', () =>
         [{ $sort: { _id: -1 } }, { $project: { name: 1 } }],
         [{ $sort: { score: 1 } }, { $project: { secret: 0 } }],
         [{ $sort: { 'profile.age': 1 } }, { $project: { profile: 1 } }],
+        [{ $sort: { age: 1 } }, { $unset: 'secret' }],
+        [{ $sort: { age: 1 } }, { $unset: ['secret', 'token'] }],
     ])('commutes %j before %j', (sort, project) =>
     {
         expect(proveSimpleProjectAdvanceAcrossSort(sort, project)).toBe(true);
@@ -478,7 +480,8 @@ describe('sort-project commute proofs', () =>
         [{ $sort: { age: 1 } }, { $project: { age: 0 } }],
         [{ $sort: { age: 1 } }, { $project: { age: { $add: ['$age', 1] } } }],
         [{ $sort: { age: 1 } }, { $project: { 'profile.age': 1 } }],
-        [{ $sort: { age: 1 } }, { $unset: 'secret' }],
+        [{ $sort: { age: 1 } }, { $unset: 'age' }],
+        [{ $sort: { 'profile.age': 1 } }, { $unset: 'profile' }],
         [{ $sort: { age: 1 } }, { $addFields: { age: 1 } }],
         [{ $sort: { '': 1 } }, { $project: { name: 1 } }],
         [{ $sort: { 'a..b': 1 } }, { $project: { name: 1 } }],
@@ -562,9 +565,8 @@ describe('production successful-result rewrites', () =>
             ],
             [
                 { $addFields: { kept: 2 } },
-                { $unset: 'temporary' },
+                { $unset: ['temporary', 'dead'] },
                 { $sort: { kept: 1 } },
-                { $unset: 'dead' },
             ],
         ],
         [

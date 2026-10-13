@@ -1,7 +1,23 @@
+import { analyzeFilter } from '../analyzer/filters.js';
 import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
 import { isPlainObject } from '../utils.js';
 import { getSingleStageEntry } from './helpers.js';
 import { PipelinePass } from './types.js';
+
+const ASCII_PATTERN = /^[\x00-\x7F]*$/;
+
+const GROUP_ACCUMULATORS = new Set([
+    '$sum',
+    '$avg',
+    '$min',
+    '$max',
+    '$push',
+    '$addToSet',
+    '$first',
+    '$last',
+    '$stdDevPop',
+    '$stdDevSamp'
+]);
 
 /**
  * Expression simplification pass (KTD9).
@@ -134,6 +150,39 @@ function isFiniteNumber( val: unknown ): val is number
     return typeof val === 'number' && Number.isFinite( val );
 }
 
+function extractUnaryOperand(
+    operand: unknown
+): { valid: true; value: unknown } | { valid: false }
+{
+    if( Array.isArray( operand ))
+    {
+        return operand.length === 1
+            ? { valid: true, value: operand[ 0 ] }
+            : { valid: false };
+    }
+
+    return { valid: true, value: operand };
+}
+
+function extractPrimitiveConstant(
+    expr: unknown
+): { valid: true; value: string | number | boolean | null } | { valid: false }
+{
+    if( isFiniteNumber( expr ) || typeof expr === 'boolean' || expr === null )
+    {
+        return { valid: true, value: expr };
+    }
+
+    const str = extractStringConstant( expr );
+
+    if( str !== null )
+    {
+        return { valid: true, value: str };
+    }
+
+    return { valid: false };
+}
+
 function evaluateConstantComparison(
     op    : string,
     left  : number | string,
@@ -163,7 +212,20 @@ export function simplifyExpression( expr: unknown ): unknown
 {
     if( Array.isArray( expr ))
     {
-        return expr.map( simplifyExpression );
+        let arrayChanged = false;
+        const mapped = expr.map(( item ) =>
+        {
+            const next = simplifyExpression( item );
+
+            if( next !== item )
+            {
+                arrayChanged = true;
+            }
+
+            return next;
+        });
+
+        return arrayChanged ? mapped : expr;
     }
 
     if( !isPlainObject( expr ))
@@ -176,11 +238,19 @@ export function simplifyExpression( expr: unknown ): unknown
         return expr;
     }
 
+    let childChanged = false;
     const simplified: Record<string, unknown> = {};
 
     for( const [ key, val ] of Object.entries( expr ))
     {
-        simplified[ key ] = simplifyExpression( val );
+        const next = simplifyExpression( val );
+
+        if( next !== val )
+        {
+            childChanged = true;
+        }
+
+        simplified[ key ] = next;
     }
 
     const keys = Object.keys( simplified );
@@ -356,6 +426,55 @@ export function simplifyExpression( expr: unknown ): unknown
                 return simplified.$subtract[ 0 ] - simplified.$subtract[ 1 ];
             }
         }
+        else if( op === '$abs' || op === '$ceil' || op === '$floor' )
+        {
+            const unary = extractUnaryOperand( simplified[ op ] );
+
+            if( unary.valid && isFiniteNumber( unary.value ))
+            {
+                const raw = op === '$abs'
+                    ? Math.abs( unary.value )
+                    : ( op === '$ceil' ? Math.ceil( unary.value ) : Math.floor( unary.value ));
+
+                return raw === 0 ? 0 : raw;
+            }
+        }
+        else if( op === '$toLower' || op === '$toUpper' )
+        {
+            const unary = extractUnaryOperand( simplified[ op ] );
+
+            if( unary.valid )
+            {
+                const str = extractStringConstant( unary.value );
+
+                if( str !== null && ASCII_PATTERN.test( str ))
+                {
+                    const converted = op === '$toLower' ? str.toLowerCase() : str.toUpperCase();
+
+                    return converted.startsWith( '$' ) ? { $literal: converted } : converted;
+                }
+            }
+        }
+        else if(
+            op === '$in'
+            && Array.isArray( simplified.$in )
+            && simplified.$in.length === 2
+            && Array.isArray( simplified.$in[ 1 ] )
+        )
+        {
+            const target = extractPrimitiveConstant( simplified.$in[ 0 ] );
+            const candidates = ( simplified.$in[ 1 ] as unknown[] ).map( extractPrimitiveConstant );
+
+            if(
+                target.valid
+                && candidates.every(
+                    ( c ): c is { valid: true; value: string | number | boolean | null } => c.valid
+                )
+            )
+            {
+                return candidates.some(( c ) => c.value === target.value );
+            }
+        }
         else if( op === '$concat' && Array.isArray( simplified.$concat ) && simplified.$concat.length >= 1 )
         {
             const parts = simplified.$concat.map( extractStringConstant );
@@ -416,7 +535,103 @@ export function simplifyExpression( expr: unknown ): unknown
         }
     }
 
-    return simplified;
+    return childChanged ? simplified : expr;
+}
+
+function simplifyMatchFilterExpressions(
+    filter: Record<string, unknown>
+): Record<string, unknown>
+{
+    const summary = analyzeFilter( filter );
+
+    if( summary.unknown || summary.malformed )
+    {
+        return filter;
+    }
+
+    const keys = Object.keys( filter );
+
+    if( keys.length === 1 && keys[ 0 ] === '$expr' )
+    {
+        const simplifiedExpr = simplifyExpression( filter.$expr );
+
+        if( isTruthyConstant( simplifiedExpr ))
+        {
+            return {};
+        }
+
+        if( isFalsyConstant( simplifiedExpr ))
+        {
+            return { _id: { $in: [] } };
+        }
+
+        if( simplifiedExpr !== filter.$expr )
+        {
+            return { $expr: simplifiedExpr };
+        }
+
+        return filter;
+    }
+
+    let changed = false;
+    const nextFilter: Record<string, unknown> = {};
+
+    for( const [ key, val ] of Object.entries( filter ))
+    {
+        if( key === '$expr' )
+        {
+            const simplifiedExpr = simplifyExpression( val );
+
+            if( isFalsyConstant( simplifiedExpr ))
+            {
+                return { _id: { $in: [] } };
+            }
+
+            if( isTruthyConstant( simplifiedExpr ))
+            {
+                changed = true;
+                continue;
+            }
+
+            if( simplifiedExpr !== val )
+            {
+                changed = true;
+            }
+
+            nextFilter[ key ] = simplifiedExpr;
+            continue;
+        }
+
+        if(
+            ( key === '$and' || key === '$or' || key === '$nor' )
+            && Array.isArray( val )
+        )
+        {
+            let branchChanged = false;
+            const mapped = ( val as Record<string, unknown>[] ).map(( item ) =>
+            {
+                const nextItem = simplifyMatchFilterExpressions( item );
+
+                if( nextItem !== item )
+                {
+                    branchChanged = true;
+                }
+
+                return nextItem;
+            });
+
+            if( branchChanged )
+            {
+                changed = true;
+                nextFilter[ key ] = mapped;
+                continue;
+            }
+        }
+
+        nextFilter[ key ] = val;
+    }
+
+    return changed ? nextFilter : filter;
 }
 
 function simplifyStage( stage: unknown ): unknown
@@ -477,13 +692,65 @@ function simplifyStage( stage: unknown ): unknown
         return changed ? { [ op ]: newSpec } : stage;
     }
 
+    if( op === '$group' )
+    {
+        let changed = false;
+        const newSpec: Record<string, unknown> = {};
+
+        for( const [ key, val ] of Object.entries( specObj ))
+        {
+            if( key === '_id' )
+            {
+                const simplified = val === null ? null : simplifyExpression( val );
+
+                if( simplified !== val )
+                {
+                    changed = true;
+                }
+
+                newSpec[ key ] = simplified;
+                continue;
+            }
+
+            if( isPlainObject( val ))
+            {
+                const accKeys = Object.keys( val );
+
+                if( accKeys.length === 1 && GROUP_ACCUMULATORS.has( accKeys[ 0 ]! ))
+                {
+                    const accOp = accKeys[ 0 ]!;
+                    const accArg = ( val as Record<string, unknown> )[ accOp ];
+                    const simplifiedArg = simplifyExpression( accArg );
+
+                    if( simplifiedArg !== accArg )
+                    {
+                        changed = true;
+                        newSpec[ key ] = { [ accOp ]: simplifiedArg };
+                        continue;
+                    }
+                }
+            }
+
+            newSpec[ key ] = val;
+        }
+
+        return changed ? { $group: newSpec } : stage;
+    }
+
+    if( op === '$match' )
+    {
+        const simplifiedMatch = simplifyMatchFilterExpressions( specObj );
+
+        return simplifiedMatch !== specObj ? { $match: simplifiedMatch } : stage;
+    }
+
     return stage;
 }
 
 export class ExpressionSimplificationPass implements PipelinePass
 {
     readonly name       = 'expression-simplification';
-    readonly stageTypes = [ '$addFields', '$set', '$project' ] as const;
+    readonly stageTypes = [ '$addFields', '$set', '$project', '$group', '$match' ] as const;
 
     execute( pipeline: any[], context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {

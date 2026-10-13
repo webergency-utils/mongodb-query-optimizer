@@ -114,8 +114,8 @@ The optimizer evaluates queries and aggregation pipelines purely as Abstract Syn
 6. `unwind-prefilter`: Injects shape-safe `$or` prefilters before `$unwind` (including across `$and` conjunctions) to discard non-matching documents without dropping polymorphic types or nested arrays.
 7. `redundant-sort-elimination`: Eliminates empty `$sort` stages and dead `$sort` stages before adjacent or order-insensitive-separated `$sort`, `$count`, `$sortByCount`, and order-agnostic `$group`, `$bucket`, and `$bucketAuto` stages.
 8. `sort-by-count-simplification`: Converts verbose `$group` + `$sort` count patterns into canonical `$sortByCount`.
-9. `limit-skip-coalescing`: Combines adjacent `$limit` and `$skip` stages into minimal offsets and counts, and eliminates no-op `{ $skip: 0 }` stages.
-10. `expression-simplification`: Folds and short-circuits constant boolean, conditional, comparison, arithmetic, and string expressions (`$and`, `$or`, `$not`, `$cond`, `$switch`, `$ifNull`, `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$cmp`, `$add`, `$subtract`, `$multiply`, `$concat`) and simplifies `$size` over `$filter` when conditions are always truthy.
+9. `limit-skip-coalescing`: Combines adjacent `$limit` and `$skip` stages into minimal offsets and counts, normalizes `{ $limit: L }, { $skip: S }` ($L > S > 0$) into `{ $skip: S }, { $limit: L - S }`, and eliminates no-op `{ $skip: 0 }` stages.
+10. `expression-simplification`: Folds and short-circuits constant boolean, conditional, comparison, math, membership, and string expressions (`$and`, `$or`, `$not`, `$cond`, `$switch`, `$ifNull`, `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$cmp`, `$in`, `$add`, `$subtract`, `$multiply`, `$abs`, `$ceil`, `$floor`, `$concat`, ASCII `$toLower`/`$toUpper`) across `$addFields`, `$set`, `$project`, `$group`, and `$match.$expr`, and simplifies `$size` over `$filter` when conditions are always truthy.
 11. `match-pushdown`: Moves selective filter stages ahead of joins, projections, field additions, and unsets, splitting multi-conjunct `$match` stages when only a subset of conjuncts can advance.
 12. `heuristic-match-pushdown`: Pushes selective `$match` filters across heavy stages (`$lookup`, `$graphLookup`, `$function`) using deterministic shadow fields with per-key ranges and profitability gates.
 13. `limit-advance`: Advances `$limit` and `$skip` ahead of non-cardinality altering projections and stages.
@@ -125,7 +125,7 @@ The optimizer evaluates queries and aggregation pipelines purely as Abstract Syn
 17. `adjacent-project-merging`: Fuses consecutive `$project` and exact top-level `$unset` stages into a single specification.
 18. `adjacent-add-field-merging`: Merges adjacent `$addFields` or `$set` stages.
 19. `redundant-lookup-elimination`: Drops unused equality and pipeline-form `$lookup` joins whose aliases are discarded downstream.
-20. `sort-project-commute`: Commutes `$project` ahead of `$sort` when all sort keys remain visible.
+20. `sort-project-commute`: Commutes `$project` and exact top-level `$unset` stages ahead of `$sort` when all sort keys remain visible.
 21. `complex-projection-deferral`: Pushes complex computed fields downstream past selective filters and sorts.
 22. `facet-prefix-hoisting`: Extracts identical deterministic prefix stages (`$match`, `$project`, `$addFields`, `$set`, `$unset`, numeric `$sort`, `$limit`, `$skip`) shared across all branches of a `$facet`.
 23. `covered-projection-synthesis`: Inserts an inclusion projection in front of a collapsing stage (`$group`, `$bucket`, `$bucketAuto`, `$sortByCount`), keeping only the fields that stage reads, and trims row-count-neutral prefixes before `$count` and zero-dependency `$group` stages.
