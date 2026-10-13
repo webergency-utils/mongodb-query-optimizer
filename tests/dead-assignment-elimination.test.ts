@@ -252,4 +252,96 @@ describe( 'DeadAssignmentEliminationPass execution and parity', () =>
             { _id: 2, base: 20, email: 'BOB@EXAMPLE.COM', factor: 2, tempEmail: 'final@example.com' }
         ]);
     });
+
+    it( 'keeps an assignment a later let reads, even when a project would drop it', () =>
+    {
+        expect( proveDeadAssignmentElimination(
+            { $set: { tmp: '$price' } },
+            [
+                { $set: { shown: { $let: { vars: { v: '$tmp' }, in: '$$v' } } } },
+                { $project: { name: 1 } }
+            ]
+        )).toBeNull();
+    });
+
+    it( 'keeps an assignment when an unbound variable appears before the drop', () =>
+    {
+        expect( proveDeadAssignmentElimination(
+            { $set: { tmp: 1 } },
+            [
+                { $set: { shown: '$$name' } },
+                { $unset: 'tmp' }
+            ]
+        )).toBeNull();
+    });
+
+    it( 'removes an unread assignment when a later let reads a different field', () =>
+    {
+        const proof = proveDeadAssignmentElimination(
+            { $set: { tmp: 1 } },
+            [
+                { $set: { shown: { $let: { vars: { v: '$other' }, in: '$$v' } } } },
+                { $project: { name: 1 } }
+            ]
+        );
+
+        expect( proof ).not.toBeNull();
+        expect( proof?.eliminatedFields ).toEqual([ 'tmp' ]);
+        expect( proof?.replacementStage ).toBeNull();
+    });
+
+    it( 'removes an unread assignment when a later group does not read it', () =>
+    {
+        const proof = proveDeadAssignmentElimination(
+            { $set: { tmp: 1 } },
+            [ { $group: { _id: '$customerId', n: { $sum: '$amount' } } } ]
+        );
+
+        expect( proof ).not.toBeNull();
+        expect( proof?.eliminatedFields ).toEqual([ 'tmp' ]);
+        expect( proof?.replacementStage ).toBeNull();
+    });
+
+    it( 'keeps an assignment a later group reads', () =>
+    {
+        expect( proveDeadAssignmentElimination(
+            { $set: { customerId: 1 } },
+            [ { $group: { _id: '$customerId' } } ]
+        )).toBeNull();
+    });
+
+    it( 'keeps an assignment when a later group reads the whole document', () =>
+    {
+        expect( proveDeadAssignmentElimination(
+            { $set: { tmp: 1 } },
+            [ { $group: { _id: '$$ROOT' } } ]
+        )).toBeNull();
+
+        expect( proveDeadAssignmentElimination(
+            { $set: { tmp: 1 } },
+            [ { $group: { _id: { $let: { vars: { v: '$$ROOT' }, in: '$$v' } } } } ]
+        )).toBeNull();
+    });
+
+    it( 'removes an unread assignment when a later count drops every field', () =>
+    {
+        const proof = proveDeadAssignmentElimination(
+            { $set: { tmp: 1 } },
+            [ { $count: 'n' } ]
+        );
+
+        expect( proof?.eliminatedFields ).toEqual([ 'tmp' ]);
+        expect( proof?.replacementStage ).toBeNull();
+    });
+
+    it( 'removes an unread assignment when a later sortByCount does not read it', () =>
+    {
+        const proof = proveDeadAssignmentElimination(
+            { $set: { tmp: 1 } },
+            [ { $sortByCount: '$customerId' } ]
+        );
+
+        expect( proof?.eliminatedFields ).toEqual([ 'tmp' ]);
+        expect( proof?.replacementStage ).toBeNull();
+    });
 });

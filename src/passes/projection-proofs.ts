@@ -48,11 +48,21 @@ export interface UnusedFieldPruningProof
     readonly removedFields: readonly string[];
 }
 
-function hasOnlyKnownDependencyPaths(semantics: StageSemantics): boolean
+function hasBlockingVariableDependency(semantics: StageSemantics): boolean
+{
+    if (semantics.dependencies.variables.size === 0)
+    {
+        return false;
+    }
+
+    return semantics.dependencies.local.has('*');
+}
+
+export function hasOnlyKnownDependencyPaths(semantics: StageSemantics): boolean
 {
     if (
         semantics.dependencies.unknown
-        || semantics.dependencies.variables.size > 0
+        || hasBlockingVariableDependency(semantics)
         || semantics.dependencies.foreign.size > 0
         || semantics.dependencies.element.size > 0
     )

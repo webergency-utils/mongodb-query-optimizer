@@ -60,7 +60,10 @@ export function proveCoveredProjectionSynthesis( pipeline: readonly any[] ): Cov
         || collapseSemantics.observable.unknown
         || collapseSemantics.children.length > 0
         || collapseSemantics.dependencies.unknown
-        || collapseSemantics.dependencies.variables.size > 0
+        || (
+            collapseSemantics.dependencies.variables.size > 0
+            && collapseSemantics.dependencies.local.has( '*' )
+        )
         || collapseSemantics.dependencies.foreign.size > 0
         || collapseSemantics.dependencies.element.size > 0
         || collapseSemantics.dependencies.local.has( '*' )
@@ -84,7 +87,10 @@ export function proveCoveredProjectionSynthesis( pipeline: readonly any[] ): Cov
             || sem.observable.unknown
             || sem.children.length > 0
             || sem.dependencies.unknown
-            || sem.dependencies.variables.size > 0
+            || (
+                sem.dependencies.variables.size > 0
+                && sem.dependencies.local.has( '*' )
+            )
             || sem.dependencies.foreign.size > 0
             || sem.dependencies.element.size > 0
             || sem.dependencies.local.has( '*' )

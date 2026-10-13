@@ -350,4 +350,46 @@ describe( 'CoveredProjectionSynthesisPass class and execution', () =>
 
         expect( optimizedResult ).toEqual( unoptimizedResult );
     });
+
+    it( 'keeps a field the group reads through a resolved let', () =>
+    {
+        const proof = proveCoveredProjectionSynthesis([
+            {
+                $group: {
+                    _id: { $let: { vars: { v: '$amount' }, in: '$$v' } },
+                    n: { $sum: 1 }
+                }
+            }
+        ]);
+
+        expect( proof ).not.toBeNull();
+        expect( proof?.synthesizedStage.$project.amount ).toBe( 1 );
+    });
+
+    it( 'returns null when a group let reads the whole document', () =>
+    {
+        expect( proveCoveredProjectionSynthesis([
+            { $group: { _id: { $let: { vars: { v: '$$ROOT' }, in: '$$v' } } } }
+        ])).toBeNull();
+    });
+
+    it( 'keeps synthesizing when a prefix let reads one field', () =>
+    {
+        const proof = proveCoveredProjectionSynthesis([
+            { $set: { shown: { $let: { vars: { v: '$amount' }, in: '$$v' } } } },
+            { $group: { _id: '$dept' } }
+        ]);
+
+        expect( proof ).not.toBeNull();
+        expect( proof?.synthesizedStage.$project.amount ).toBe( 1 );
+        expect( proof?.synthesizedStage.$project.dept ).toBe( 1 );
+    });
+
+    it( 'returns null when a prefix let reads the whole document', () =>
+    {
+        expect( proveCoveredProjectionSynthesis([
+            { $set: { shown: { $let: { vars: { v: '$$ROOT' }, in: '$$v' } } } },
+            { $group: { _id: '$dept' } }
+        ])).toBeNull();
+    });
 });

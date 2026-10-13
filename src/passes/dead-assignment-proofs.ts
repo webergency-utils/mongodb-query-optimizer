@@ -6,6 +6,7 @@ import
     canContinuePastStage, 
     dependenciesReadAnyPath, 
     exactUnsetFields, 
+    hasOnlyKnownDependencyPaths, 
     isSafePrunableAssignment, 
     parseAddFieldStage, 
     parseSimpleProject 
@@ -64,6 +65,25 @@ export function proveDeadAssignmentElimination(
             if( overwrite && isExactTopLevelPath( path ) && path in overwrite.specification )
             {
                 if( dependenciesReadAnyPath( overwrite.semantics, [ path ]))
+                {
+                    break;
+                }
+
+                isDead = true;
+                break;
+            }
+
+            if(
+                semantics.operator === '$group'
+                || semantics.operator === '$count'
+                || semantics.operator === '$sortByCount'
+            )
+            {
+                if(
+                    !hasOnlyKnownDependencyPaths( semantics )
+                    || semantics.dependencies.local.has( '*' )
+                    || dependenciesReadAnyPath( semantics, [ path ])
+                )
                 {
                     break;
                 }
