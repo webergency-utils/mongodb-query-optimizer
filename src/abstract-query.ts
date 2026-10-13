@@ -7,8 +7,9 @@ export interface ToAbstractQueryOptions
 
 export interface FormatAbstractQueryOptions
 {
-    readonly tabSize?: number;
-    readonly format?: 'allman' | 'same-line';
+    readonly tabSize?       : number
+    readonly format?        : 'allman' | 'same-line'
+    readonly maxLineLength? : number
 }
 
 const COMMUTATIVE_BRANCH_OPERATORS = new Set([ '$or', '$and', '$nor' ]);
@@ -830,7 +831,180 @@ function parseTokens( tokens: Token[] ): AstNode
     return parseNode();
 }
 
-function formatAst( node: AstNode, depth: number, options: { tabSize: number; format: 'allman' | 'same-line' }): string
+const LEAF_COMPARISON_OPERATORS = new Set([
+    '$eq',
+    '$ne',
+    '$gt',
+    '$gte',
+    '$lt',
+    '$lte',
+    '$in',
+    '$nin',
+    '$type',
+    '$size',
+    '$exists',
+    '$regex',
+    '$mod',
+    '$all'
+]);
+
+const LEAF_ARRAY_INDEX_OPERATORS = new Set([
+    '$arrayElemAt',
+    '$slice',
+    '$indexOfArray',
+    '$substrCP',
+    '$substrBytes',
+    '$substr',
+    '$indexOfCP',
+    '$indexOfBytes',
+    '$range'
+]);
+
+const LEAF_ACCUMULATOR_OPERATORS = new Set([
+    '$sum',
+    '$avg',
+    '$first',
+    '$last',
+    '$max',
+    '$min',
+    '$push',
+    '$addToSet'
+]);
+
+const COMPACT_PIPELINE_STAGES = new Set([
+    '$limit',
+    '$skip',
+    '$count',
+    '$sort'
+]);
+
+const ALL_LEAF_OPERATORS = new Set([
+    ...LEAF_COMPARISON_OPERATORS,
+    ...LEAF_ARRAY_INDEX_OPERATORS,
+    ...LEAF_ACCUMULATOR_OPERATORS
+]);
+
+function formatSingleLine( node: AstNode ): string
+{
+    if( node.kind === 'literal' )
+    {
+        return node.value;
+    }
+
+    if( node.kind === 'array' )
+    {
+        if( node.elements.length === 0 )
+        {
+            return '[]';
+        }
+
+        return `[${ node.elements.map( formatSingleLine ).join( ', ' ) }]`;
+    }
+
+    if( node.kind === 'object' )
+    {
+        if( node.properties.length === 0 )
+        {
+            return '{}';
+        }
+
+        const formattedProps = node.properties.map(( p ) =>
+        {
+            return `${ p.key }: ${ formatSingleLine( p.value ) }`;
+        }).join( ', ' );
+
+        return `{ ${ formattedProps } }`;
+    }
+
+    return '';
+}
+
+function cleanKey( key: string ): string
+{
+    return key.replace( /^"|"$/g, '' );
+}
+
+function isLeafCandidate( node: AstNode, depth: number = 0 ): boolean
+{
+    if( depth > 3 )
+    {
+        return false;
+    }
+
+    if( node.kind === 'literal' )
+    {
+        return true;
+    }
+
+    if( node.kind === 'array' )
+    {
+        if( node.elements.length === 0 )
+        {
+            return true;
+        }
+
+        if( node.elements.every(( elem ) => elem.kind === 'literal' ))
+        {
+            return true;
+        }
+
+        if( node.elements.length > 5 )
+        {
+            return false;
+        }
+
+        return node.elements.every(( elem ) => isLeafCandidate( elem, depth + 1 ));
+    }
+
+    if( node.kind === 'object' )
+    {
+        if( node.properties.length === 0 )
+        {
+            return true;
+        }
+
+        // Compact sort specification (all values are 1, -1, or numerical literal)
+        if( node.properties.length <= 4 && node.properties.every(( p ) => p.value.kind === 'literal' && ( p.value.value === '1' || p.value.value === '-1' || p.value.value === '<number>' )))
+        {
+            return true;
+        }
+
+        // Single property that is a leaf operator or compact stage
+        if( node.properties.length === 1 )
+        {
+            const prop = node.properties[ 0 ];
+            const cleanedKey = cleanKey( prop.key );
+
+            if( ALL_LEAF_OPERATORS.has( cleanedKey ) || COMPACT_PIPELINE_STAGES.has( cleanedKey ))
+            {
+                return isLeafCandidate( prop.value, depth + 1 );
+            }
+
+            // Single field filter whose value is a leaf operator object (e.g. { "deleted": { "$ne": true } })
+            if( prop.value.kind === 'object' && prop.value.properties.length === 1 )
+            {
+                const innerKey = cleanKey( prop.value.properties[ 0 ].key );
+                if( ALL_LEAF_OPERATORS.has( innerKey ))
+                {
+                    return isLeafCandidate( prop.value, depth + 1 );
+                }
+            }
+        }
+
+        return false;
+    }
+
+    return false;
+}
+
+interface FormatAstOptions
+{
+    tabSize       : number
+    format        : 'allman' | 'same-line'
+    maxLineLength : number
+}
+
+function formatAst( node: AstNode, depth: number, options: FormatAstOptions ): string
 {
     const indent = ( d: number ) => ' '.repeat( d * options.tabSize );
 
@@ -846,14 +1020,27 @@ function formatAst( node: AstNode, depth: number, options: { tabSize: number; fo
             return '[]';
         }
 
-        const allScalars = node.elements.every(( elem ) => elem.kind === 'literal' );
-        if( allScalars )
+        const canCollapseArray = depth > 0 || !node.elements.some(( elem ) => elem.kind === 'object' );
+        if( canCollapseArray && isLeafCandidate( node ))
         {
-            return `[${ node.elements.map(( elem ) => elem.value ).join( ', ' ) }]`;
+            const singleLine = formatSingleLine( node );
+            if( indent( depth ).length + singleLine.length <= options.maxLineLength )
+            {
+                return singleLine;
+            }
         }
 
         const childLines = node.elements.map(( elem ) =>
         {
+            if( isLeafCandidate( elem ))
+            {
+                const singleLine = formatSingleLine( elem );
+                if( indent( depth + 1 ).length + singleLine.length <= options.maxLineLength )
+                {
+                    return `${ indent( depth + 1 ) }${ singleLine }`;
+                }
+            }
+
             return `${ indent( depth + 1 ) }${ formatAst( elem, depth + 1, options ) }`;
         }).join( ',\n' );
 
@@ -873,8 +1060,20 @@ function formatAst( node: AstNode, depth: number, options: { tabSize: number; fo
         {
             const { key, value } = prop;
 
+            if( isLeafCandidate( value ))
+            {
+                const singleLineVal = formatSingleLine( value );
+                const prospectiveLineLength = indent( depth + 1 ).length + key.length + 2 + singleLineVal.length;
+
+                if( prospectiveLineLength <= options.maxLineLength )
+                {
+                    propLines.push( `${ indent( depth + 1 ) }${ key }: ${ singleLineVal }` );
+                    continue;
+                }
+            }
+
             const isMultilineValue = ( value.kind === 'object' && value.properties.length > 0 )
-                || ( value.kind === 'array' && !value.elements.every(( elem ) => elem.kind === 'literal' ) && value.elements.length > 0 );
+                || ( value.kind === 'array' && value.elements.length > 0 );
 
             if( options.format === 'allman' && isMultilineValue )
             {
@@ -896,12 +1095,14 @@ function formatAst( node: AstNode, depth: number, options: { tabSize: number; fo
 
 /**
  * Formats an abstract query shape or query object into a human-readable, indented string.
- * Supports configurable tab sizes (default 2) and bracket placement ('allman' vs 'same-line').
+ * Supports configurable tab sizes (default 2), bracket placement ('allman' vs 'same-line'),
+ * and a line-length threshold (default 80) for inlining compact leaf expressions.
  */
 export function formatAbstractQuery( queryOrShape: unknown, options?: FormatAbstractQueryOptions ): string
 {
     const tabSize = options?.tabSize ?? 2;
     const format = options?.format ?? 'same-line';
+    const maxLineLength = Math.max( 20, options?.maxLineLength ?? 80 );
 
     const shapeString = typeof queryOrShape === 'string'
         ? queryOrShape
@@ -910,5 +1111,5 @@ export function formatAbstractQuery( queryOrShape: unknown, options?: FormatAbst
     const tokens = tokenize( shapeString );
     const ast = parseTokens( tokens );
 
-    return formatAst( ast, 0, { tabSize, format });
+    return formatAst( ast, 0, { tabSize, format, maxLineLength });
 }

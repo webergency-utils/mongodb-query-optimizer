@@ -268,6 +268,7 @@ Formats an abstract query shape or a raw MongoDB query AST into an indented, hum
 - `options` (`FormatAbstractQueryOptions`, optional):
   - `format` (`'allman' | 'same-line'`, default: `'same-line'`): Bracket placement style. `'allman'` places opening brackets on their own line.
   - `tabSize` (`number`, default: `2`): Indentation spaces per level.
+  - `maxLineLength` (`number`, default: `80`): Line-length threshold for inlining compact leaf expressions, filter operators, and simple stages on a single line.
 
 #### Returns
 - `string`: An indented, human-readable query string.
@@ -288,10 +289,7 @@ console.log(formatAbstractQuery(pipeline, { format: 'allman', tabSize: 2 }));
 //   {
 //     "$match":
 //     {
-//       "deleted":
-//       {
-//         "$ne": <boolean>
-//       }
+//       "deleted": { "$ne": <boolean> }
 //     }
 //   },
 //   {
@@ -301,15 +299,8 @@ console.log(formatAbstractQuery(pipeline, { format: 'allman', tabSize: 2 }));
 //       "name": 1
 //     }
 //   },
-//   {
-//     "$sort":
-//     {
-//       "name": 1
-//     }
-//   },
-//   {
-//     "$limit": 10
-//   }
+//   { "$sort": { "name": 1 } },
+//   { "$limit": 10 }
 // ]
 ```
 

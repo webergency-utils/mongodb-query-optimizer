@@ -687,5 +687,122 @@ describe( 'abstract query shape generator and pretty printer', () =>
             expect( formatted ).toContain( '"name": 1' );
         });
     });
+
+    describe( 'compact leaf and tail formatting', () =>
+    {
+        it( 'inlines leaf comparison operators and type checks on a single line', () =>
+        {
+            const query = {
+                $and: [
+                    { $eq: [{ $type: '$events.dropout' }, 'date'] },
+                    { $lt: ['$events.dropout', new Date( '2026-10-12T09:04:37.666Z' )] }
+                ]
+            };
+
+            const formatted = formatAbstractQuery( query, { format: 'allman' });
+            expect( formatted ).toContain( '{ "$eq": [{ "$type": "$events.dropout" }, <string>] }' );
+            expect( formatted ).toContain( '{ "$lt": ["$events.dropout", <Date>] }' );
+        });
+
+        it( 'inlines single-condition field filters on the same line', () =>
+        {
+            const query = {
+                deleted: { $ne: true },
+                status: { $in: ['active', 'pending'] }
+            };
+
+            const formatted = formatAbstractQuery( query, { format: 'allman' });
+            expect( formatted ).toContain( '"deleted": { "$ne": <boolean> }' );
+            expect( formatted ).toContain( '"status": { "$in": [<string>] }' );
+        });
+
+        it( 'inlines simple pipeline stages like $sort, $limit, $skip, $count', () =>
+        {
+            const pipeline = [
+                { $match: { deleted: { $ne: true } } },
+                { $sort: { createdAt: -1, _id: 1 } },
+                { $skip: 20 },
+                { $limit: 10 },
+                { $count: 'total' }
+            ];
+
+            const formatted = formatAbstractQuery( pipeline, { format: 'allman' });
+            expect( formatted ).toContain( '  { "$sort": { "_id": 1, "createdAt": -1 } },' );
+            expect( formatted ).toContain( '  { "$skip": 20 },' );
+            expect( formatted ).toContain( '  { "$limit": 10 },' );
+            expect( formatted ).toContain( '  { "$count": <string> }' );
+        });
+
+        it( 'inlines accumulator and array index operators', () =>
+        {
+            const query = {
+                $project: {
+                    firstItem: { $arrayElemAt: ['$items', 0] },
+                    totalCount: { $sum: 1 },
+                    latestValue: { $first: '$history.value' }
+                }
+            };
+
+            const formatted = formatAbstractQuery( query, { format: 'allman' });
+            expect( formatted ).toContain( '"firstItem": { "$arrayElemAt": ["$items", 0] }' );
+            expect( formatted ).toContain( '"totalCount": { "$sum": <number> }' );
+            expect( formatted ).toContain( '"latestValue": { "$first": "$history.value" }' );
+        });
+
+        it( 'respects maxLineLength and wraps to multiline when budget is exceeded', () =>
+        {
+            const shape = '{"status":{"$in":["approved","rejected","pending","cancelled","under_review","escalated"]}}';
+
+            const tightFormat = formatAbstractQuery( shape, { format: 'allman', maxLineLength: 30 });
+            expect( tightFormat ).toContain( '[\n' );
+
+            const wideFormat = formatAbstractQuery( shape, { format: 'allman', maxLineLength: 120 });
+            expect( wideFormat ).toContain( '"status": { "$in": ["approved", "rejected", "pending", "cancelled", "under_review", "escalated"] }' );
+        });
+
+        it( 'formats complex user aggregation example cleanly without line bloat', () =>
+        {
+            const pipeline = [
+                {
+                    $match: {
+                        deleted: { $ne: true }
+                    }
+                },
+                {
+                    $addFields: {
+                        status: {
+                            $switch: {
+                                branches: [
+                                    {
+                                        case: {
+                                            $and: [
+                                                { $eq: [{ $type: '$events.dropout' }, 'date'] },
+                                                { $lt: ['$events.dropout', new Date( '2026-10-12T09:04:37.666Z' )] }
+                                            ]
+                                        },
+                                        then: 'dropout'
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                },
+                {
+                    $sort: { _id: -1 }
+                },
+                {
+                    $limit: 25
+                }
+            ];
+
+            const formatted = formatAbstractQuery( pipeline, { format: 'allman' });
+            expect( formatted ).toContain( '"deleted": { "$ne": <boolean> }' );
+            expect( formatted ).toContain( '{ "$eq": [{ "$type": "$events.dropout" }, <string>] }' );
+            expect( formatted ).toContain( '{ "$lt": ["$events.dropout", <Date>] }' );
+            expect( formatted ).toContain( '{ "$sort": { "_id": -1 } }' );
+            expect( formatted ).toContain( '{ "$limit": 25 }' );
+        });
+    });
 });
+
 
