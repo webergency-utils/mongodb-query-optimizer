@@ -84,6 +84,8 @@ const activePipelineTransformationIds: readonly PipelineTransformationId[] = Obj
     'add-field-pushdown',
     'top-k-pushdown',
     'unused-field-pruning',
+    'covered-projection-synthesis',
+    'dead-assignment-elimination',
     'adjacent-project-merging',
     'adjacent-add-field-merging',
     'lookup-delay',
@@ -96,8 +98,6 @@ const activePipelineTransformationIds: readonly PipelineTransformationId[] = Obj
 const containedPipelineTransformationIds: readonly PipelineTransformationId[] = Object.freeze([
     'stage-priority-reorder',
     'redundant-projection-elimination',
-    'covered-projection-synthesis',
-    'dead-assignment-elimination',
 ]);
 
 export interface PipelineTransformationRegistryStatus

@@ -473,6 +473,40 @@ export const pipelineProofManifest: readonly TransformationProofEvidence<Pipelin
         }
     ),
     evidence(
+        'covered-projection-synthesis',
+        'feat-covered-projection-synthesis-focused',
+        'u9-generated-top-level-covered-projection-synthesis',
+        'u9-generated-nested-covered-projection-synthesis',
+        'feat-covered-projection-synthesis-oracle',
+        {
+            status: 'active',
+            proofRecheckNote: 'Proof audited: inserts an inclusion projection before a collapsing stage for fields that stage reads, including a resolved variable or plain field copy. An unresolved name blocks the rewrite. Unknown errors block it even when strictErrors is false. Final key order comes from the collapsing stage, so strictFieldOrder does not skip it.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-covered-projection-synthesis',
+                strictFieldOrder: 'mixed-shape-covered-projection-synthesis',
+                strictErrors: 'mixed-shape-covered-projection-synthesis'
+            },
+            strictModeBehavior: 'preserved'
+        }
+    ),
+    evidence(
+        'dead-assignment-elimination',
+        'feat-dead-assignment-elimination-focused',
+        'u9-generated-top-level-dead-assignment-elimination',
+        'u9-generated-nested-dead-assignment-elimination',
+        'feat-dead-assignment-elimination-oracle',
+        {
+            status: 'active',
+            proofRecheckNote: 'Proof audited: removes an exact top-level assignment only after a later drop and no resolved read, including a plain copy or bound variable. An unresolved name blocks the rewrite. Throwing assignments stay even when strictErrors is false. strictFieldOrder refuses a removal that would move a surviving key.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-dead-assignment-elimination',
+                strictFieldOrder: 'mixed-shape-dead-assignment-elimination',
+                strictErrors: 'mixed-shape-dead-assignment-elimination'
+            },
+            strictModeBehavior: 'constrained'
+        }
+    ),
+    evidence(
         'adjacent-project-merging',
         'u6-project-merge-inclusion-top-level',
         'u9-generated-top-level-adjacent-project-merging',

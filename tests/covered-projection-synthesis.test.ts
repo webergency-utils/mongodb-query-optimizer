@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { optimizePipeline } from '../src/index.js';
 import { CoveredProjectionSynthesisPass } from '../src/passes/covered-projection-synthesis';
 import { proveCoveredProjectionSynthesis } from '../src/passes/covered-projection-proofs';
 import { optimizePipelineWithCandidateProfile } from '../src/passes/registry';
@@ -448,5 +449,26 @@ describe( 'CoveredProjectionSynthesisPass class and execution', () =>
         expect( optimized[ 0 ] ).toEqual({
             $project: { amount: 1, customerId: 1, _id: 0 }
         });
+    });
+});
+
+describe( 'production covered projection', () =>
+{
+    it( 'drops unread fields before a group and keeps the group documents', () =>
+    {
+        const docs = [
+            { _id: 1, customerId: 'a', amount: 10, note: 'x' },
+            { _id: 2, customerId: 'a', amount: 5, note: 'y' }
+        ];
+        const pipeline = [
+            { $group: { _id: '$customerId', n: { $sum: '$amount' } } }
+        ];
+        const optimized = optimizePipeline( pipeline );
+
+        expect( optimized ).toEqual([
+            { $project: { amount: 1, customerId: 1, _id: 0 } },
+            { $group: { _id: '$customerId', n: { $sum: '$amount' } } }
+        ]);
+        expect( runMockPipeline( docs, optimized ) ).toEqual( runMockPipeline( docs, pipeline ) );
     });
 });

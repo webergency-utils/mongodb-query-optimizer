@@ -164,6 +164,7 @@ describe( 'SortByCountSimplificationPass execution and parity', () =>
         expect( rawResult ).toEqual( optimizedResult );
         expect( optimizedPipeline ).toEqual(
         [
+            { $project: { tag: 1, _id: 0 } },
             { $sortByCount: '$tag' }
         ]);
     });

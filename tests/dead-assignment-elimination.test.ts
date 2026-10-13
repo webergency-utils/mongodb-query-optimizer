@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { optimizePipeline } from '../src/index.js';
 import { DeadAssignmentEliminationPass } from '../src/passes/dead-assignment-elimination';
 import { proveDeadAssignmentElimination } from '../src/passes/dead-assignment-proofs';
 import { optimizePipelineWithCandidateProfile } from '../src/passes/registry';
@@ -437,5 +438,55 @@ describe( 'DeadAssignmentEliminationPass execution and parity', () =>
         );
 
         expect( proof?.eliminatedFields ).toEqual([ 'tmp' ]);
+    });
+});
+
+describe( 'production dead-assignment optimization', () =>
+{
+    it( 'removes an unread assignment and keeps the projected documents', () =>
+    {
+        const docs = [
+            { _id: 1, name: 'a', price: 10 },
+            { _id: 2, name: 'b', price: 20 }
+        ];
+        const pipeline = [
+            { $set: { tmp: '$price' } },
+            { $project: { name: 1 } }
+        ];
+        const optimized = optimizePipeline( pipeline );
+
+        expect( optimized ).toEqual([
+            { $project: { name: 1 } }
+        ]);
+        expect( runMockPipeline( docs, optimized ) ).toEqual( runMockPipeline( docs, pipeline ) );
+    });
+
+    it( 'keeps document count and order when both rewrites apply', () =>
+    {
+        const docs = [
+            { _id: 1, customerId: 'a', amount: 10, note: 'x' },
+            { _id: 2, customerId: 'b', amount: 4, note: 'y' },
+            { _id: 3, customerId: 'a', amount: 1, note: 'z' }
+        ];
+        const pipeline = [
+            { $set: { tmp: 1 } },
+            { $group: { _id: '$customerId', n: { $sum: '$amount' } } }
+        ];
+        const optimized = optimizePipeline( pipeline );
+
+        expect( optimized ).toEqual([
+            { $project: { amount: 1, customerId: 1, _id: 0 } },
+            { $group: { _id: '$customerId', n: { $sum: '$amount' } } }
+        ]);
+        expect( runMockPipeline( docs, optimized ) ).toEqual( runMockPipeline( docs, pipeline ) );
+    });
+
+    it( 'leaves an $expr match unchanged', () =>
+    {
+        const pipeline = [
+            { $match: { $expr: { $eq: [ '$a', 1 ] } } }
+        ];
+
+        expect( optimizePipeline( pipeline ) ).toEqual( pipeline );
     });
 });

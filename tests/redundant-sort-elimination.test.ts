@@ -228,6 +228,7 @@ describe( 'RedundantSortEliminationPass execution and parity', () =>
         expect( rawResult ).toEqual( optimizedResult );
         expect( optimizedPipeline ).toEqual(
         [
+            { $project: { dept: 1, val: 1, _id: 0 } },
             { $group: { _id: '$dept', total: { $sum: '$val' } } },
             { $sort: { _id: 1 } }
         ]);

@@ -34,8 +34,6 @@ const REGISTERED_FILTER_IDS = [
 const EXPECTED_CONTAINED_PIPELINE_IDS = [
     'stage-priority-reorder',
     'redundant-projection-elimination',
-    'covered-projection-synthesis',
-    'dead-assignment-elimination',
 ] as const;
 
 const REGISTERED_PIPELINE_IDS = [
@@ -63,6 +61,8 @@ const REGISTERED_PIPELINE_IDS = [
     'complex-projection-deferral',
     'facet-prefix-hoisting',
     ...EXPECTED_CONTAINED_PIPELINE_IDS,
+    'covered-projection-synthesis',
+    'dead-assignment-elimination',
 ] as const;
 
 function expectUnique(values: readonly string[]): void
@@ -129,6 +129,8 @@ describe('explicit immutable transformation registries', () =>
             'add-field-pushdown',
             'top-k-pushdown',
             'unused-field-pruning',
+            'covered-projection-synthesis',
+            'dead-assignment-elimination',
             'adjacent-project-merging',
             'adjacent-add-field-merging',
             'lookup-delay',

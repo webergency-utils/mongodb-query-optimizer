@@ -93,7 +93,7 @@ The optimizer evaluates queries and aggregation pipelines purely as Abstract Syn
                  │
                  ▼
       ┌──────────────────────┐
-      │  Proof-Guarded Pass  │ (22 active pipeline passes, rigorous correctness proofs)
+      │  Proof-Guarded Pass  │ (24 active pipeline passes, rigorous correctness proofs)
       └──────────┬───────────┘
                  │
                  ▼
@@ -128,6 +128,8 @@ The optimizer evaluates queries and aggregation pipelines purely as Abstract Syn
 20. `sort-project-commute`: Commutes `$sort` ahead of `$project` when all sort keys remain visible.
 21. `complex-projection-deferral`: Pushes complex computed fields downstream past selective filters.
 22. `facet-prefix-hoisting`: Extracts identical prefix stages shared across all branches of a `$facet`.
+23. `covered-projection-synthesis`: Inserts an inclusion projection in front of a collapsing stage, keeping only the fields that stage reads.
+24. `dead-assignment-elimination`: Removes a top-level assignment whose value is dropped later and that nothing in between reads.
 
 ### Inactive & Contained Passes
 - `expr-match-normalization`: Inactive in production pending array traversal safety proofs across multikey arrays.

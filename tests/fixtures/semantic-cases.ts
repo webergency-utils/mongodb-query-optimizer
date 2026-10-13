@@ -3314,6 +3314,85 @@ export const productionSemanticCases: readonly SemanticCase[] = [
         affectedTransformationIds: [ 'add-field-pushdown', 'top-k-pushdown' ],
         expectedEquivalent: true,
     },
+    {
+        id: 'feat-covered-projection-synthesis-focused',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, customerId: 'a', amount: 10, note: 'x' },
+                    { _id: 2, customerId: 'a', amount: 5, note: 'y' },
+                ],
+            },
+        },
+        pipeline: [
+            { $group: { _id: '$customerId', n: { $sum: '$amount' } } },
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: [ 'covered-projection-synthesis' ],
+        expectedEquivalent: true,
+    },
+    {
+        id: 'feat-covered-projection-synthesis-oracle',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, customerId: 'a', amount: 10, note: 'x' },
+                    { _id: 2, customerId: 'b', amount: 5, note: 'y' },
+                ],
+            },
+        },
+        pipeline: [
+            { $match: { amount: { $gt: 0 } } },
+            { $group: { _id: '$customerId', n: { $sum: '$amount' } } },
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: [ 'covered-projection-synthesis' ],
+        expectedEquivalent: true,
+    },
+    {
+        id: 'feat-dead-assignment-elimination-focused',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, name: 'a', price: 10 },
+                    { _id: 2, name: 'b', price: 20 },
+                ],
+            },
+        },
+        pipeline: [
+            { $set: { tmp: '$price' } },
+            { $project: { name: 1 } },
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: [ 'dead-assignment-elimination' ],
+        expectedEquivalent: true,
+    },
+    {
+        id: 'feat-dead-assignment-elimination-oracle',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections: {
+            main: {
+                documents: [
+                    { _id: 1, name: 'a', price: 10 },
+                    { _id: 2, name: 'b', price: 20 },
+                ],
+            },
+        },
+        pipeline: [
+            { $set: { tmp: 1, kept: '$name' } },
+            { $unset: 'tmp' },
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: [ 'dead-assignment-elimination' ],
+        expectedEquivalent: true,
+    },
 ];
 
 export const candidateSemanticCases: readonly SemanticCase[] = [

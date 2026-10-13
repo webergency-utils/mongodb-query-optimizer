@@ -708,16 +708,8 @@ describe('production successful-result rewrites', () =>
             [{ $unwind: '$items' }, { $limit: 1 }],
         ],
         [
-            'does not move group before limit',
-            [{ $group: { _id: '$status', count: { $sum: 1 } } }, { $limit: 1 }],
-        ],
-        [
             'does not move limit before unwind',
             [{ $limit: 1 }, { $unwind: '$items' }],
-        ],
-        [
-            'does not move limit before group',
-            [{ $limit: 1 }, { $group: { _id: '$status' } }],
         ],
         [
             'does not generic-reorder sort past unused project keys only',
@@ -726,6 +718,26 @@ describe('production successful-result rewrites', () =>
     ])('%s', (_name, pipeline) =>
     {
         expect(optimizePipeline(pipeline)).toEqual(pipeline);
+    });
+
+    it('keeps a limit on the same side of a group when a covered projection is inserted', () =>
+    {
+        expect(optimizePipeline([
+            { $group: { _id: '$status', count: { $sum: 1 } } },
+            { $limit: 1 },
+        ])).toEqual([
+            { $project: { status: 1, _id: 0 } },
+            { $group: { _id: '$status', count: { $sum: 1 } } },
+            { $limit: 1 },
+        ]);
+        expect(optimizePipeline([
+            { $limit: 1 },
+            { $group: { _id: '$status' } },
+        ])).toEqual([
+            { $limit: 1 },
+            { $project: { status: 1, _id: 0 } },
+            { $group: { _id: '$status' } },
+        ]);
     });
 
     it('prunes dead writes instead of swapping them with the killer', () =>
@@ -843,6 +855,7 @@ describe('high-ROI aggregation optimization passes end-to-end rewrites', () =>
         ];
         expect(optimizePipeline(pipeline)).toEqual([
             { $match: { tenantId: 'acme' } },
+            { $project: { tenantId: 1, _id: 0 } },
             {
                 $group: {
                     _id: '$tenantId',
@@ -896,7 +909,10 @@ describe('high-ROI aggregation optimization passes end-to-end rewrites', () =>
             {
                 $facet: {
                     branchA: [{ $count: 'total' }],
-                    branchB: [{ $group: { _id: '$name' } }],
+                    branchB: [
+                        { $project: { name: 1, _id: 0 } },
+                        { $group: { _id: '$name' } },
+                    ],
                 },
             },
         ]);

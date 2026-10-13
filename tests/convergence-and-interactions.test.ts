@@ -431,7 +431,10 @@ describe('production pipeline copy semantics', () =>
             {
                 $facet: {
                     recent: [{ $count: 'total' }],
-                    oldest: [{ $group: { _id: '$name' } }],
+                    oldest: [
+                        { $project: { name: 1, _id: 0 } },
+                        { $group: { _id: '$name' } },
+                    ],
                 },
             },
         ]);

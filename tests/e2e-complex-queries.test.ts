@@ -1026,7 +1026,7 @@ describe( 'End-to-End Complex Query Suite', () =>
             const optimized = optimizePipeline( pipeline );
 
             // Verifies $sortByCount folding
-            expect( optimized[1].$sortByCount ).toBe( '$topic' );
+            expect( optimized[ 2 ].$sortByCount ).toBe( '$topic' );
 
             const rawResult = runMockPipeline( articleDataset, pipeline );
             const optimizedResult = runMockPipeline( articleDataset, optimized );
@@ -1077,6 +1077,7 @@ describe( 'End-to-End Complex Query Suite', () =>
             // The two leading sorts are eliminated
             expect( optimized ).toEqual(
             [
+                { $project: { accountId: 1, amount: 1, _id: 0 } },
                 {
                     $group: {
                         _id: '$accountId',

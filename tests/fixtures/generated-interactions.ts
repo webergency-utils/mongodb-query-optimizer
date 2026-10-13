@@ -7,7 +7,7 @@ import type { SemanticCase } from './semantic-cases.js';
 import { MIXED_SHAPE_CATALOG } from './mixed-shapes.js';
 
 export const GENERATED_INTERACTION_SEED = 0x5eed_2026;
-export const GENERATED_INTERACTION_CASE_COUNT = 54;
+export const GENERATED_INTERACTION_CASE_COUNT = 58;
 
 interface InteractionDescriptor
 {
@@ -47,6 +47,14 @@ const interactionDescriptors: readonly InteractionDescriptor[] = Object.freeze([
     {
         pipelineId: 'unused-field-pruning',
         filterId: 'simplify-disjunction-identities',
+    },
+    {
+        pipelineId: 'covered-projection-synthesis',
+        filterId: 'simplify-equality',
+    },
+    {
+        pipelineId: 'dead-assignment-elimination',
+        filterId: 'simplify-equality',
     },
     {
         pipelineId: 'adjacent-project-merging',
@@ -338,6 +346,18 @@ function makeInteractionPipeline(
                     },
                 },
                 { $unset: 'dead' },
+                { $sort: { _id: 1 } },
+            ];
+        case 'covered-projection-synthesis':
+            return [
+                { $match: filter },
+                { $group: { _id: '$status', n: { $sum: '$score' } } },
+            ];
+        case 'dead-assignment-elimination':
+            return [
+                { $match: filter },
+                { $set: { tmp: 1, kept: '$status' } },
+                { $unset: 'tmp' },
                 { $sort: { _id: 1 } },
             ];
         case 'adjacent-project-merging':

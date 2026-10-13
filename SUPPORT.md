@@ -20,7 +20,7 @@ The optimizer employs a mathematically sound, lattice-based abstract interpretat
 
 Every pipeline pass and filter normalization rule is strictly audited against formal correctness proofs and differential test suites. Entries in the production registry are either **Active** (with complete proof manifests and live MongoDB 8 verification) or **Inactive / Contained** with documented audit findings.
 
-### A. Active Pipeline Transformations (22 Passes)
+### A. Active Pipeline Transformations (24 Passes)
 
 | Pass ID | Status | Focus / Description | Mode Matrix Verification |
 | :--- | :---: | :--- | :---: |
@@ -40,6 +40,8 @@ Every pipeline pass and filter normalization rule is strictly audited against fo
 | `group-filter-pushdown` | **Active** | Pushes post-`$group` filters before `$group` for 1-to-1 deterministic keys. | Default, SFO, StrictErrors |
 | `bucket-filter-pushdown` | **Active** | Pushes selective boundary pre-filters before `$bucket` and `$bucketAuto`. | Default, SFO, StrictErrors |
 | `unused-field-pruning` | **Active** | Strips unreferenced fields created in `$addFields`/`$set`. | Default, SFO, StrictErrors |
+| `covered-projection-synthesis` | **Active** | Inserts an inclusion projection in front of `$group`, `$count`, or `$sortByCount`, keeping only fields those stages read. | Default, SFO, StrictErrors |
+| `dead-assignment-elimination` | **Active** | Removes an exact top-level assignment that a later stage drops and that nothing in between reads. | Default, SFO, StrictErrors |
 | `adjacent-project-merging` | **Active** | Fuses consecutive `$project` stages into a single specification. | Default, SFO, StrictErrors |
 | `adjacent-add-field-merging` | **Active** | Merges adjacent `$addFields` or `$set` stages. | Default, SFO, StrictErrors |
 | `redundant-lookup-elimination` | **Active** | Drops unused `$lookup` joins whose aliases are discarded downstream. | Default, SFO, StrictErrors |

@@ -27,7 +27,12 @@ describe( 'Bug Regression Suite', () =>
 
             const pipeline = [ group, match ];
             const optimized = optimizePipeline( pipeline );
-            expect( optimized ).toEqual( pipeline );
+            expect( optimized ).toEqual(
+            [
+                { $project: { dept: 1, _id: 0 } },
+                group,
+                match
+            ]);
         });
 
         it( 'rejects pushdown when post-match targets empty string _id', () =>

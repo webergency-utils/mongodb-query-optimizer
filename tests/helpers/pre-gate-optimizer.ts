@@ -26,6 +26,8 @@ export const PRE_GATE_PIPELINE_TRANSFORMATION_IDS: readonly PipelineTransformati
     'add-field-pushdown',
     'top-k-pushdown',
     'unused-field-pruning',
+    'covered-projection-synthesis',
+    'dead-assignment-elimination',
     'adjacent-project-merging',
     'adjacent-add-field-merging',
     'lookup-delay',

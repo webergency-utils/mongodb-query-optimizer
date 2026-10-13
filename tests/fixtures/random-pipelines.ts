@@ -184,6 +184,21 @@ export const RANDOM_PIPELINE_TEMPLATES: readonly PipelineTemplate[] = Object.fre
         ]
     },
     {
+        passId: 'covered-projection-synthesis',
+        buildPipeline: ( _random, _index ) => [
+            { $match: { score: { $gte: 0 } } },
+            { $group: { _id: '$status', n: { $sum: '$score' } } }
+        ]
+    },
+    {
+        passId: 'dead-assignment-elimination',
+        buildPipeline: ( _random, _index ) => [
+            { $set: { tmp: 1, kept: '$status' } },
+            { $unset: 'tmp' },
+            { $sort: { _id: 1 } }
+        ]
+    },
+    {
         passId: 'adjacent-project-merging',
         buildPipeline: ( _random, _index ) => [
             { $project: { _id: 1, status: 1, score: 1 } },
