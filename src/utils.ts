@@ -75,10 +75,15 @@ function isExoticObject(val: any): boolean {
     return false;
 }
 
-export function hasCycle(
+export function hasCycle( val: unknown ): boolean
+{
+    return objectHasCycle( val, new WeakSet(), new WeakSet() );
+}
+
+function objectHasCycle(
     val     : unknown,
-    active  : WeakSet<object> = new WeakSet(),
-    visited : WeakSet<object> = new WeakSet()
+    active  : WeakSet<object>,
+    visited : WeakSet<object>
 ): boolean
 {
     if( !val || typeof val !== 'object' ){ return false; }
@@ -92,14 +97,14 @@ export function hasCycle(
     {
         for( const item of val )
         {
-            if( hasCycle( item, active, visited )){ return true; }
+            if( objectHasCycle( item, active, visited )){ return true; }
         }
     }
     else
     {
         for( const value of Object.values( val ))
         {
-            if( hasCycle( value, active, visited )){ return true; }
+            if( objectHasCycle( value, active, visited )){ return true; }
         }
     }
 

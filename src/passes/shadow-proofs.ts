@@ -6,8 +6,6 @@ import { isStageProvenErrorFree } from './guarantee-guards.js';
 import { getSingleStageEntry } from './helpers.js';
 import { arePathsDisjoint } from './path-disjoint.js';
 
-export { arePathsDisjoint };
-
 /**
  * Shared proof machinery for heuristic shadow-field rewrites.
  *

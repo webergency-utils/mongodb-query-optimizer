@@ -3,7 +3,6 @@ import {
     AddFieldPushdownPass,
 } from '../src/passes/add-field-pushdown.js';
 import {
-    arePathsDisjoint,
     canPushFieldAcrossStage,
     collectDownstreamDemandedKeys,
     proveAddFieldPushdown,
@@ -306,12 +305,6 @@ describe('AddFieldPushdownPass', () =>
                 },
             }
         )).toBe( false );
-    });
-
-    it('tests arePathsDisjoint utility', () =>
-    {
-        expect( arePathsDisjoint( [ 'a.b' ], [ 'c.d' ] ) ).toBe( true );
-        expect( arePathsDisjoint( [ 'a.b' ], [ 'a' ] ) ).toBe( false );
     });
 
     it('handles collectDownstreamDemandedKeys branches', () =>

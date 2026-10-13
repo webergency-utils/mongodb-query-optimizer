@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { TopKPushdownPass } from '../src/passes/top-k-pushdown.js';
 import
 {
-    arePathsDisjoint,
     canTopKPushAcrossStage,
     collectExpressionDependencies,
     isExpressionCompletelyDeterministic,
@@ -19,14 +18,6 @@ import { runMockPipeline } from './helpers/mock-engine.js';
 
 describe( 'top-k-proofs unit and branch analysis', () =>
 {
-    it( 'tests arePathsDisjoint with disjoint and non-disjoint paths', () =>
-    {
-        expect( arePathsDisjoint( [ 'a.b' ], [ 'c.d' ] )).toBe( true );
-        expect( arePathsDisjoint( [ 'a.b' ], [ 'a.b' ] )).toBe( false );
-        expect( arePathsDisjoint( [ 'a' ], [ 'a.b' ] )).toBe( false );
-        expect( arePathsDisjoint( [ 'a.b' ], [ 'a' ] )).toBe( false );
-    });
-
     it( 'returns null in parseNumericSortKeys for invalid sort stages', () =>
     {
         expect( parseNumericSortKeys( null )).toBeNull();

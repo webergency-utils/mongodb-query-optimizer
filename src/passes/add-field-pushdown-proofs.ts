@@ -6,8 +6,6 @@ import { canMoveStageAcrossStage } from './guarantee-guards.js';
 import { getSingleStageEntry } from './helpers.js';
 import { arePathsDisjoint } from './path-disjoint.js';
 
-export { arePathsDisjoint };
-
 export interface AddFieldPushdownProof
 {
     readonly sourceIndex     : number;

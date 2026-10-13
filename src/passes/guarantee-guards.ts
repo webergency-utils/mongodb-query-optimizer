@@ -99,15 +99,19 @@ export function stageCanExpandRows( stage: unknown ): boolean
         || semantics.cardinality === 'filters-and-expands';
 }
 
-function expressionReadsFieldOrder( expr: unknown ): boolean
+function expressionReadsFieldOrder( expr: unknown, seen: WeakSet<object> ): boolean
 {
     if( !expr || typeof expr !== 'object' ){ return false }
+
+    if( seen.has( expr )){ return false }
+
+    seen.add( expr );
 
     if( Array.isArray( expr ))
     {
         for( const item of expr )
         {
-            if( expressionReadsFieldOrder( item )){ return true }
+            if( expressionReadsFieldOrder( item, seen )){ return true }
         }
 
         return false;
@@ -119,21 +123,25 @@ function expressionReadsFieldOrder( expr: unknown ): boolean
     {
         if( key === '$objectToArray' ){ return true }
 
-        if( expressionReadsFieldOrder( value )){ return true }
+        if( expressionReadsFieldOrder( value, seen )){ return true }
     }
 
     return false;
 }
 
-function filterReadsFieldOrder( filter: unknown ): boolean
+function filterReadsFieldOrder( filter: unknown, seen: WeakSet<object> ): boolean
 {
     if( !filter || typeof filter !== 'object' ){ return false }
+
+    if( seen.has( filter )){ return false }
+
+    seen.add( filter );
 
     if( Array.isArray( filter ))
     {
         for( const item of filter )
         {
-            if( filterReadsFieldOrder( item )){ return true }
+            if( filterReadsFieldOrder( item, seen )){ return true }
         }
 
         return false;
@@ -145,7 +153,7 @@ function filterReadsFieldOrder( filter: unknown ): boolean
     {
         if( key === '$expr' )
         {
-            if( expressionReadsFieldOrder( value )){ return true }
+            if( expressionReadsFieldOrder( value, seen )){ return true }
 
             continue;
         }
@@ -163,7 +171,7 @@ function filterReadsFieldOrder( filter: unknown ): boolean
             }
         }
 
-        if( filterReadsFieldOrder( value )){ return true }
+        if( filterReadsFieldOrder( value, seen )){ return true }
     }
 
     return false;
@@ -182,7 +190,7 @@ export function stageReadsFieldOrder( stage: unknown, seen: WeakSet<object> = ne
 
     if( operator === '$match' )
     {
-        return filterReadsFieldOrder( value );
+        return filterReadsFieldOrder( value, seen );
     }
 
     if( operator === '$group' && isPlainObject( value ))
@@ -201,17 +209,13 @@ export function stageReadsFieldOrder( stage: unknown, seen: WeakSet<object> = ne
         }
     }
 
-    if( operator === '$lookup' )
+    if( operator === '$lookup' && isPlainObject( value ) && Array.isArray( value.pipeline ))
     {
-        return isPlainObject( value ) && Array.isArray( value.pipeline )
-            ? pipelineReadsFieldOrder( value.pipeline, seen )
-            : false;
+        if( pipelineReadsFieldOrder( value.pipeline, seen )){ return true }
     }
 
-    if( operator === '$facet' )
+    if( operator === '$facet' && isPlainObject( value ))
     {
-        if( !isPlainObject( value )){ return false; }
-
         for( const subpipeline of Object.values( value ))
         {
             if( Array.isArray( subpipeline ) && pipelineReadsFieldOrder( subpipeline, seen ))
@@ -219,18 +223,14 @@ export function stageReadsFieldOrder( stage: unknown, seen: WeakSet<object> = ne
                 return true;
             }
         }
-
-        return false;
     }
 
-    if( operator === '$unionWith' )
+    if( operator === '$unionWith' && isPlainObject( value ) && Array.isArray( value.pipeline ))
     {
-        return isPlainObject( value ) && Array.isArray( value.pipeline )
-            ? pipelineReadsFieldOrder( value.pipeline, seen )
-            : false;
+        if( pipelineReadsFieldOrder( value.pipeline, seen )){ return true }
     }
 
-    return expressionReadsFieldOrder( value );
+    return expressionReadsFieldOrder( value, seen );
 }
 
 /**

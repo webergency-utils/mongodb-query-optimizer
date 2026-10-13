@@ -195,6 +195,16 @@ describe( 'stageReadsFieldOrder & pipelineReadsFieldOrder', () =>
         const malformedLookup = { $lookup: 'invalid' };
 
         expect( stageReadsFieldOrder( lookupWithOrder )).toBe( true );
+        expect( stageReadsFieldOrder(
+        {
+            $lookup:
+            {
+                from : 'c',
+                as   : 'out',
+                let  : { rows: { $objectToArray: '$$ROOT' } },
+                pipeline : []
+            }
+        })).toBe( true );
         expect( stageReadsFieldOrder( lookupWithoutOrder )).toBe( false );
         expect( stageReadsFieldOrder( simpleLookup )).toBe( false );
         expect( stageReadsFieldOrder( malformedLookup )).toBe( false );
@@ -257,6 +267,13 @@ describe( 'stageReadsFieldOrder & pipelineReadsFieldOrder', () =>
 
         expect( pipelineReadsFieldOrder( pipeline )).toBe( false );
         expect( pipelineReadsFieldOrder( null as any )).toBe( false );
+
+        const repeatedClause = { status: 'active' };
+
+        expect( stageReadsFieldOrder(
+        {
+            $match: { $and: [ repeatedClause, repeatedClause ] }
+        })).toBe( false );
         expect( stageReadsFieldOrder( null )).toBe( false );
         expect( stageReadsFieldOrder( {} )).toBe( false );
     });

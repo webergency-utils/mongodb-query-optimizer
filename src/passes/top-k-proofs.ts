@@ -14,7 +14,6 @@ import
 }
 from './shadow-proofs.js';
 
-export { arePathsDisjoint } from './path-disjoint.js';
 export { collectExpressionDependencies, isExpressionCompletelyDeterministic } from './shadow-proofs.js';
 
 export interface TopKPushdownProof
