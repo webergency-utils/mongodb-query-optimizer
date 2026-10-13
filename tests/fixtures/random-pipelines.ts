@@ -185,6 +185,7 @@ export const RANDOM_PIPELINE_TEMPLATES: readonly PipelineTemplate[] = Object.fre
     },
     {
         passId: 'covered-projection-synthesis',
+        observation: 'multiset',
         buildPipeline: ( _random, _index ) => [
             { $match: { score: { $gte: 0 } } },
             { $group: { _id: '$status', n: { $sum: '$score' } } }

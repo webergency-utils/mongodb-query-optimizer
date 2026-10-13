@@ -495,14 +495,17 @@ function isSyntacticallyErrorFreeExpression(expression: unknown): boolean
     );
 }
 
-export function isSafePrunableAssignment(expression: unknown): boolean
+export function isSafePrunableAssignment(
+    expression: unknown,
+    requireErrorFree = true,
+): boolean
 {
     const summary = analyzeExpression(expression, {
         documentScope: 'local',
     });
     return (
         !containsGetField(expression)
-        && isSyntacticallyErrorFreeExpression(expression)
+        && (!requireErrorFree || isSyntacticallyErrorFreeExpression(expression))
         && !summary.unknown
         && summary.determinism === 'deterministic'
         && hasOnlyExactLocalDependencies(summary)
@@ -684,12 +687,7 @@ export function proveAddFieldDeferralAcrossSort(
 {
     const source = parseAddFieldStage(addStage, true);
     const keys = parseProjectionCommuteSortKeys(sortStage);
-    if (!source || !keys)
-    {
-        return false;
-    }
-
-    if (containsGetField(source.specification))
+    if (!source || !keys || containsGetField(source.specification))
     {
         return false;
     }
@@ -697,12 +695,18 @@ export function proveAddFieldDeferralAcrossSort(
     return arePathsDisjoint(source.semantics.writes, keys);
 }
 
-function prunableSourceFields(source: AddFieldStage): Set<string>
+function prunableSourceFields(
+    source: AddFieldStage,
+    requireErrorFree = true,
+): Set<string>
 {
     const fields = new Set<string>();
     for (const [path, expression] of Object.entries(source.specification))
     {
-        if (isExactTopLevelPath(path) && isSafePrunableAssignment(expression))
+        if (
+            isExactTopLevelPath(path)
+            && isSafePrunableAssignment(expression, requireErrorFree)
+        )
         {
             fields.add(path);
         }
@@ -840,9 +844,14 @@ export function canContinuePastStage(
 export function proveUnusedFieldPruning(
     sourceStage: unknown,
     nextStage: unknown,
+    requireErrorFree = true,
 ): UnusedFieldPruningProof | null
 {
-    return proveUnusedFieldPruningThroughSuffix(sourceStage, [nextStage]);
+    return proveUnusedFieldPruningThroughSuffix(
+        sourceStage,
+        [nextStage],
+        requireErrorFree,
+    );
 }
 
 /**
@@ -853,6 +862,7 @@ export function proveUnusedFieldPruning(
 export function proveUnusedFieldPruningThroughSuffix(
     sourceStage: unknown,
     suffix: readonly unknown[],
+    requireErrorFree = true,
 ): UnusedFieldPruningProof | null
 {
     const source = parseAddFieldStage(sourceStage, false);
@@ -861,7 +871,7 @@ export function proveUnusedFieldPruningThroughSuffix(
         return null;
     }
 
-    const live = prunableSourceFields(source);
+    const live = prunableSourceFields(source, requireErrorFree);
     if (live.size === 0)
     {
         return null;

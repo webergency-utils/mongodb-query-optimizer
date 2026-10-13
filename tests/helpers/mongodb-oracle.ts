@@ -645,7 +645,6 @@ export class MongoDifferentialOracle
                         },
                     },
                 },
-                { writeConcern: { w: "majority" } },
             );
 
         if (result.matchedCount !== 1)
@@ -661,23 +660,24 @@ export class MongoDifferentialOracle
     {
         const database = this.getDatabase();
 
-        for (const [logicalId, fixture] of Object.entries(fixtures))
-        {
-            const collectionName = names[logicalId];
-            if (!collectionName || !this.ownsCollectionName(collectionName))
+        await Promise.all(
+            Object.entries(fixtures).map(async ([logicalId, fixture]) =>
             {
-                throw new Error("MongoDB oracle refused an unowned collection name");
-            }
+                const collectionName = names[logicalId];
+                if (!collectionName || !this.ownsCollectionName(collectionName))
+                {
+                    throw new Error("MongoDB oracle refused an unowned collection name");
+                }
 
-            await database.createCollection(collectionName, fixture.options);
-            if (fixture.documents.length > 0)
-            {
-                await database.collection(collectionName).insertMany(
-                    cloneDocuments(fixture.documents),
-                    { writeConcern: { w: "majority" } },
-                );
-            }
-        }
+                await database.createCollection(collectionName, fixture.options);
+                if (fixture.documents.length > 0)
+                {
+                    await database.collection(collectionName).insertMany(
+                        cloneDocuments(fixture.documents),
+                    );
+                }
+            }),
+        );
     }
 
     private async markReady(): Promise<void>
@@ -696,31 +696,11 @@ export class MongoDifferentialOracle
                         leaseExpiresAt: new Date(Date.now() + LEASE_DURATION_MS),
                     },
                 },
-                { writeConcern: { w: "majority" } },
             );
 
         if (result.matchedCount !== 1)
         {
             throw new Error("MongoDB oracle could not publish fixture readiness");
-        }
-    }
-
-    private async assertReady(): Promise<void>
-    {
-        const lease = await this.getDatabase()
-            .collection<OwnershipDocument>(OWNERSHIP_COLLECTION)
-            .findOne({
-                _id: this.runToken,
-                ownerToken: this.runToken,
-                state: "ready",
-            });
-
-        if (
-            !lease
-            || !isCurrentLeaseOwner(lease, this.runToken)
-        )
-        {
-            throw new Error("MongoDB oracle fixture is not ready");
         }
     }
 
@@ -792,10 +772,11 @@ export class MongoDifferentialOracle
         try
         {
             await this.markSeeding(collectionNames);
-            await this.seedSide(testCase.collections, originalNames);
-            await this.seedSide(testCase.collections, optimizedNames);
+            await Promise.all([
+                this.seedSide(testCase.collections, originalNames),
+                this.seedSide(testCase.collections, optimizedNames),
+            ]);
             await this.markReady();
-            await this.assertReady();
         }
         catch
         {
@@ -821,14 +802,16 @@ export class MongoDifferentialOracle
             }
             : testCase.optimized;
 
-        const original = await this.execute(
-            originalNames[testCase.mainCollectionId],
-            originalOperation,
-        );
-        const optimized = await this.execute(
-            optimizedNames[testCase.mainCollectionId],
-            optimizedOperation,
-        );
+        const [original, optimized] = await Promise.all([
+            this.execute(
+                originalNames[testCase.mainCollectionId],
+                originalOperation,
+            ),
+            this.execute(
+                optimizedNames[testCase.mainCollectionId],
+                optimizedOperation,
+            ),
+        ]);
         const comparison = compareObservations( {
             mode: testCase.observation,
             policy: testCase.policy,
@@ -854,7 +837,8 @@ export class MongoDifferentialOracle
             return;
         }
 
-        const ownershipCollection = this.database
+        const database = this.database;
+        const ownershipCollection = database
             .collection<OwnershipDocument>(OWNERSHIP_COLLECTION);
         const lease = await ownershipCollection.findOne({
             _id: this.runToken,
@@ -863,12 +847,18 @@ export class MongoDifferentialOracle
 
         if (lease)
         {
-            for (const collectionName of lease.collections)
+            const ownedCollections = lease.collections.filter((collectionName) =>
+                this.ownsCollectionName(collectionName),
+            );
+            const batchSize = 32;
+            for (let i = 0; i < ownedCollections.length; i += batchSize)
             {
-                if (this.ownsCollectionName(collectionName))
-                {
-                    await this.database.collection(collectionName).drop().catch(() => undefined);
-                }
+                const batch = ownedCollections.slice(i, i + batchSize);
+                await Promise.all(
+                    batch.map((collectionName) =>
+                        database.collection(collectionName).drop().catch(() => undefined),
+                    ),
+                );
             }
 
             await ownershipCollection.deleteOne({

@@ -961,8 +961,17 @@ describe('movement containment and scheduling', () =>
                 },
             },
         ]);
-        expect(optimizePipeline(fixtures[3]!.pipeline as any[])).toEqual(
+        expect(optimizePipeline(fixtures[3]!.pipeline as any[], fixtures[3]!.optimizerOptions)).toEqual(
             fixtures[3]!.pipeline,
         );
+        expect(optimizePipeline(fixtures[3]!.pipeline as any[])).toEqual([
+            {
+                $facet: {
+                    selected: [
+                        { $unset: 'dead' },
+                    ],
+                },
+            },
+        ]);
     });
 });

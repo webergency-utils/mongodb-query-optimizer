@@ -41,7 +41,7 @@ export function proveDeadAssignmentElimination(
 
     for( const [ path, expression ] of Object.entries( source.specification ))
     {
-        if( !isExactTopLevelPath( path ) || !isSafePrunableAssignment( expression ))
+        if( !isExactTopLevelPath( path ) || !isSafePrunableAssignment( expression, context.strictErrors ))
         {
             continue;
         }

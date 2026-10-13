@@ -580,7 +580,7 @@ describe( 'production covered projection', () =>
         ]);
     });
 
-    it( 'keeps a throwing assignment in front of count', () =>
+    it( 'drops a throwing assignment in front of count by default and keeps it in strict mode', () =>
     {
         const pipeline = [
             { $set: { tmp: { $divide: [ '$price', 0 ] } } },
@@ -588,6 +588,9 @@ describe( 'production covered projection', () =>
         ];
 
         expect( optimizePipeline( pipeline ) ).toEqual([
+            { $count: 'total' }
+        ]);
+        expect( optimizePipeline( pipeline, { strictErrors: true } ) ).toEqual([
             { $project: { price: 1, _id: 0 } },
             { $set: { tmp: { $divide: [ '$price', 0 ] } } },
             { $count: 'total' }
@@ -718,7 +721,7 @@ describe( 'count neutral prefix trim', () =>
         expect( trimCountNeutralPrefix( unwound ) ).toEqual( unwound );
     });
 
-    it( 'keeps a throwing project and a project a later assignment still reads', () =>
+    it( 'drops a throwing project outside strict mode and keeps it in strict mode', () =>
     {
         const dividing = [
             { $project: { shown: { $divide: [ '$price', 0 ] } } },
@@ -731,7 +734,10 @@ describe( 'count neutral prefix trim', () =>
             { $count: 'total' }
         ];
 
-        expect( trimCountNeutralPrefix( dividing ) ).toEqual( dividing );
+        expect( trimCountNeutralPrefix( dividing ) ).toEqual([
+            { $count: 'total' }
+        ]);
+        expect( trimCountNeutralPrefix( dividing, strict ) ).toEqual( dividing );
         expect( trimCountNeutralPrefix( assigned, strict ) ).toEqual([
             { $project: { price: 1 } },
             { $set: { tmp: { $divide: [ '$price', 0 ] } } },

@@ -290,7 +290,7 @@ describe('optimizePipeline', () => {
         verifyPipelineEquivalence(data, pipeline, pipeline, db);
     });
 
-    it('should retain passive stages without an exact immediate kill proof', () => {
+    it('should drop count-neutral stages before $count by default and retain throwing ones in strict mode', () => {
         const data = [
             { name: 'John', age: 25 },
             { name: 'Jane', age: 15 }
@@ -300,7 +300,8 @@ describe('optimizePipeline', () => {
             { $addFields: { countPlusOne: { $sum: ['$age', 1] } } },
             { $count: 'total' }
         ];
-        verifyPipelineEquivalence(data, pipeline, pipeline);
+        verifyPipelineEquivalence(data, pipeline, [{ $count: 'total' }]);
+        expect(optimizePipeline(pipeline, { strictErrors: true })).toEqual(pipeline);
     });
 
     it('should delay $lookup past $limit when the alias is unused', () => {

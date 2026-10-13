@@ -31,12 +31,14 @@ const REDUNDANT_PROJECTION_ELIMINATION = [
 function optimizeWith(
     pipeline: any[],
     transformationIds: readonly string[],
+    options?: { strictFieldOrder?: boolean; strictErrors?: boolean },
 ): any[]
 {
     return optimizePipelineWithCandidateProfile(
         pipeline,
         transformationIds,
         [],
+        options,
     );
 }
 
@@ -662,13 +664,10 @@ describe('exact dead add-field pruning proofs', () =>
         }
     });
 
-    it('preserves volatile, erroring, getField, and whole-document assignments', () =>
+    it('preserves volatile, getField, and whole-document assignments while pruning erroring ones only when strictErrors is off', () =>
     {
-        const expressions = [
+        const alwaysBlockedExpressions = [
             { $rand: {} },
-            { $divide: [1, '$zero'] },
-            { $add: ['$untyped', 1] },
-            { $eq: ['$missingSecondOperand'] },
             {
                 $function: {
                     body: 'function (value) { return value; }',
@@ -688,7 +687,7 @@ describe('exact dead add-field pruning proofs', () =>
             { $unknownOperator: '$source' },
         ];
 
-        for (const expression of expressions)
+        for (const expression of alwaysBlockedExpressions)
         {
             const pipeline = [
                 { $addFields: { dead: expression } },
@@ -696,6 +695,27 @@ describe('exact dead add-field pruning proofs', () =>
             ];
 
             expect(optimizeWith(pipeline, UNUSED_FIELD_PRUNING)).toEqual(pipeline);
+        }
+
+        const erroringExpressions = [
+            { $divide: [1, '$zero'] },
+            { $add: ['$untyped', 1] },
+            { $eq: ['$missingSecondOperand'] },
+        ];
+
+        for (const expression of erroringExpressions)
+        {
+            const pipeline = [
+                { $addFields: { dead: expression } },
+                { $unset: 'dead' },
+            ];
+
+            expect(optimizeWith(pipeline, UNUSED_FIELD_PRUNING)).toEqual([
+                { $unset: 'dead' },
+            ]);
+            expect(
+                optimizeWith(pipeline, UNUSED_FIELD_PRUNING, { strictErrors: true }),
+            ).toEqual(pipeline);
         }
     });
 
@@ -1033,7 +1053,10 @@ describe('projection production integration and scheduling', () =>
                         return [testCase.id, 'invalid-test-fixture'];
                     }
 
-                    const optimized = optimizePipeline(testCase.pipeline as any[]);
+                    const optimized = optimizePipeline(
+                        testCase.pipeline as any[],
+                        testCase.optimizerOptions,
+                    );
                     return [
                         testCase.id,
                         structuralFingerprint(optimized)
@@ -1061,7 +1084,10 @@ describe('projection production integration and scheduling', () =>
                 continue;
             }
 
-            const optimized = optimizePipeline(testCase.pipeline as any[]);
+            const optimized = optimizePipeline(
+                testCase.pipeline as any[],
+                testCase.optimizerOptions,
+            );
             classifications[testCase.id] = JSON.stringify(optimized)
                 === JSON.stringify(testCase.pipeline)
                 ? 'barrier'

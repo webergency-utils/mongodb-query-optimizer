@@ -248,9 +248,9 @@ function dropCountNeutralPrefix(
             continue;
         }
 
-        if( isLookupStage( stage ))
+        if( preservesRowCount( stage ))
         {
-            if( !strictErrors )
+            if( !shapeReaderKept && ( !strictErrors || parseSimpleProject( stage )))
             {
                 pipeline.splice( cursor, 1 );
                 countIndex--;
@@ -258,21 +258,6 @@ function dropCountNeutralPrefix(
                 continue;
             }
 
-            shapeReaderKept = true;
-            cursor--;
-            continue;
-        }
-
-        if( !shapeReaderKept && parseSimpleProject( stage ))
-        {
-            pipeline.splice( cursor, 1 );
-            countIndex--;
-            cursor--;
-            continue;
-        }
-
-        if( preservesRowCount( stage ))
-        {
             shapeReaderKept = true;
             cursor--;
             continue;
@@ -287,13 +272,6 @@ function dropCountNeutralPrefix(
 function isRemovableSort( stage : unknown ): boolean
 {
     return getStageSpec( stage, '$sort' ) !== null;
-}
-
-function isLookupStage( stage : unknown ): boolean
-{
-    const entry = getSingleStageEntry( stage );
-
-    return entry !== null && entry[ 0 ] === '$lookup';
 }
 
 function preservesRowCount( stage : unknown ): boolean

@@ -23,7 +23,8 @@ export class UnusedFieldPruningPass implements PipelinePass
 
             const proof = proveUnusedFieldPruningThroughSuffix(
                 result[index],
-                result.slice( index + 1 )
+                result.slice( index + 1 ),
+                context.strictErrors
             );
             if( !proof )
             {

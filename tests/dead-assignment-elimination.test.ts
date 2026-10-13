@@ -400,12 +400,15 @@ describe( 'DeadAssignmentEliminationPass execution and parity', () =>
         )).toBeNull();
     });
 
-    it( 'keeps a throwing assignment even when strict errors are off', () =>
+    it( 'eliminates a throwing assignment when strict errors are off and keeps it when strict errors are on', () =>
     {
         const suffix = [ { $unset: 'tmp' } ];
         const source = { $set: { tmp: { $divide: [ '$a', 0 ] } } };
 
-        expect( proveDeadAssignmentElimination( source, suffix )).toBeNull();
+        const proof = proveDeadAssignmentElimination( source, suffix );
+        expect( proof?.eliminatedFields ).toEqual([ 'tmp' ]);
+        expect( proof?.replacementStage ).toBeNull();
+
         expect( proveDeadAssignmentElimination(
             source,
             suffix,
