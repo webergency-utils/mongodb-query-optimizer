@@ -361,7 +361,7 @@ describe( 'CoveredProjectionSynthesisPass class and execution', () =>
     {
         const pass = new CoveredProjectionSynthesisPass();
         expect( pass.name ).toBe( 'covered-projection-synthesis' );
-        expect( pass.stageTypes ).toEqual([ '$group', '$count', '$sortByCount' ]);
+        expect( pass.stageTypes ).toEqual([ '$group', '$count', '$sortByCount', '$bucket', '$bucketAuto' ]);
     });
 
     it( 'returns unchanged copy if proof is not applicable', () =>
@@ -523,6 +523,38 @@ describe( 'CoveredProjectionSynthesisPass class and execution', () =>
 
         expect( optimized[ 0 ] ).toEqual({
             $project: { amount: 1, customerId: 1, _id: 0 }
+        });
+    });
+
+    it( 'synthesizes a covered projection for $bucket and $bucketAuto', () =>
+    {
+        const bucketProof = proveCoveredProjectionSynthesis([
+            {
+                $bucket: {
+                    groupBy: '$year',
+                    boundaries: [ 1990, 2000, 2010 ],
+                    default: 'other',
+                    output: { total: { $sum: '$amount' } }
+                }
+            }
+        ]);
+        expect( bucketProof ).toEqual({
+            synthesizedStage: { $project: { amount: 1, year: 1, _id: 0 } },
+            insertIndex: 0
+        });
+
+        const bucketAutoProof = proveCoveredProjectionSynthesis([
+            {
+                $bucketAuto: {
+                    groupBy: '$score',
+                    buckets: 4,
+                    output: { avgPrice: { $avg: '$price' } }
+                }
+            }
+        ]);
+        expect( bucketAutoProof ).toEqual({
+            synthesizedStage: { $project: { price: 1, score: 1, _id: 0 } },
+            insertIndex: 0
         });
     });
 });

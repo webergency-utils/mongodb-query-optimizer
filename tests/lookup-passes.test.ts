@@ -7,6 +7,7 @@ import {
     proveLookupMatchSplit,
     proveLookupSubpipelinePushdown,
     proveMatchPushdownAcrossStage,
+    proveRedundantLookupEliminationAcrossSuffix,
 } from '../src/passes/movement-proofs.js';
 import { LookupDelayPass } from '../src/passes/lookup-delay.js';
 import {
@@ -161,6 +162,46 @@ describe('redundant lookup elimination', () =>
 
         expectCandidatePassesContained(lookupPipeline);
         expectCandidatePassesContained(graphPipeline);
+    });
+
+    it('eliminates a lookup across safe intermediate stages when discarded downstream', () =>
+    {
+        const pipeline = [
+            makeLookup(),
+            { $addFields: { flag: true } },
+            { $project: { _id: 0, name: 1, flag: 1 } },
+        ];
+
+        expect(proveRedundantLookupEliminationAcrossSuffix(makeLookup(), [])).toBe(false);
+        expect(proveRedundantLookupEliminationAcrossSuffix(null, [{ $unset: 'orders' }])).toBe(false);
+        expect(proveRedundantLookupEliminationAcrossSuffix(
+            {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [{ $addFields: { x: { $toInt: '$raw' } } }],
+                },
+            },
+            [{ $unset: 'orders' }],
+            { strictErrors: true, strictFieldOrder: false },
+        )).toBe(false);
+        expect(proveRedundantLookupEliminationAcrossSuffix(
+            makeLookup(),
+            [{ $addFields: { flag: true } }],
+        )).toBe(false);
+        expect(proveRedundantLookupEliminationAcrossSuffix(
+            makeLookup(),
+            [{ $addFields: { flag: '$orders' } }, { $unset: 'orders' }],
+        )).toBe(false);
+
+        expect(optimizePipelineWithCandidateProfile(
+            pipeline,
+            REDUNDANT_LOOKUP,
+            [],
+        )).toEqual([
+            { $addFields: { flag: true } },
+            { $project: { _id: 0, name: 1, flag: 1 } },
+        ]);
     });
 });
 
@@ -1780,12 +1821,62 @@ describe('proveLookupLimitPushdown and LookupDelayPass limit pushdown', () =>
         expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $arrayElemAt: ['$user', 1] } } }])).toBeNull();
         expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $arrayElemAt: ['$user'] } } }])).toBeNull();
         expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $first: '$other' } } }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $first: '$user.name' } } }])).toBeNull();
         expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $first: '$user', extra: 1 } } }])).toBeNull();
         expect(proveLookupLimitPushdown(lookup, [{ $addFields: { firstUser: { $first: '$user' } } }])).toBeNull();
         expect(proveLookupLimitPushdown(lookup, [{ $addFields: { firstUser: { $first: '$user' } } }, { $match: { active: true } }])).toBeNull();
         expect(proveLookupLimitPushdown(lookup, [{ $project: { firstUser: { $first: '$user' }, user: 1 } }])).toBeNull();
         expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $first: '$user' }, deep: [{ $size: '$user' }] } }])).toBeNull();
         expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $first: '$user' }, cond: { $eq: ['$$var', 1] } } }])).not.toBeNull();
+
+        // $slice head limit pushdown and rejections
+        expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $slice: ['$user', 5] } } }])).toEqual({
+            lookupStage: {
+                $lookup: {
+                    from: 'users',
+                    as: 'user',
+                    pipeline: [{ $limit: 5 }]
+                }
+            }
+        });
+        expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $slice: ['$$ROOT.user', 3] }, firstUser: { $first: '$user' } } }])).toEqual({
+            lookupStage: {
+                $lookup: {
+                    from: 'users',
+                    as: 'user',
+                    pipeline: [{ $limit: 3 }]
+                }
+            }
+        });
+        expect(proveLookupLimitPushdown(lookup, [{ $set: { firstUser: { $first: '$user' }, user: { $slice: ['$user', 4] } } }])).toEqual({
+            lookupStage: {
+                $lookup: {
+                    from: 'users',
+                    as: 'user',
+                    pipeline: [{ $limit: 4 }]
+                }
+            }
+        });
+        expect(proveLookupLimitPushdown(
+            { $lookup: { from: 'users', as: 'user', pipeline: [{ $limit: 3 }] } },
+            [{ $set: { user: { $slice: ['$user', 5] } } }]
+        )).toBeNull();
+        expect(proveLookupLimitPushdown(
+            { $lookup: { from: 'users', as: 'user', pipeline: [{ $limit: 10 }] } },
+            [{ $set: { user: { $slice: ['$user', 5] } } }]
+        )).toEqual({
+            lookupStage: {
+                $lookup: {
+                    from: 'users',
+                    as: 'user',
+                    pipeline: [{ $limit: 5 }]
+                }
+            }
+        });
+        expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $slice: ['$user', -2] } } }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $slice: ['$user', 1, 5] } } }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $slice: '$user' } } }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $slice: ['$other', 5] } } }])).toBeNull();
     });
 
     it('executes pushdown in LookupDelayPass across unwind and limit: 1', () =>

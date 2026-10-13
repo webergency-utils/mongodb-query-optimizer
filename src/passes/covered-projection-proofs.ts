@@ -13,7 +13,7 @@ export interface CoveredProjectionProof
     readonly insertIndex      : number
 }
 
-const COLLAPSING_OPERATORS = new Set([ '$group', '$count', '$sortByCount' ]);
+const COLLAPSING_OPERATORS = new Set([ '$group', '$count', '$sortByCount', '$bucket', '$bucketAuto' ]);
 
 const DISALLOWED_PREFIX_OPERATORS = new Set([
     '$project',

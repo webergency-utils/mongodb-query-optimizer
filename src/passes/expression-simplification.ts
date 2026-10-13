@@ -19,6 +19,27 @@ const GROUP_ACCUMULATORS = new Set([
     '$stdDevSamp'
 ]);
 
+const BOOLEAN_PRODUCING_OPERATORS = new Set([
+    '$eq',
+    '$ne',
+    '$gt',
+    '$gte',
+    '$lt',
+    '$lte',
+    '$and',
+    '$or',
+    '$not',
+    '$in',
+    '$isArray',
+    '$isNumber',
+    '$regexMatch',
+    '$toBool',
+    '$allElementsTrue',
+    '$anyElementTrue',
+    '$setEquals',
+    '$setIsSubset'
+]);
+
 /**
  * Expression simplification pass (KTD9).
  *
@@ -299,14 +320,41 @@ export function simplifyExpression( expr: unknown ): unknown
         }
         else if( op === '$not' && Array.isArray( simplified.$not ) && simplified.$not.length === 1 )
         {
-            if( isTruthyConstant( simplified.$not[ 0 ] ))
+            const innerOperand = simplified.$not[ 0 ];
+
+            if( isTruthyConstant( innerOperand ))
             {
                 return false;
             }
 
-            if( isFalsyConstant( simplified.$not[ 0 ] ))
+            if( isFalsyConstant( innerOperand ))
             {
                 return true;
+            }
+
+            if( isPlainObject( innerOperand ))
+            {
+                const innerKeys = Object.keys( innerOperand );
+
+                if(
+                    innerKeys.length === 1
+                    && innerKeys[ 0 ] === '$not'
+                    && Array.isArray( innerOperand.$not )
+                    && innerOperand.$not.length === 1
+                    && isPlainObject( innerOperand.$not[ 0 ] )
+                )
+                {
+                    const doublyNegated = innerOperand.$not[ 0 ] as Record<string, unknown>;
+                    const doublyNegatedKeys = Object.keys( doublyNegated );
+
+                    if(
+                        doublyNegatedKeys.length === 1
+                        && BOOLEAN_PRODUCING_OPERATORS.has( doublyNegatedKeys[ 0 ]! )
+                    )
+                    {
+                        return doublyNegated;
+                    }
+                }
             }
         }
         else if( op === '$cond' )

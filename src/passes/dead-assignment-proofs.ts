@@ -62,6 +62,8 @@ function isFieldDeadInSuffix(
             semantics.operator === '$group'
             || semantics.operator === '$count'
             || semantics.operator === '$sortByCount'
+            || semantics.operator === '$bucket'
+            || semantics.operator === '$bucketAuto'
         )
         {
             return (

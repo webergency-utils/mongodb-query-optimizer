@@ -550,6 +550,27 @@ describe( 'ExpressionSimplificationPass unit and proof tests', () =>
             { $match: { $and: [ { a: 1 }, { b: 2 } ] } },
             { $match: { a: { $in: 1 } } }
         ]);
+
+        // Double-negation elimination over boolean-producing operators
+        expect( simplifyExpression({
+            $not: [ { $not: [ { $gt: [ '$score', 10 ] } ] } ]
+        })).toEqual({ $gt: [ '$score', 10 ] });
+        expect( simplifyExpression({
+            $not: [ { $not: [ { $isArray: '$tags' } ] } ]
+        })).toEqual({ $isArray: '$tags' });
+        // Preserves double-negation over non-boolean expressions or field paths
+        expect( simplifyExpression({
+            $not: [ { $not: [ '$flag' ] } ]
+        })).toEqual({ $not: [ { $not: [ '$flag' ] } ] });
+        expect( simplifyExpression({
+            $not: [ { $not: [ { $add: [ '$a', 1 ] } ] } ]
+        })).toEqual({ $not: [ { $not: [ { $add: [ '$a', 1 ] } ] } ] });
+        expect( simplifyExpression({
+            $not: [ { $not: [ { $gt: [ '$a', 1 ], extra: 2 } ] } ]
+        })).toEqual({ $not: [ { $not: [ { $gt: [ '$a', 1 ], extra: 2 } ] } ] });
+        expect( simplifyExpression({
+            $not: [ { $not: [ '$a', '$b' ] } ]
+        })).toEqual({ $not: [ { $not: [ '$a', '$b' ] } ] });
     });
 
     it( 'preserves execution equivalence on mock engine', () =>

@@ -94,6 +94,35 @@ function simplifyFieldIntervals(
 {
     let operatorDocument = inputDocument;
 
+    if( isPlainObject( operatorDocument.$not ))
+    {
+        const notEntries = Object.entries( operatorDocument.$not );
+
+        if( notEntries.length === 1 )
+        {
+            const [ innerOp, innerVal ] = notEntries[ 0 ]!;
+            const flippedOp = innerOp === '$in'
+                ? '$nin'
+                : innerOp === '$nin'
+                    ? '$in'
+                    : innerOp === '$eq'
+                        ? '$ne'
+                        : innerOp === '$ne'
+                            ? '$eq'
+                            : null;
+
+            if( flippedOp !== null && !( flippedOp in operatorDocument ))
+            {
+                const { $not: _removedNot, ...restOps } = operatorDocument;
+
+                operatorDocument = {
+                    ...restOps,
+                    [ flippedOp ]: innerVal
+                };
+            }
+        }
+    }
+
     if( Array.isArray( operatorDocument.$nin ) && operatorDocument.$nin.length >= 2 )
     {
         const dedupedNin = deduplicateOperatorArray( operatorDocument.$nin );

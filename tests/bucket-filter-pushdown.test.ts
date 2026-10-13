@@ -383,6 +383,7 @@ describe( 'BucketFilterPushdownPass execution and parity', () =>
         expect( optimizedPipeline ).toEqual(
         [
             { $match: { year: { $gte: 1990, $lt: 2000 } } },
+            { $project: { score: 1, year: 1, _id: 0 } },
             {
                 $bucket: {
                     groupBy: '$year',

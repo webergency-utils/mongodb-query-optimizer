@@ -1000,6 +1000,44 @@ describe('filter-bearing pipelines', () =>
         ])).toEqual([
             { $project: { a: 1 } },
         ]);
+
+        // Normalizes $not over single-key $in, $nin, $eq, $ne
+        expect(optimizeFilter({
+            status: { $not: { $in: ['archived', 'deleted', 'archived'] } },
+        })).toEqual({
+            status: { $nin: ['archived', 'deleted'] },
+        });
+        expect(optimizeFilter({
+            status: { $not: { $nin: ['active', 'active'] } },
+        })).toEqual({
+            status: 'active',
+        });
+        expect(optimizeFilter({
+            status: { $not: { $eq: 'deleted' } },
+        })).toEqual({
+            status: { $ne: 'deleted' },
+        });
+        expect(optimizeFilter({
+            status: { $not: { $ne: 'active' } },
+        })).toEqual({
+            status: 'active',
+        });
+        // Preserves $not over range operators ($gt) or multi-key operator objects or when flipped op already exists
+        expect(optimizeFilter({
+            score: { $not: { $gt: 10 } },
+        })).toEqual({
+            score: { $not: { $gt: 10 } },
+        });
+        expect(optimizeFilter({
+            score: { $not: { $eq: 1, $ne: 2 } },
+        })).toEqual({
+            score: { $not: { $eq: 1, $ne: 2 } },
+        });
+        expect(optimizeFilter({
+            status: { $not: { $eq: 'a' }, $ne: 'b' },
+        })).toEqual({
+            status: { $not: { $eq: 'a' }, $ne: 'b' },
+        });
     });
 });
 

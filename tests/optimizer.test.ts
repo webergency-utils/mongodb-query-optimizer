@@ -812,7 +812,10 @@ describe('optimizePipeline', () => {
             { $unwind: '$items' },
             { $match: { 'items.status': { $not: { $eq: 'active' } } } }
         ];
-        verifyPipelineEquivalence(data, pipeline, pipeline);
+        verifyPipelineEquivalence(data, pipeline, [
+            { $unwind: '$items' },
+            { $match: { 'items.status': { $ne: 'active' } } }
+        ]);
     });
 
     it('should keep a RegExp match after $unwind without an early duplicate', () => {

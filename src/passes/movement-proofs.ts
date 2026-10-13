@@ -4,6 +4,8 @@ import {
 } from '../analyzer/projections';
 import { analyzeStage } from '../analyzer/semantics';
 import {
+    canContinuePastStage,
+    dependenciesReadAnyPath,
     isExactPathDiscardedByFollower,
 } from './projection-proofs';
 import {
@@ -968,6 +970,50 @@ export function proveRedundantLookupElimination(
     );
 }
 
+/**
+ * Removes a supported equality or pipeline lookup when a downstream suffix
+ * drops the alias via `$unset` or simple `$project` without any intermediate
+ * stage reading it.
+ */
+export function proveRedundantLookupEliminationAcrossSuffix(
+    lookupStage : unknown,
+    suffix      : readonly unknown[],
+    context     : GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT
+): boolean
+{
+    if( suffix.length === 0 )
+    {
+        return false;
+    }
+
+    if( !canRemoveStage( lookupStage, context ) || !isSupportedLookupStage( lookupStage ))
+    {
+        return false;
+    }
+
+    const alias = lookupStage.$lookup.as;
+    const live = new Set([ alias ]);
+
+    for( const stage of suffix )
+    {
+        if( isExactPathDiscardedByFollower( alias, stage ))
+        {
+            return true;
+        }
+
+        const semantics = analyzeStage( stage );
+        if(
+            dependenciesReadAnyPath( semantics, live )
+            || !canContinuePastStage( semantics, live )
+        )
+        {
+            return false;
+        }
+    }
+
+    return false;
+}
+
 export interface LookupMatchSplitProof
 {
     readonly pushableStage: {
@@ -1217,7 +1263,7 @@ export function proveLookupSubpipelinePushdown(
     };
 }
 
-function hasTerminalLimitOne( pipeline: readonly unknown[] ): boolean
+function hasTerminalLimitAtMost( pipeline: readonly unknown[], limitVal: number ): boolean
 {
     if( pipeline.length === 0 ){ return false }
 
@@ -1225,10 +1271,16 @@ function hasTerminalLimitOne( pipeline: readonly unknown[] ): boolean
     const entry = getSingleStageEntry( last );
     if( !entry ){ return false }
 
-    return entry[ 0 ] === '$limit' && entry[ 1 ] === 1;
+    return (
+        entry[ 0 ] === '$limit'
+        && typeof entry[ 1 ] === 'number'
+        && Number.isSafeInteger( entry[ 1 ] )
+        && entry[ 1 ] > 0
+        && entry[ 1 ] <= limitVal
+    );
 }
 
-function pushLimitOneToSubpipeline( pipeline: readonly unknown[] ): unknown[]
+function pushLimitToSubpipeline( pipeline: readonly unknown[], limitVal: number ): unknown[]
 {
     const copy = deepClone( pipeline ) as unknown[];
 
@@ -1239,12 +1291,12 @@ function pushLimitOneToSubpipeline( pipeline: readonly unknown[] ): unknown[]
 
         if( entry && entry[ 0 ] === '$limit' )
         {
-            copy[ copy.length - 1 ] = { $limit: 1 };
+            copy[ copy.length - 1 ] = { $limit: limitVal };
             return copy;
         }
     }
 
-    copy.push( { $limit: 1 } );
+    copy.push( { $limit: limitVal } );
     return copy;
 }
 
@@ -1277,33 +1329,52 @@ function isUnwindForPath( stage: unknown, alias: string ): boolean
     return false;
 }
 
-function isFirstElementExpression( expr: unknown, alias: string ): boolean
+function extractHeadLimitExpression( expr: unknown, alias: string ): number | null
 {
-    if( !isPlainObject( expr ) ){ return false }
+    if( !isPlainObject( expr ) ){ return null }
 
     const targetRef = `$${ alias }`;
     const rootRef = `$$ROOT.${ alias }`;
 
     const keys = Object.keys( expr );
-    if( keys.length !== 1 ){ return false }
+    if( keys.length !== 1 ){ return null }
 
     const op = keys[ 0 ];
 
     if( op === '$first' )
     {
         const arg = ( expr as Record<string, unknown> ).$first;
-        return arg === targetRef || arg === rootRef;
+        return ( arg === targetRef || arg === rootRef ) ? 1 : null;
     }
 
     if( op === '$arrayElemAt' )
     {
         const args = ( expr as Record<string, unknown> ).$arrayElemAt;
-        if( !Array.isArray( args ) || args.length !== 2 ){ return false }
+        if( !Array.isArray( args ) || args.length !== 2 ){ return null }
 
-        return ( args[ 0 ] === targetRef || args[ 0 ] === rootRef ) && args[ 1 ] === 0;
+        return ( args[ 0 ] === targetRef || args[ 0 ] === rootRef ) && args[ 1 ] === 0
+            ? 1
+            : null;
     }
 
-    return false;
+    if( op === '$slice' )
+    {
+        const args = ( expr as Record<string, unknown> ).$slice;
+        if( !Array.isArray( args ) || args.length !== 2 ){ return null }
+
+        const [ arrArg, countArg ] = args;
+        if(
+            ( arrArg === targetRef || arrArg === rootRef )
+            && typeof countArg === 'number'
+            && Number.isSafeInteger( countArg )
+            && countArg > 0
+        )
+        {
+            return countArg;
+        }
+    }
+
+    return null;
 }
 
 function containsPathReference( value: unknown, alias: string ): boolean
@@ -1343,46 +1414,50 @@ function containsPathReference( value: unknown, alias: string ): boolean
     return false;
 }
 
-function isStageSingularExtractor(
+function extractStageHeadLimit(
     stage            : unknown,
     alias            : string,
     subsequentStages : readonly unknown[]
-): boolean
+): number | null
 {
     const entry = getSingleStageEntry( stage );
-    if( !entry ){ return false }
+    if( !entry ){ return null }
 
     const [ op, spec ] = entry;
     if( op !== '$addFields' && op !== '$set' && op !== '$project' )
     {
-        return false;
+        return null;
     }
 
-    if( !isPlainObject( spec ) ){ return false }
+    if( !isPlainObject( spec ) ){ return null }
 
-    let extractionCount = 0;
+    let maxLimit = 0;
 
     for( const [ fieldName, fieldValue ] of Object.entries( spec ))
     {
         if( fieldName.startsWith( `${ alias }.` ))
         {
-            return false;
+            return null;
         }
 
         if( containsPathReference( fieldValue, alias ))
         {
-            if( !isFirstElementExpression( fieldValue, alias ))
+            const headLimit = extractHeadLimitExpression( fieldValue, alias );
+            if( headLimit === null )
             {
-                return false;
+                return null;
             }
 
-            extractionCount++;
+            if( headLimit > maxLimit )
+            {
+                maxLimit = headLimit;
+            }
         }
     }
 
-    if( extractionCount === 0 )
+    if( maxLimit === 0 )
     {
-        return false;
+        return null;
     }
 
     const overwritesAlias = op === '$project'
@@ -1390,7 +1465,7 @@ function isStageSingularExtractor(
         : ( alias in spec );
     if( overwritesAlias )
     {
-        return true;
+        return maxLimit;
     }
 
     if( op === '$project' )
@@ -1400,7 +1475,7 @@ function isStageSingularExtractor(
 
         if( vis === 'hidden' )
         {
-            return true;
+            return maxLimit;
         }
     }
 
@@ -1410,11 +1485,11 @@ function isStageSingularExtractor(
 
         if( isExactPathDiscardedByFollower( alias, follower ))
         {
-            return true;
+            return maxLimit;
         }
     }
 
-    return false;
+    return null;
 }
 
 export function proveLookupLimitPushdown(
@@ -1445,11 +1520,6 @@ export function proveLookupLimitPushdown(
         return null;
     }
 
-    if( hasTerminalLimitOne( lookupSpec.pipeline ))
-    {
-        return null;
-    }
-
     if( followingStages.length === 0 )
     {
         return null;
@@ -1461,11 +1531,16 @@ export function proveLookupLimitPushdown(
 
         if( isUnwindForPath( firstFollower, lookupSpec.as ) && isLimitOne( secondFollower ))
         {
+            if( hasTerminalLimitAtMost( lookupSpec.pipeline, 1 ))
+            {
+                return null;
+            }
+
             const updatedLookup = {
                 ...( lookupStage as Record<string, unknown> ),
                 $lookup: {
                     ...lookupSpec,
-                    pipeline: pushLimitOneToSubpipeline( lookupSpec.pipeline )
+                    pipeline: pushLimitToSubpipeline( lookupSpec.pipeline, 1 )
                 }
             };
 
@@ -1474,8 +1549,14 @@ export function proveLookupLimitPushdown(
     }
 
     const firstFollower = followingStages[ 0 ];
-    if( isStageSingularExtractor( firstFollower, lookupSpec.as, followingStages.slice( 1 )))
+    const headLimit = extractStageHeadLimit( firstFollower, lookupSpec.as, followingStages.slice( 1 ));
+    if( headLimit !== null )
     {
+        if( hasTerminalLimitAtMost( lookupSpec.pipeline, headLimit ))
+        {
+            return null;
+        }
+
         if( context.strictErrors && !isStageProvenErrorFree( firstFollower ))
         {
             return null;
@@ -1485,7 +1566,7 @@ export function proveLookupLimitPushdown(
             ...( lookupStage as Record<string, unknown> ),
             $lookup: {
                 ...lookupSpec,
-                pipeline: pushLimitOneToSubpipeline( lookupSpec.pipeline )
+                pipeline: pushLimitToSubpipeline( lookupSpec.pipeline, headLimit )
             }
         };
 

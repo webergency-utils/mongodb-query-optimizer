@@ -362,6 +362,39 @@ describe( 'DeadAssignmentEliminationPass execution and parity', () =>
         expect( proof?.replacementStage ).toBeNull();
     });
 
+    it( 'removes an unread assignment when a later $bucket or $bucketAuto does not read it', () =>
+    {
+        const bucketProof = proveDeadAssignmentElimination(
+            { $set: { tmp: 1, year: 2000 } },
+            [
+                {
+                    $bucket: {
+                        groupBy: '$year',
+                        boundaries: [ 1990, 2010 ],
+                        default: 'other',
+                        output: { count: { $sum: 1 } }
+                    }
+                }
+            ]
+        );
+        expect( bucketProof?.eliminatedFields ).toEqual([ 'tmp' ]);
+        expect( bucketProof?.replacementStage ).toEqual({ $set: { year: 2000 } });
+
+        const bucketAutoProof = proveDeadAssignmentElimination(
+            { $set: { tmp: 1 } },
+            [
+                {
+                    $bucketAuto: {
+                        groupBy: '$score',
+                        buckets: 3
+                    }
+                }
+            ]
+        );
+        expect( bucketAutoProof?.eliminatedFields ).toEqual([ 'tmp' ]);
+        expect( bucketAutoProof?.replacementStage ).toBeNull();
+    });
+
     it( 'keeps a source field that a chain of plain copies still reads', () =>
     {
         expect( proveDeadAssignmentElimination(

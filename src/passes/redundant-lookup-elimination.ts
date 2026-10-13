@@ -1,11 +1,11 @@
 import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
 import { PipelinePass } from './types.js';
 import {
-    proveRedundantLookupElimination
+    proveRedundantLookupEliminationAcrossSuffix
 } from './movement-proofs.js';
 
 /**
- * Drops a simple equality lookup when the next stage discards the alias.
+ * Drops a simple equality or pipeline lookup when downstream stages discard the alias.
  * Lookup plus unwind stays in place because multiplicity is unproven.
  */
 export class RedundantLookupEliminationPass implements PipelinePass
@@ -19,7 +19,7 @@ export class RedundantLookupEliminationPass implements PipelinePass
 
         for( let index = 0; index < result.length - 1; index++ )
         {
-            if( !proveRedundantLookupElimination( result[index], result[index + 1], context ))
+            if( !proveRedundantLookupEliminationAcrossSuffix( result[ index ], result.slice( index + 1 ), context ))
             {
                 continue;
             }

@@ -5,7 +5,7 @@ import { proveCoveredProjectionSynthesis, trimCountNeutralPrefix } from './cover
 export class CoveredProjectionSynthesisPass implements PipelinePass
 {
     readonly name       = 'covered-projection-synthesis';
-    readonly stageTypes = [ '$group', '$count', '$sortByCount' ] as const;
+    readonly stageTypes = [ '$group', '$count', '$sortByCount', '$bucket', '$bucketAuto' ] as const;
 
     execute( pipeline: any[], context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {
