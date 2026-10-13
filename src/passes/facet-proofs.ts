@@ -9,6 +9,9 @@ const ALLOWED_HOIST_OPERATORS = new Set([
     '$addFields',
     '$set',
     '$unset',
+    '$sort',
+    '$limit',
+    '$skip'
 ]);
 
 export interface FacetPrefixHoistingProof {
@@ -24,21 +27,30 @@ function isEligibleHoistStage( stage: unknown, context: GuaranteeContext = DEFAU
         return false;
     }
 
-    const operator = entry[0];
-    if (!ALLOWED_HOIST_OPERATORS.has(operator))
+    const operator = entry[ 0 ];
+    if( !ALLOWED_HOIST_OPERATORS.has( operator ))
     {
         return false;
     }
 
-    const summary = analyzeStage(stage);
-    if (
+    const summary = analyzeStage( stage );
+    if(
         summary.malformed
         || summary.unknown
         || summary.determinism !== 'deterministic'
-        || summary.order !== 'preserves'
         || summary.dependencies.unknown
         || summary.dependencies.variables.size > 0
         || ( context.strictErrors && summary.observable.errors !== 'none-known' )
+    )
+    {
+        return false;
+    }
+
+    if(
+        operator === '$sort'
+        && Object.values( entry[ 1 ] as Record<string, unknown> ).some(
+            ( direction ) => direction !== 1 && direction !== -1
+        )
     )
     {
         return false;

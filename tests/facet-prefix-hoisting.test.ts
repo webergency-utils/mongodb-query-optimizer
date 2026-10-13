@@ -160,16 +160,44 @@ describe('proveFacetPrefixHoisting', () =>
         });
     });
 
-    it('rejects stages not in the allowed hoist set (e.g. $sort)', () =>
+    it( 'hoists shared leading $sort, $limit, and $skip stages and rejects non-allowed or non-numeric sort stages', () =>
     {
         const facetStage = {
             $facet: {
-                a: [{ $sort: { score: -1 } }, { $limit: 5 }],
-                b: [{ $sort: { score: -1 } }, { $limit: 10 }],
-            },
+                a: [ { $sort: { score: -1 } }, { $skip: 5 }, { $limit: 10 }, { $project: { a: 1 } } ],
+                b: [ { $sort: { score: -1 } }, { $skip: 5 }, { $limit: 10 }, { $count: 'total' } ]
+            }
         };
 
-        expect(proveFacetPrefixHoisting(facetStage)).toBeNull();
+        const proof = proveFacetPrefixHoisting( facetStage );
+        expect( proof ).not.toBeNull();
+        expect( proof?.hoistedStages ).toEqual([
+            { $sort: { score: -1 } },
+            { $skip: 5 },
+            { $limit: 10 }
+        ]);
+        expect( proof?.simplifiedFacet ).toEqual({
+            $facet: {
+                a: [ { $project: { a: 1 } } ],
+                b: [ { $count: 'total' } ]
+            }
+        });
+
+        const nonAllowedStage = {
+            $facet: {
+                a: [ { $group: { _id: '$dept' } }, { $limit: 5 } ],
+                b: [ { $group: { _id: '$dept' } }, { $limit: 10 } ]
+            }
+        };
+        expect( proveFacetPrefixHoisting( nonAllowedStage )).toBeNull();
+
+        const nonNumericSortStage = {
+            $facet: {
+                a: [ { $sort: { score: { $meta: 'textScore' } } }, { $limit: 5 } ],
+                b: [ { $sort: { score: { $meta: 'textScore' } } }, { $limit: 10 } ]
+            }
+        };
+        expect( proveFacetPrefixHoisting( nonNumericSortStage )).toBeNull();
     });
 
     it('rejects when leading stage is not a plain object or has multiple keys', () =>

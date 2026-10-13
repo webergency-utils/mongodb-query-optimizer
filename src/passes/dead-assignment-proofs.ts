@@ -221,12 +221,19 @@ export function proveDeadAssignmentElimination(
 
     for( const [ path, expression ] of Object.entries( source.specification ))
     {
-        if( !isExactTopLevelPath( path ) || !isSafePrunableAssignment( expression, context.strictErrors ))
+        const isTopLevel = isExactTopLevelPath( path );
+
+        if(
+            ( !isTopLevel && context.strictErrors )
+            || !isSafePrunableAssignment( expression, context.strictErrors )
+        )
         {
             continue;
         }
 
-        if( isFieldDeadInSuffix( path, suffix, context ))
+        const checkPath = isTopLevel ? path : path.slice( 0, path.indexOf( '.' ));
+
+        if( isFieldDeadInSuffix( checkPath, suffix, context ))
         {
             deadFields.add( path );
         }

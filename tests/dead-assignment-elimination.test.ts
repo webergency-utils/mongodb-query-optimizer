@@ -16,12 +16,28 @@ describe( 'dead-assignment-proofs unit and branch analysis', () =>
         expect( proveDeadAssignmentElimination( null, [ { $set: { a: 2 } } ] )).toBeNull();
     });
 
-    it( 'ignores non-top-level paths or unsafe expressions', () =>
+    it( 'handles dotted paths and unsafe expressions', () =>
     {
-        // Dotted path (not top-level)
+        // Dotted path with only sub-path overwrite is not eliminated (parent object creation side effect)
         expect( proveDeadAssignmentElimination(
             { $set: { 'a.b': 1 } },
             [ { $set: { 'a.b': 2 } } ]
+        )).toBeNull();
+
+        // Dotted path when entire top-level root field is killed is eliminated in default mode
+        expect( proveDeadAssignmentElimination(
+            { $set: { 'a.b': 1, keep: 2 } },
+            [ { $unset: 'a' } ]
+        )).toEqual({
+            replacementStage: { $set: { keep: 2 } },
+            eliminatedFields: [ 'a.b' ]
+        });
+
+        // Dotted path is preserved under strictErrors: true
+        expect( proveDeadAssignmentElimination(
+            { $set: { 'a.b': 1, keep: 2 } },
+            [ { $unset: 'a' } ],
+            { strictFieldOrder: false, strictErrors: true }
         )).toBeNull();
 
         // Non-deterministic expression ($rand)

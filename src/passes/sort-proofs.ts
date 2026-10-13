@@ -1,3 +1,4 @@
+import { analyzeStage } from '../analyzer/semantics.js';
 import { GuaranteeContext } from '../guarantees.js';
 import { isEmptyObject, isPlainObject } from '../utils.js';
 import { canRemoveStage } from './guarantee-guards.js';
@@ -17,6 +18,15 @@ const ORDER_AGNOSTIC_ACCUMULATORS = new Set([
     '$count',
     '$stdDevPop',
     '$stdDevSamp'
+]);
+
+const ORDER_INSENSITIVE_INTERMEDIATE_OPERATORS = new Set([
+    '$match',
+    '$project',
+    '$addFields',
+    '$set',
+    '$unset',
+    '$lookup'
 ]);
 
 export function isOrderAgnosticGroup( groupStage: unknown ): boolean
@@ -103,6 +113,66 @@ export function proveRedundantSortElimination(
     if( isDeadSortBeforeCount( currentStage, nextStage )){ return true }
 
     if( isDeadSortBeforeSortByCount( currentStage, nextStage )){ return true }
+
+    return false;
+}
+
+function isOrderInsensitiveIntermediateStage(
+    stage    : unknown,
+    context? : GuaranteeContext
+): boolean
+{
+    const entry = getSingleStageEntry( stage );
+
+    if( !entry || !ORDER_INSENSITIVE_INTERMEDIATE_OPERATORS.has( entry[ 0 ] ))
+    {
+        return false;
+    }
+
+    const semantics = analyzeStage( stage );
+
+    if(
+        semantics.malformed
+        || semantics.unknown
+        || semantics.determinism !== 'deterministic'
+        || semantics.observable.determinism !== 'deterministic'
+        || semantics.order !== 'preserves'
+        || ( context?.strictErrors && semantics.observable.errors !== 'none-known' )
+    )
+    {
+        return false;
+    }
+
+    return true;
+}
+
+export function proveRedundantSortEliminationInPipeline(
+    pipeline  : readonly unknown[],
+    sortIndex : number,
+    context?  : GuaranteeContext
+): boolean
+{
+    const currentStage = pipeline[ sortIndex ];
+
+    if( !getStageSpec( currentStage, '$sort' ) || ( context && !canRemoveStage( currentStage, context )))
+    {
+        return false;
+    }
+
+    for( let j = sortIndex + 1; j < pipeline.length; j++ )
+    {
+        const candidate = pipeline[ j ];
+
+        if( proveRedundantSortElimination( currentStage, candidate, context ))
+        {
+            return true;
+        }
+
+        if( !isOrderInsensitiveIntermediateStage( candidate, context ))
+        {
+            return false;
+        }
+    }
 
     return false;
 }

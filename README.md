@@ -109,10 +109,10 @@ The optimizer evaluates queries and aggregation pipelines purely as Abstract Syn
 1. `adjacent-match-merging`: Fuses consecutive `$match` stages into `$and` conjunctions while strictly preserving multikey array semantics.
 2. `filter-optimization`: Recursively applies provably safe boolean filter normalization rules (`flatten-conjunctions`, `flatten-disjunctions`, `deduplicate-conjunctions`, `simplify-conjunction-identities`, `simplify-disjunction-identities`).
 3. `add-field-pushdown`: Decomposes `$addFields`/`$set` and safely pushes sort/match-dependent expressions across `$lookup`, `$unset`, and intermediate disjoint `$addFields`/`$set` or exclusion `$project` stages.
-4. `top-k-pushdown`: Advances `$sort` and `$limit` slices ahead of 1:1 compute and lookup stages (including deterministic shadow-field hoisting) while respecting error guards.
+4. `top-k-pushdown`: Advances `$sort` and `$limit` slices ahead of 1:1 compute and lookup stages (including stepping across sort-key-preserving `$project` stages and deterministic shadow-field hoisting) while respecting error guards.
 5. `lookup-delay`: Delays equality and pipeline-form `$lookup` joins past non-dependent filter, sort, limit, and skip stages, splits post-lookup `$match` conjuncts, and pushes filters/limits into lookup subpipelines.
 6. `unwind-prefilter`: Injects shape-safe `$or` prefilters before `$unwind` to discard non-matching documents without dropping polymorphic types or nested arrays.
-7. `redundant-sort-elimination`: Collapses consecutive `$sort` stages where the latter supersedes the earlier.
+7. `redundant-sort-elimination`: Eliminates empty `$sort` stages and dead `$sort` stages before adjacent or order-insensitive-separated `$sort`, `$count`, `$sortByCount`, and order-agnostic `$group` stages.
 8. `sort-by-count-simplification`: Converts verbose `$group` + `$sort` count patterns into canonical `$sortByCount`.
 9. `limit-skip-coalescing`: Combines adjacent `$limit` and `$skip` stages into minimal offsets and counts, and eliminates no-op `{ $skip: 0 }` stages.
 10. `expression-simplification`: Folds constant boolean conditions and simplifies `$size` over `$filter` when conditions are always truthy.
@@ -127,9 +127,9 @@ The optimizer evaluates queries and aggregation pipelines purely as Abstract Syn
 19. `redundant-lookup-elimination`: Drops unused equality and pipeline-form `$lookup` joins whose aliases are discarded downstream.
 20. `sort-project-commute`: Commutes `$project` ahead of `$sort` when all sort keys remain visible.
 21. `complex-projection-deferral`: Pushes complex computed fields downstream past selective filters and sorts.
-22. `facet-prefix-hoisting`: Extracts identical prefix stages shared across all branches of a `$facet`.
+22. `facet-prefix-hoisting`: Extracts identical deterministic prefix stages (`$match`, `$project`, `$addFields`, `$set`, `$unset`, numeric `$sort`, `$limit`, `$skip`) shared across all branches of a `$facet`.
 23. `covered-projection-synthesis`: Inserts an inclusion projection in front of a collapsing stage (`$group`, `$bucket`, `$bucketAuto`, `$sortByCount`), keeping only the fields that stage reads, and trims row-count-neutral prefixes before `$count` and zero-dependency `$group` stages.
-24. `dead-assignment-elimination`: Removes top-level `$addFields`/`$set` assignments, computed inclusion `$project` fields, and redundant `$unset` specifications whose paths are dropped downstream without intermediate reads.
+24. `dead-assignment-elimination`: Removes top-level (and root-discarded dotted) `$addFields`/`$set` assignments, computed inclusion `$project` fields, and redundant `$unset` specifications whose paths are dropped downstream without intermediate reads.
 
 ### Inactive & Contained Passes
 - `expr-match-normalization`: Inactive in production pending array traversal safety proofs across multikey arrays.

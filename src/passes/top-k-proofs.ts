@@ -1,9 +1,11 @@
+import { projectionVisibility } from '../analyzer/projections.js';
 import { analyzeStage } from '../analyzer/semantics.js';
 import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
 import { isPlainObject } from '../utils.js';
 import { canMoveStageAcrossStage, pipelineReadsFieldOrder } from './guarantee-guards.js';
 import { getSingleStageEntry } from './helpers.js';
 import { arePathsDisjoint } from './path-disjoint.js';
+import { parseSimpleProject } from './projection-proofs.js';
 import
 {
     allocateShadowFieldName,
@@ -168,6 +170,23 @@ export function canTopKPushAcrossStage(
     return true;
 }
 
+function canTopKStepAcrossProjectStage(
+    stage    : unknown,
+    sortKeys : readonly string[]
+): boolean
+{
+    const project = parseSimpleProject( stage );
+
+    if( !project )
+    {
+        return false;
+    }
+
+    return sortKeys.every(
+        ( key ) => projectionVisibility( project.projection, key ) === 'visible'
+    );
+}
+
 export function proveTopKPushdown(
     pipeline  : readonly any[],
     sortIndex : number,
@@ -198,12 +217,18 @@ export function proveTopKPushdown(
 
     for( let i = sortIndex - 1; i >= 0; i-- )
     {
-        if( !canTopKPushAcrossStage( pipeline[ i ], sortKeys, context, downstreamPipeline ))
+        if( canTopKPushAcrossStage( pipeline[ i ], sortKeys, context, downstreamPipeline ))
         {
-            break;
+            targetIndex = i;
+            continue;
         }
 
-        targetIndex = i;
+        if( canTopKStepAcrossProjectStage( pipeline[ i ], sortKeys ))
+        {
+            continue;
+        }
+
+        break;
     }
 
     if( targetIndex === sortIndex )

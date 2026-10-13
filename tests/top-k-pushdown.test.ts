@@ -207,6 +207,33 @@ describe( 'top-k-proofs unit and branch analysis', () =>
             targetIndex: 1,
             sliceLength: 3,
         });
+
+        // Steps across simple $project when reaching an earlier $lookup
+        expect( proveTopKPushdown([
+            { $lookup: { from: 'items', localField: 'sku', foreignField: 'sku', as: 'items' } },
+            { $project: { secret: 0 } },
+            { $sort: { score: -1, _id: 1 } },
+            { $limit: 10 },
+        ], 2 )).toEqual({
+            sortIndex: 2,
+            targetIndex: 0,
+            sliceLength: 2,
+        });
+
+        // Does not cross standalone $project without an earlier passive target
+        expect( proveTopKPushdown([
+            { $project: { secret: 0 } },
+            { $sort: { score: -1, _id: 1 } },
+            { $limit: 10 },
+        ], 1 )).toBeNull();
+
+        // Stops at $project that hides a sort key
+        expect( proveTopKPushdown([
+            { $lookup: { from: 'items', localField: 'sku', foreignField: 'sku', as: 'items' } },
+            { $project: { score: 0 } },
+            { $sort: { score: -1, _id: 1 } },
+            { $limit: 10 },
+        ], 2 )).toBeNull();
     });
 });
 

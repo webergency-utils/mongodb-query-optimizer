@@ -8,7 +8,8 @@ import
     isDeadSortBeforeSortByCount, 
     isEmptySort, 
     isOrderAgnosticGroup, 
-    proveRedundantSortElimination 
+    proveRedundantSortElimination,
+    proveRedundantSortEliminationInPipeline
 } 
 from '../src/passes/sort-proofs';
 import { optimizePipeline } from './helpers/pre-gate-optimizer.js';
@@ -248,5 +249,47 @@ describe( 'RedundantSortEliminationPass execution and parity', () =>
 
         expect( proveRedundantSortElimination( { $sort: { a: 1 } }, { $sort: { b: 1 } }, { strictFieldOrder: true, strictErrors: true } ) ).toBe( true );
         expect( proveRedundantSortElimination( { $sort: 'invalid' }, { $sort: { b: 1 } }, { strictFieldOrder: false, strictErrors: true } ) ).toBe( false );
+    });
+
+    it( 'eliminates dead sorts across order-insensitive intermediate stages and stops on barriers', () =>
+    {
+        const pass = new RedundantSortEliminationPass();
+        const pipeline = [
+            { $sort: { a: 1 } },
+            { $match: { status: 'active' } },
+            { $addFields: { x: 1 } },
+            { $project: { dept: 1, salary: 1 } },
+            { $unset: 'temp' },
+            { $lookup: { from: 'items', localField: 'dept', foreignField: 'dept', as: 'items' } },
+            { $group: { _id: '$dept', total: { $sum: '$salary' } } }
+        ];
+
+        expect( pass.execute( pipeline )).toEqual( pipeline.slice( 1 ));
+
+        // Preserves sort when an order-sensitive stage ($limit) sits in between
+        const limitBetween = [
+            { $sort: { a: 1 } },
+            { $limit: 5 },
+            { $sort: { b: -1 } }
+        ];
+        expect( pass.execute( limitBetween )).toEqual( limitBetween );
+
+        // Preserves sort when intermediate stage is malformed, volatile, or error-prone under strictErrors
+        expect( proveRedundantSortEliminationInPipeline(
+            [ { $sort: { a: 1 } }, { $addFields: { r: { $rand: {} } } }, { $sort: { b: 1 } } ],
+            0
+        )).toBe( false );
+
+        expect( proveRedundantSortEliminationInPipeline(
+            [ { $sort: { a: 1 } }, { $addFields: { q: { $divide: [ '$a', '$b' ] } } }, { $sort: { b: 1 } } ],
+            0,
+            { strictFieldOrder: false, strictErrors: true }
+        )).toBe( false );
+
+        expect( proveRedundantSortEliminationInPipeline(
+            [ { $sort: 'invalid' }, { $sort: { b: 1 } } ],
+            0,
+            { strictFieldOrder: false, strictErrors: true }
+        )).toBe( false );
     });
 });

@@ -2,7 +2,7 @@ import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
 import { PipelinePass } from './types.js';
 import 
 { 
-    proveRedundantSortElimination, 
+    proveRedundantSortEliminationInPipeline, 
     isEmptySort 
 } 
 from './sort-proofs.js';
@@ -18,21 +18,16 @@ export class RedundantSortEliminationPass implements PipelinePass
 
         for( let i = 0; i < pipeline.length; i++ )
         {
-            const currentStage = pipeline[i];
+            const currentStage = pipeline[ i ];
 
             if( isEmptySort( currentStage ))
             {
                 continue;
             }
 
-            if( i + 1 < pipeline.length )
+            if( proveRedundantSortEliminationInPipeline( pipeline, i, context ))
             {
-                const nextStage = pipeline[i + 1];
-
-                if( proveRedundantSortElimination( currentStage, nextStage, context ))
-                {
-                    continue;
-                }
+                continue;
             }
 
             result.push( currentStage );
