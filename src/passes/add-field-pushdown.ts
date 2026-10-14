@@ -9,13 +9,13 @@ export class AddFieldPushdownPass implements PipelinePass
 
     execute( pipeline: any[], context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {
-        const result = [ ...pipeline ];
-
-        for( let i = 1; i < result.length; i++ )
+        for( let i = 1; i < pipeline.length; i++ )
         {
-            const proof = proveAddFieldPushdown( result, i, context );
+            const proof = proveAddFieldPushdown( pipeline, i, context );
 
-            if( !proof ){ continue; }
+            if( !proof ){ continue }
+
+            const result = [ ...pipeline ];
 
             if( proof.remainingFields === null )
             {
@@ -37,6 +37,6 @@ export class AddFieldPushdownPass implements PipelinePass
             return result;
         }
 
-        return result;
+        return pipeline;
     }
 }

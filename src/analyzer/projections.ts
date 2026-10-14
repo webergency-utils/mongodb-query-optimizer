@@ -13,11 +13,15 @@ function isProjectionObject(value: unknown): value is Record<string, unknown>
     return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-export function isValidProjectionPath(path: string): boolean
+export function isValidProjectionPath( path: string ): boolean
 {
-    return path.length > 0
-        && !path.startsWith('$')
-        && path.split('.').every((part) => part.length > 0);
+    return (
+        path.length > 0
+        && !path.startsWith( '$' )
+        && !path.startsWith( '.' )
+        && !path.endsWith( '.' )
+        && !path.includes( '..' )
+    );
 }
 
 function classifyProjectionValue(value: unknown): 'include' | 'exclude' | 'computed'
@@ -94,81 +98,97 @@ function determineProjectMode(
     return 'unknown';
 }
 
+const projectSummaryCache = new WeakMap<object, ProjectionSummary>();
+const addFieldsSummaryCache = new WeakMap<object, ProjectionSummary>();
+
 export function analyzeProjection(
-    specification: unknown,
-    operation: ProjectionOperation = 'project',
+    specification   : unknown,
+    operation       : ProjectionOperation = 'project'
 ): ProjectionSummary
 {
-    const includedPaths = new Set<string>();
-    const excludedPaths = new Set<string>();
-    const computedPaths = new Set<string>();
-
-    if (!isProjectionObject(specification))
+    if( !isProjectionObject( specification ))
     {
         return {
-            mode: 'unknown',
-            id: 'unknown',
-            includedPaths,
-            excludedPaths,
-            computedPaths,
+            mode                : 'unknown',
+            id                  : 'unknown',
+            includedPaths       : new Set<string>(),
+            excludedPaths       : new Set<string>(),
+            computedPaths       : new Set<string>(),
             shieldsOmittedFields: true,
-            collisions: [],
-            hasPathCollisions: false,
-            unknown: true,
+            collisions          : [],
+            hasPathCollisions   : false,
+            unknown             : true
         };
     }
 
-    const entries = Object.entries(specification);
+    const cache = operation === 'add-fields' ? addFieldsSummaryCache : projectSummaryCache;
+    const cached = cache.get( specification );
+
+    if( cached !== undefined )
+    {
+        return cached;
+    }
+
+    const includedPaths = new Set<string>();
+    const excludedPaths = new Set<string>();
+    const computedPaths = new Set<string>();
+    const entries = Object.entries( specification );
     let id: IdProjection = 'default-included';
     let includes = 0;
     let excludes = 0;
     let computes = 0;
     let invalidPath = false;
 
-    for (const [path, value] of entries)
+    for( const [ path, value ] of entries )
     {
-        if (!isValidProjectionPath(path))
+        if( !isValidProjectionPath( path ))
         {
             invalidPath = true;
             continue;
         }
 
-        if (path === '_id')
+        if( path === '_id' )
         {
-            id = classifyId(value, operation);
+            id = classifyId( value, operation );
         }
 
-        if (operation === 'add-fields')
+        if( operation === 'add-fields' )
         {
-            computedPaths.add(path);
-            if (path !== '_id')
+            computedPaths.add( path );
+
+            if( path !== '_id' )
             {
                 computes++;
             }
+
             continue;
         }
 
-        const classification = classifyProjectionValue(value);
-        if (classification === 'include')
+        const classification = classifyProjectionValue( value );
+
+        if( classification === 'include' )
         {
-            includedPaths.add(path);
-            if (path !== '_id')
+            includedPaths.add( path );
+
+            if( path !== '_id' )
             {
                 includes++;
             }
         }
-        else if (classification === 'exclude')
+        else if( classification === 'exclude' )
         {
-            excludedPaths.add(path);
-            if (path !== '_id')
+            excludedPaths.add( path );
+
+            if( path !== '_id' )
             {
                 excludes++;
             }
         }
         else
         {
-            computedPaths.add(path);
-            if (path !== '_id')
+            computedPaths.add( path );
+
+            if( path !== '_id' )
             {
                 computes++;
             }
@@ -177,15 +197,16 @@ export function analyzeProjection(
 
     const mode = operation === 'add-fields'
         ? 'add-fields'
-        : determineProjectMode(includes, excludes, computes, id);
-    const collisions = findPathCollisions(entries.map(([path]) => path));
+        : determineProjectMode( includes, excludes, computes, id );
+    const collisions = findPathCollisions( entries.map(( [ path ] ) => path ));
     const unknown = invalidPath
         || entries.length === 0
         || mode === 'unknown'
         || mode === 'mixed'
         || collisions.length > 0;
 
-    return {
+    const summary: ProjectionSummary =
+    {
         mode,
         id,
         includedPaths,
@@ -193,9 +214,13 @@ export function analyzeProjection(
         computedPaths,
         shieldsOmittedFields: mode === 'inclusion' || mode === 'mixed' || mode === 'unknown',
         collisions,
-        hasPathCollisions: collisions.length > 0,
-        unknown,
+        hasPathCollisions   : collisions.length > 0,
+        unknown
     };
+
+    cache.set( specification, summary );
+
+    return summary;
 }
 
 function idVisibility(summary: ProjectionSummary): PathVisibility

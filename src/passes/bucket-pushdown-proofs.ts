@@ -1,5 +1,5 @@
 import { GuaranteeContext } from '../guarantees.js';
-import { deepClone, isPlainObject } from '../utils.js';
+import { isPlainObject } from '../utils.js';
 import { isStageProvenErrorFree } from './guarantee-guards.js';
 import
 {
@@ -118,8 +118,7 @@ export function proveBucketFilterPushdown(
         }
 
         const remainingOrConjuncts = conjuncts
-            .filter(( _c, idx ) => idx !== orConjunctIndex )
-            .map(( c ) => deepClone( c ));
+            .filter(( _c, idx ) => idx !== orConjunctIndex );
 
         return {
             prefilterStage: { $match: { $or: pushedBranches } },
@@ -311,8 +310,7 @@ export function proveBucketFilterPushdown(
     }
 
     const remainingConjuncts = conjuncts
-        .filter(( _c, idx ) => retainIdInPostfilter || idx !== idConjunctIndex )
-        .map(( c ) => deepClone( c ));
+        .filter(( _c, idx ) => retainIdInPostfilter || idx !== idConjunctIndex );
 
     const postfilterStage = (
         remainingConjuncts.length > 0

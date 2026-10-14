@@ -1,5 +1,5 @@
 import { GuaranteeContext } from '../guarantees.js';
-import { deepClone, isPlainObject } from '../utils.js';
+import { isPlainObject } from '../utils.js';
 import { isStageProvenErrorFree } from './guarantee-guards.js';
 import {
     combineConjuncts,
@@ -111,13 +111,13 @@ export function proveGroupFilterPushdown(
 
             if( key === '_id' )
             {
-                prefilterConjuncts.push( { [ sourceField ]: deepClone( val ) } );
+                prefilterConjuncts.push( { [ sourceField ]: val } );
                 hasIdCondition = true;
             }
             else if( key.startsWith( '_id.' ))
             {
                 const sub = key.slice( 4 );
-                prefilterConjuncts.push( { [ `${ sourceField }.${ sub }` ]: deepClone( val ) } );
+                prefilterConjuncts.push( { [ `${ sourceField }.${ sub }` ]: val } );
                 hasIdCondition = true;
             }
             else if( key === '$or' && Array.isArray( val ) && val.length > 0 )
@@ -150,12 +150,12 @@ export function proveGroupFilterPushdown(
                 }
                 else
                 {
-                    postfilterConjuncts.push( deepClone( conjunct ) );
+                    postfilterConjuncts.push( conjunct );
                 }
             }
             else
             {
-                postfilterConjuncts.push( deepClone( conjunct ) );
+                postfilterConjuncts.push( conjunct );
             }
         }
     }
@@ -228,7 +228,7 @@ export function proveGroupFilterPushdown(
                     if( directFieldMap.has( subKey ))
                     {
                         const sourceField = directFieldMap.get( subKey )! + subPath;
-                        prefilterConjuncts.push( { [ sourceField ]: deepClone( val ) } );
+                        prefilterConjuncts.push( { [ sourceField ]: val } );
                         hasIdCondition = true;
                     }
                     else
@@ -245,7 +245,7 @@ export function proveGroupFilterPushdown(
                             if( directFieldMap.has( subKey ))
                             {
                                 const sourceField = directFieldMap.get( subKey )!;
-                                prefilterConjuncts.push( { [ sourceField ]: deepClone( subVal ) } );
+                                prefilterConjuncts.push( { [ sourceField ]: subVal } );
                                 hasIdCondition = true;
                             }
                             else
@@ -261,7 +261,7 @@ export function proveGroupFilterPushdown(
                 }
                 else
                 {
-                    postfilterConjuncts.push( deepClone( conjunct ) );
+                    postfilterConjuncts.push( conjunct );
                 }
             }
         }
@@ -284,7 +284,7 @@ export function proveGroupFilterPushdown(
                     if( directFieldMap.has( subKey ))
                     {
                         const sourceField = directFieldMap.get( subKey )! + subPath;
-                        prefilterConjuncts.push( { [ sourceField ]: deepClone( val ) } );
+                        prefilterConjuncts.push( { [ sourceField ]: val } );
                         hasIdCondition = true;
                     }
                     else if( computedFieldMap.has( subKey ))
@@ -302,7 +302,7 @@ export function proveGroupFilterPushdown(
                             hasIdCondition = true;
                         }
 
-                        postfilterConjuncts.push( deepClone( conjunct ) );
+                        postfilterConjuncts.push( conjunct );
                     }
                     else
                     {
@@ -311,7 +311,7 @@ export function proveGroupFilterPushdown(
                 }
                 else
                 {
-                    postfilterConjuncts.push( deepClone( conjunct ) );
+                    postfilterConjuncts.push( conjunct );
                 }
             }
         }
@@ -352,7 +352,7 @@ export function proveGroupFilterPushdown(
 
                     prefilterConjuncts.push( { [ sourceField ]: { $exists: true, $ne: null } } );
                     hasIdCondition = true;
-                    postfilterConjuncts.push( ...conjuncts.map(( c ) => deepClone( c )) );
+                    postfilterConjuncts.push( ...conjuncts );
                 }
                 else
                 {

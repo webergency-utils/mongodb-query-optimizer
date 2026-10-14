@@ -661,7 +661,8 @@ describe( 'ExpressionSimplificationPass unit and proof tests', () =>
             { $match: { status: 'active', $expr: { $and: [ true, { $eq: [ '$a', '$b' ] } ] } } },
             { $match: { $and: [ { a: 1 }, { $expr: { $eq: [ 1, 1 ] } } ] } },
             { $match: { $and: [ { a: 1 }, { b: 2 } ] } },
-            { $match: { a: { $in: 1 } } }
+            { $match: { a: { $in: 1 } } },
+            { $match: { $and: 'malformed' } }
         ], defaultContext )).toEqual([
             { $group: { _id: null, c: { $sum: 1 }, invalidAcc: 123 } },
             { $match: {} },
@@ -673,7 +674,8 @@ describe( 'ExpressionSimplificationPass unit and proof tests', () =>
             { $match: { status: 'active', $expr: { $eq: [ '$a', '$b' ] } } },
             { $match: { $and: [ { a: 1 }, {} ] } },
             { $match: { $and: [ { a: 1 }, { b: 2 } ] } },
-            { $match: { a: { $in: 1 } } }
+            { $match: { a: { $in: 1 } } },
+            { $match: { $and: 'malformed' } }
         ]);
 
         // Double-negation elimination over boolean-producing operators
@@ -848,4 +850,67 @@ describe( 'ExpressionSimplificationPass unit and proof tests', () =>
             }
         });
     });
+
+    it( 'caps boolean operand deduplication in $and and $or at 64 items (R4, R5)', () =>
+    {
+        const oversizedAnd = Array.from({ length: 65 }, ( _, idx ) => (
+            idx < 2 ? { $eq: [ '$a', 1 ] } : { $gt: [ `$f${ idx }`, idx ] }
+        ));
+        const simplifiedAnd = simplifyExpression({ $and: oversizedAnd });
+        expect( simplifiedAnd ).toEqual({ $and: oversizedAnd });
+
+        const oversizedOr = Array.from({ length: 65 }, ( _, idx ) => (
+            idx < 2 ? { $eq: [ '$a', 1 ] } : { $gt: [ `$f${ idx }`, idx ] }
+        ));
+        const simplifiedOr = simplifyExpression({ $or: oversizedOr });
+        expect( simplifiedOr ).toEqual({ $or: oversizedOr });
+
+        // Mixed boolean-producing expression, non-boolean expression, and duplicate non-boolean operand within the 64-item cap
+        expect( simplifyExpression({
+            $and: [
+                { $eq: [ '$a', 1 ] },
+                { $eq: [ '$a', 1 ] },
+                { $add: [ '$b', 1 ] },
+                { $eq: [ '$divide', { $divide: [ '$a', '$b' ] } ] },
+                '$flag'
+            ]
+        })).toEqual({
+            $and: [
+                { $eq: [ '$a', 1 ] },
+                { $add: [ '$b', 1 ] },
+                { $eq: [ '$divide', { $divide: [ '$a', '$b' ] } ] },
+                '$flag'
+            ]
+        });
+
+        // Unwraps single-element $and and $or inside boolean $filter.cond context
+        expect( simplifyExpression({
+            $filter: {
+                input: '$items',
+                as: 'item',
+                cond: { $and: [ '$$item.active', true ] }
+            }
+        })).toEqual({
+            $filter: {
+                input: '$items',
+                as: 'item',
+                cond: '$$item.active'
+            }
+        });
+
+        expect( simplifyExpression({
+            $filter: {
+                input: '$items',
+                as: 'item',
+                cond: { $or: [ '$$item.active', false ] }
+            }
+        })).toEqual({
+            $filter: {
+                input: '$items',
+                as: 'item',
+                cond: '$$item.active'
+            }
+        });
+    });
 });
+

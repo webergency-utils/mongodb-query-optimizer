@@ -101,7 +101,7 @@ export function stageCanExpandRows( stage: unknown ): boolean
 
 function expressionReadsFieldOrder( expr: unknown, seen: WeakSet<object> ): boolean
 {
-    if( !expr || typeof expr !== 'object' ){ return false }
+    if( !Array.isArray( expr ) && !isPlainObject( expr )){ return false }
 
     if( seen.has( expr )){ return false }
 
@@ -117,10 +117,10 @@ function expressionReadsFieldOrder( expr: unknown, seen: WeakSet<object> ): bool
         return false;
     }
 
-    const obj = expr as Record<string, unknown>;
-
-    for( const [ key, value ] of Object.entries( obj ))
+    for( const [ key, value ] of Object.entries( expr ))
     {
+        if( key === '$literal' ){ continue }
+
         if( key === '$objectToArray' ){ return true }
 
         if( expressionReadsFieldOrder( value, seen )){ return true }
@@ -131,7 +131,7 @@ function expressionReadsFieldOrder( expr: unknown, seen: WeakSet<object> ): bool
 
 function filterReadsFieldOrder( filter: unknown, seen: WeakSet<object> ): boolean
 {
-    if( !filter || typeof filter !== 'object' ){ return false }
+    if( !Array.isArray( filter ) && !isPlainObject( filter )){ return false }
 
     if( seen.has( filter )){ return false }
 
@@ -147,9 +147,7 @@ function filterReadsFieldOrder( filter: unknown, seen: WeakSet<object> ): boolea
         return false;
     }
 
-    const obj = filter as Record<string, unknown>;
-
-    for( const [ key, value ] of Object.entries( obj ))
+    for( const [ key, value ] of Object.entries( filter ))
     {
         if( key === '$expr' )
         {
@@ -157,6 +155,8 @@ function filterReadsFieldOrder( filter: unknown, seen: WeakSet<object> ): boolea
 
             continue;
         }
+
+        if( key === '$in' || key === '$nin' ){ continue }
 
         if( key === '$objectToArray' ){ return true }
 

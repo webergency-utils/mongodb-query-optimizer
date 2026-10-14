@@ -1,7 +1,7 @@
 import { isFilterContradiction } from '../analyzer/filters';
 import { withCandidateFilterRuleProfile } from '../filter-rule-registry';
 import { GuaranteeContext, OptimizerOptions, resolvePipelineGuarantees } from '../guarantees';
-import { deepClone, hasCycle, structuralFingerprint } from '../utils';
+import { containsValue, hasCycle, isEqual, isPlainObject } from '../utils';
 import { AdjacentAddFieldMergingPass } from './adjacent-addfield-merging';
 import { AddFieldPushdownPass } from './add-field-pushdown';
 import { AdjacentMatchMergingPass } from './adjacent-match-merging';
@@ -190,25 +190,77 @@ export function getPipelineTransformationRegistryStatus(): PipelineTransformatio
     return pipelineTransformationRegistryStatus;
 }
 
-function collectStageTypes( pipeline: readonly any[] ): Set<string>
-{
-    const types = new Set<string>();
+const STAGE_TYPE_BITS: Readonly<Record<string, number>> = Object.freeze({
+    $match          : 1 << 0,
+    $project        : 1 << 1,
+    $addFields      : 1 << 2,
+    $set            : 1 << 3,
+    $unset          : 1 << 4,
+    $group          : 1 << 5,
+    $sort           : 1 << 6,
+    $limit          : 1 << 7,
+    $skip           : 1 << 8,
+    $lookup         : 1 << 9,
+    $unwind         : 1 << 10,
+    $bucket         : 1 << 11,
+    $bucketAuto     : 1 << 12,
+    $count          : 1 << 13,
+    $sortByCount    : 1 << 14,
+    $facet          : 1 << 15,
+    $unionWith      : 1 << 16,
+    $replaceRoot    : 1 << 17,
+    $replaceWith    : 1 << 18
+});
 
-    for( const stage of pipeline )
+const STAGE_UNKNOWN_BIT = 1 << 30;
+const passMaskCache = new WeakMap<PipelinePass, number>();
+
+function getPassStageMask( pass: PipelinePass ): number
+{
+    const cached = passMaskCache.get( pass );
+
+    if( cached !== undefined ){ return cached }
+
+    if( !pass.stageTypes || pass.stageTypes.length === 0 )
     {
-        if( stage && typeof stage === 'object' && !Array.isArray( stage ))
+        passMaskCache.set( pass, 0 );
+
+        return 0;
+    }
+
+    let mask = 0;
+
+    for( const t of pass.stageTypes )
+    {
+        mask |= STAGE_TYPE_BITS[ t ] ?? STAGE_UNKNOWN_BIT;
+    }
+
+    passMaskCache.set( pass, mask );
+
+    return mask;
+}
+
+function collectStageMask( pipeline: readonly any[] ): number
+{
+    let mask = 0;
+
+    for( let i = 0; i < pipeline.length; i++ )
+    {
+        const stage = pipeline[ i ];
+
+        if( isPlainObject( stage ))
         {
-            for( const key of Object.keys( stage ))
+            for( const key in stage )
             {
                 if( key.startsWith( '$' ))
                 {
-                    types.add( key );
+                    mask |= STAGE_TYPE_BITS[ key ] ?? STAGE_UNKNOWN_BIT;
                 }
             }
         }
     }
 
-    return types;
+    return mask;
 }
 
 function pipelinesShallowEqual( a: readonly any[], b: readonly any[] ): boolean
@@ -226,8 +278,54 @@ function pipelinesShallowEqual( a: readonly any[], b: readonly any[] ): boolean
 
 interface SweepResult
 {
-    readonly pipeline : any[];
-    readonly modified : boolean;
+    readonly pipeline  : any[];
+    readonly modified  : boolean;
+    readonly converged : boolean;
+}
+
+const convergedSubpipelinesByContext = new WeakMap<GuaranteeContext, WeakSet<readonly any[]>>();
+
+function getConvergedSubpipelineSet( context: GuaranteeContext ): WeakSet<readonly any[]>
+{
+    let set = convergedSubpipelinesByContext.get( context );
+
+    if( set === undefined )
+    {
+        set = new WeakSet<readonly any[]>();
+        convergedSubpipelinesByContext.set( context, set );
+    }
+
+    return set;
+}
+
+function sweepChildSubpipeline(
+    subpipeline : any[],
+    passes      : readonly PipelinePass[],
+    context     : GuaranteeContext
+): any[]
+{
+    const convergedSet = passes === activePipelinePasses
+        ? getConvergedSubpipelineSet( context )
+        : undefined;
+
+    if( convergedSet !== undefined && convergedSet.has( subpipeline ))
+    {
+        return subpipeline;
+    }
+
+    const sweepResult = applyGlobalSweepWithDirty( subpipeline, passes, context );
+
+    if( !sweepResult.modified || pipelinesShallowEqual( sweepResult.pipeline, subpipeline ))
+    {
+        if( convergedSet !== undefined )
+        {
+            convergedSet.add( subpipeline );
+        }
+
+        return subpipeline;
+    }
+
+    return sweepResult.pipeline;
 }
 
 function optimizeStageChildrenForSweep(
@@ -236,7 +334,7 @@ function optimizeStageChildrenForSweep(
     context : GuaranteeContext
 ): any
 {
-    if( !stage || typeof stage !== 'object' || Array.isArray( stage ))
+    if( !isPlainObject( stage ))
     {
         return stage;
     }
@@ -258,9 +356,9 @@ function optimizeStageChildrenForSweep(
         {
             if( Array.isArray( subpipeline ))
             {
-                const optimizedSub = applyGlobalSweep( subpipeline, passes, context );
+                const optimizedSub = sweepChildSubpipeline( subpipeline, passes, context );
 
-                if( !pipelinesShallowEqual( optimizedSub, subpipeline ))
+                if( optimizedSub !== subpipeline )
                 {
                     facetModified = true;
                 }
@@ -291,9 +389,9 @@ function optimizeStageChildrenForSweep(
         && Array.isArray( lookup.pipeline )
     )
     {
-        const optimizedLookupPipeline = applyGlobalSweep( lookup.pipeline, passes, context );
+        const optimizedLookupPipeline = sweepChildSubpipeline( lookup.pipeline, passes, context );
 
-        if( !pipelinesShallowEqual( optimizedLookupPipeline, lookup.pipeline ))
+        if( optimizedLookupPipeline !== lookup.pipeline )
         {
             current = {
                 ...current,
@@ -314,9 +412,9 @@ function optimizeStageChildrenForSweep(
         && Array.isArray( unionWith.pipeline )
     )
     {
-        const optimizedUnionPipeline = applyGlobalSweep( unionWith.pipeline, passes, context );
+        const optimizedUnionPipeline = sweepChildSubpipeline( unionWith.pipeline, passes, context );
 
-        if( !pipelinesShallowEqual( optimizedUnionPipeline, unionWith.pipeline ))
+        if( optimizedUnionPipeline !== unionWith.pipeline )
         {
             current = {
                 ...current,
@@ -338,7 +436,8 @@ function applyGlobalSweepWithDirty(
 ): SweepResult
 {
     let modified = false;
-    const childOptimized: any[] = [];
+    let nonFilterModified = false;
+    let current = pipeline;
 
     for( let i = 0; i < pipeline.length; i++ )
     {
@@ -347,18 +446,25 @@ function applyGlobalSweepWithDirty(
 
         if( optStage !== origStage )
         {
-            modified = true;
-        }
+            if( current === pipeline )
+            {
+                current = [ ...pipeline ];
+            }
 
-        childOptimized.push( optStage );
+            current[ i ] = optStage;
+            modified = true;
+            nonFilterModified = true;
+        }
     }
 
-    let current = childOptimized;
-    let stageTypes = collectStageTypes( current );
+    let stageMask = collectStageMask( current );
 
-    for( const pass of passes )
+    for( let pIdx = 0; pIdx < passes.length; pIdx++ )
     {
-        if( pass.stageTypes && !pass.stageTypes.some(( t ) => stageTypes.has( t )))
+        const pass = passes[ pIdx ]!;
+        const passMask = getPassStageMask( pass );
+
+        if( passMask !== 0 && ( stageMask & passMask ) === 0 )
         {
             continue;
         }
@@ -368,12 +474,18 @@ function applyGlobalSweepWithDirty(
         if( !pipelinesShallowEqual( current, next ))
         {
             modified = true;
+
+            if( pIdx > 0 || pass.name !== 'filter-optimization' )
+            {
+                nonFilterModified = true;
+            }
+
             current = next;
-            stageTypes = collectStageTypes( current );
+            stageMask = collectStageMask( current );
         }
     }
 
-    if( stageTypes.has( '$unionWith' ))
+    if(( stageMask & STAGE_TYPE_BITS.$unionWith! ) !== 0 )
     {
         const withoutDeadUnionWith = current.filter(( stage ) => !isDeadUnionWithStage( stage, context ));
 
@@ -381,31 +493,37 @@ function applyGlobalSweepWithDirty(
         {
             current = withoutDeadUnionWith;
             modified = true;
+            nonFilterModified = true;
         }
     }
 
-    for( let i = 0; i < current.length; i++ )
+    if(( stageMask & STAGE_TYPE_BITS.$match! ) !== 0 )
     {
-        const stage = current[ i ];
-
-        if( stage && typeof stage === 'object' && !Array.isArray( stage ) && stage.$match )
+        for( let i = 0; i < current.length; i++ )
         {
-            if( isFilterContradiction( stage.$match ) && !hasUnionWithAfter( current, i ))
-            {
-                if( current.length > i + 1 )
-                {
-                    current = current.slice( 0, i + 1 );
-                    modified = true;
-                }
+            const stage = current[ i ];
 
-                break;
+            if( stage && typeof stage === 'object' && !Array.isArray( stage ) && stage.$match )
+            {
+                if( isFilterContradiction( stage.$match ) && !hasUnionWithAfter( current, i ))
+                {
+                    if( current.length > i + 1 )
+                    {
+                        current = current.slice( 0, i + 1 );
+                        modified = true;
+                        nonFilterModified = true;
+                    }
+
+                    break;
+                }
             }
         }
     }
 
     return {
-        pipeline : current,
-        modified
+        pipeline  : current,
+        modified,
+        converged : !nonFilterModified && passes === activePipelinePasses
     };
 }
 
@@ -456,15 +574,6 @@ function hasUnionWithAfter( pipeline: readonly any[], fromIndex: number ): boole
     return false;
 }
 
-function applyGlobalSweep(
-    pipeline : any[],
-    passes   : readonly PipelinePass[],
-    context  : GuaranteeContext
-): any[]
-{
-    return applyGlobalSweepWithDirty( pipeline, passes, context ).pipeline;
-}
-
 /**
  * Package-private scheduler seam for deterministic custom-pass and budget tests.
  * The package root intentionally does not export it. Options are resolved once here,
@@ -482,31 +591,24 @@ export function optimizePipelineWithPasses(
         return pipeline;
     }
 
-    let current: any;
-    try
-    {
-        current = deepClone( pipeline );
-    }
-    catch
-    {
-        return pipeline;
-    }
+    const currentInitial = [ ...pipeline ];
 
     if( passes.length === 0 )
     {
-        return current;
+        return currentInitial;
     }
 
     if( !Number.isSafeInteger( sweepBudget ) || sweepBudget <= 0 )
     {
-        return current;
+        return currentInitial;
     }
+
+    let current: any[] = currentInitial;
 
     try
     {
         const context = resolvePipelineGuarantees( pipeline, options );
-        let currentFingerprint: string | null = null;
-        let history: Set<string> | null = null;
+        const history: any[][] = [ current ];
 
         for( let sweep = 0; sweep < sweepBudget; sweep++ )
         {
@@ -516,40 +618,32 @@ export function optimizePipelineWithPasses(
                 context
             );
 
-            if( !sweepResult.modified )
+            if( !sweepResult.modified || ( sweepResult.converged && sweep + 1 < sweepBudget ))
             {
                 return sweepResult.pipeline;
             }
 
-            if( currentFingerprint === null )
-            {
-                currentFingerprint = structuralFingerprint( current );
-                history = new Set<string>([ currentFingerprint ]);
-            }
-
             const next = sweepResult.pipeline;
-            const nextFingerprint = structuralFingerprint( next );
 
-            if( nextFingerprint === currentFingerprint )
+            if( isEqual( current, next ))
             {
                 return next;
             }
 
-            if( history!.has( nextFingerprint ))
+            if( sweep > 0 && containsValue( history, next ))
             {
-                return deepClone( pipeline );
+                return [ ...pipeline ];
             }
 
-            history!.add( nextFingerprint );
+            history.push( next );
             current = next;
-            currentFingerprint = nextFingerprint;
         }
 
-        return deepClone( pipeline );
+        return [ ...pipeline ];
     }
     catch
     {
-        return deepClone( pipeline );
+        return [ ...pipeline ];
     }
 }
 

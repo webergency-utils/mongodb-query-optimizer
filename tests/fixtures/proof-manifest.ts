@@ -92,8 +92,14 @@ export const filterProofManifest: readonly TransformationProofEvidence<FilterRul
         'u9-generated-nested-filter-optimization',
         'u4-pipeline-top-level-filter-rules',
         {
-            status: 'inactive',
-            reason: 'Implicit equality matches array elements where explicit BSON equality does not; inactive pending exhaustive polymorphic array traversal proofs.'
+            status: 'active',
+            proofRecheckNote: 'Proof audited: rewrites single-key explicit $eq to implicit equality only for scalar primitives, valid Dates, and ObjectIds; regexes, arrays, objects, and multi-key operator subdocuments remain untouched.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-match-pushdown',
+                strictFieldOrder: 'mixed-shape-match-pushdown',
+                strictErrors: 'mixed-shape-match-pushdown'
+            },
+            strictModeBehavior: 'preserved'
         }
     ),
     evidence(
@@ -103,8 +109,14 @@ export const filterProofManifest: readonly TransformationProofEvidence<FilterRul
         'u9-generated-nested-adjacent-match-merging',
         'u4-pipeline-nested-lookup-filters',
         {
-            status: 'inactive',
-            reason: 'Singleton $in with regex or nested arrays has distinct BSON regex and multikey semantics compared to implicit equality; inactive pending multikey safety proofs.'
+            status: 'active',
+            proofRecheckNote: 'Proof audited: deduplicates bounded $in arrays and rewrites single-element $in to implicit equality only for safe scalar primitives, valid Dates, and ObjectIds; preserves regexes, nested arrays, and objects.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-match-pushdown',
+                strictFieldOrder: 'mixed-shape-match-pushdown',
+                strictErrors: 'mixed-shape-match-pushdown'
+            },
+            strictModeBehavior: 'preserved'
         }
     ),
     evidence(
@@ -159,6 +171,23 @@ export const filterProofManifest: readonly TransformationProofEvidence<FilterRul
         }
     ),
     evidence(
+        'merge-conjunctions',
+        'filter-logical-field-order-contained',
+        'u9-generated-top-level-adjacent-add-field-merging',
+        'u9-generated-nested-adjacent-add-field-merging',
+        'u4-pipeline-adjacent-multikey-matches',
+        {
+            status: 'active',
+            proofRecheckNote: 'Proof audited: merges non-conflicting field-only $and branches into the enclosing filter document and drops idempotent duplicate field predicates while keeping conflicting multikey/range predicates in $and.',
+            mixedShapeCaseIds: {
+                default: 'mixed-shape-match-pushdown',
+                strictFieldOrder: 'mixed-shape-match-pushdown',
+                strictErrors: 'mixed-shape-match-pushdown'
+            },
+            strictModeBehavior: 'preserved'
+        }
+    ),
+    evidence(
         'simplify-conjunction-identities',
         'u4-filter-invalid-empty-and',
         'u9-generated-top-level-limit-advance',
@@ -190,17 +219,6 @@ export const filterProofManifest: readonly TransformationProofEvidence<FilterRul
                 strictErrors: 'mixed-shape-match-pushdown'
             },
             strictModeBehavior: 'preserved'
-        }
-    ),
-    evidence(
-        'merge-conjunctions',
-        'filter-logical-field-order-contained',
-        'u9-generated-top-level-adjacent-add-field-merging',
-        'u9-generated-nested-adjacent-add-field-merging',
-        'u4-pipeline-adjacent-multikey-matches',
-        {
-            status: 'inactive',
-            reason: 'Merging conjunctions into root object alters document field order and multikey duplicate path semantics; inactive pending field-order and multikey proof.'
         }
     ),
 ]);

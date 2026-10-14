@@ -16,22 +16,26 @@ export type PathEffect =
     | { readonly kind: 'removed'; readonly path: string }
     | { readonly kind: 'unknown' };
 
-function normalizePath(path: string): string | null
+function normalizePath( path: string ): string | null
 {
-    if (typeof path !== 'string')
+    if( typeof path !== 'string' )
     {
         return null;
     }
 
-    const normalized = path.startsWith('$') && !path.startsWith('$$')
-        ? path.slice(1)
+    const normalized = path.charCodeAt( 0 ) === 36 && path.charCodeAt( 1 ) !== 36
+        ? path.slice( 1 )
         : path;
 
-    if (
-        normalized.length === 0
+    const len = normalized.length;
+
+    if(
+        len === 0
         || normalized === UNKNOWN_PATH
-        || normalized.startsWith('$$')
-        || normalized.split('.').some((part) => part.length === 0)
+        || normalized.charCodeAt( 0 ) === 36
+        || normalized.charCodeAt( 0 ) === 46
+        || normalized.charCodeAt( len - 1 ) === 46
+        || normalized.includes( '..' )
     )
     {
         return null;
@@ -91,17 +95,25 @@ export function relatePaths(left: string, right: string): Exclude<PathRelation, 
         return 'exact';
     }
 
-    if (normalizedRight.startsWith(`${normalizedLeft}.`))
+    if(
+        normalizedRight.length > normalizedLeft.length
+        && normalizedRight.charCodeAt( normalizedLeft.length ) === 46
+        && normalizedRight.startsWith( normalizedLeft )
+    )
     {
-        return "ancestor";
+        return 'ancestor';
     }
 
-    if (normalizedLeft.startsWith(`${normalizedRight}.`))
+    if(
+        normalizedLeft.length > normalizedRight.length
+        && normalizedLeft.charCodeAt( normalizedRight.length ) === 46
+        && normalizedLeft.startsWith( normalizedRight )
+    )
     {
-        return "descendant";
+        return 'descendant';
     }
 
-    return "disjoint";
+    return 'disjoint';
 }
 
 export function relatePathEffects(
@@ -198,7 +210,7 @@ export function findPathCollisions(paths: Iterable<string>): PathCollision[]
 
 export function isExactPath( path: string ): boolean
 {
-    return relatePaths( path, path ) === 'exact';
+    return path !== WILDCARD_PATH && normalizePath( path ) !== null;
 }
 
 export function isExactTopLevelPath( path: string ): boolean

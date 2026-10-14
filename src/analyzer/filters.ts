@@ -11,7 +11,7 @@ import {
     joinDeterminism,
     joinErrors,
 } from './semantics';
-import { isPlainObject } from '../utils.js';
+import { isPlainObject, rewriteSafeBsonArrays } from '../utils.js';
 
 const LOGICAL_OPERATORS = new Set(['$and', '$or', '$nor']);
 
@@ -74,12 +74,63 @@ const REWRITE_SAFE_COMPARISON_OPERATORS = new Set([
     '$ne',
 ]);
 
-function isRewriteSafeBsonLiteral(
-    value: unknown,
-    ancestors = new WeakSet<object>(),
+function isRewriteSafeBsonArray(
+    arr         : readonly unknown[],
+    ancestors?  : WeakSet<object>
 ): boolean
 {
-    if (
+    if( rewriteSafeBsonArrays.has( arr )){ return true }
+
+    const len = arr.length;
+
+    if( len === 0 ){ return true }
+
+    const first = arr[ 0 ];
+    const exoticFirstCtor = (
+        first !== null
+        && typeof first === 'object'
+        && !Array.isArray( first )
+        && !isPlainObject( first )
+    )
+        ? ( first as { constructor: new ( ...args: any[] ) => unknown } ).constructor
+        : null;
+
+    for( let i = 0; i < len; i++ )
+    {
+        const item = arr[ i ];
+
+        if(
+            typeof item === 'string'
+            || typeof item === 'number'
+            || typeof item === 'boolean'
+            || item === null
+        )
+        {
+            continue;
+        }
+
+        if( exoticFirstCtor !== null && item instanceof exoticFirstCtor )
+        {
+            continue;
+        }
+
+        if( !isRewriteSafeBsonLiteral( item, ancestors ))
+        {
+            return false;
+        }
+    }
+
+    rewriteSafeBsonArrays.add( arr );
+
+    return true;
+}
+
+function isRewriteSafeBsonLiteral(
+    value       : unknown,
+    ancestors?  : WeakSet<object>
+): boolean
+{
+    if(
         value === undefined
         || typeof value === 'function'
         || typeof value === 'symbol'
@@ -89,32 +140,31 @@ function isRewriteSafeBsonLiteral(
         return false;
     }
 
-    if (value === null || typeof value !== 'object')
+    if( value === null || typeof value !== 'object' )
     {
         return true;
     }
 
-    if (
-        value instanceof Date
-        || value instanceof RegExp
-        || !isPlainObject(value) && !Array.isArray(value)
-    )
+    if( !isPlainObject( value ) && !Array.isArray( value ))
     {
         return true;
     }
 
-    if (ancestors.has(value))
+    const activeAncestors = ancestors ?? new WeakSet<object>();
+
+    if( activeAncestors.has( value ))
     {
         return false;
     }
 
-    ancestors.add(value);
-    const safe = Array.isArray(value)
-        ? value.every((item) => isRewriteSafeBsonLiteral(item, ancestors))
-        : Object.values(value).every(
-            (item) => isRewriteSafeBsonLiteral(item, ancestors),
+    activeAncestors.add( value );
+    const safe = Array.isArray( value )
+        ? isRewriteSafeBsonArray( value, activeAncestors )
+        : Object.values( value ).every(
+            ( item ) => isRewriteSafeBsonLiteral( item, activeAncestors )
         );
-    ancestors.delete(value);
+    activeAncestors.delete( value );
+
     return safe;
 }
 
@@ -146,19 +196,25 @@ function isRewriteSafeTypeOperand(value: unknown): boolean
 }
 
 function isRewriteSafeElementFilter(
-    value: Record<string, unknown>,
+    value: unknown
 ): boolean
 {
-    const entries = Object.entries(value);
-    const operatorEntries = entries.filter(([key]) => key.startsWith('$'));
-    if (operatorEntries.length === entries.length && entries.length > 0)
+    if( !isPlainObject( value ))
+    {
+        return false;
+    }
+
+    const entries = Object.entries( value );
+    const operatorEntries = entries.filter(( [ key ] ) => key.startsWith( '$' ));
+
+    if( operatorEntries.length === entries.length && entries.length > 0 )
     {
         return operatorEntries.every(
-            ([operator, operand]) => isRewriteSafeFieldOperator(operator, operand),
+            ( [ operator, operand ] ) => isRewriteSafeFieldOperator( operator, operand )
         );
     }
 
-    return isRewriteSafeFilterObject(value);
+    return isFilterRewriteSafe( value );
 }
 
 function isRewriteSafeFieldOperator(
@@ -174,7 +230,7 @@ function isRewriteSafeFieldOperator(
     if (operator === '$in' || operator === '$nin')
     {
         return Array.isArray(operand)
-            && operand.every((item) => isRewriteSafeBsonLiteral(item));
+            && isRewriteSafeBsonArray(operand);
     }
 
     if (operator === '$exists')
@@ -224,87 +280,108 @@ function isRewriteSafeFieldOperator(
             );
     }
 
-    if (operator === '$elemMatch')
+    if( operator === '$elemMatch' )
     {
-        return isRewriteSafeElementFilter(
-            operand as Record<string, unknown>,
-        );
+        return isRewriteSafeElementFilter( operand );
     }
 
-    if (operator === '$all')
+    if( operator === '$all' )
     {
-        return (operand as unknown[]).every((item) =>
+        return Array.isArray( operand ) && operand.every(( item ) =>
         {
-            if (
-                isPlainObject(item)
-                && Object.keys(item).length === 1
+            if(
+                isPlainObject( item )
+                && Object.keys( item ).length === 1
                 && '$elemMatch' in item
             )
             {
-                return isRewriteSafeElementFilter(
-                    item.$elemMatch as Record<string, unknown>,
-                );
+                return isRewriteSafeElementFilter( item.$elemMatch );
             }
 
-            return isRewriteSafeBsonLiteral(item);
+            return isRewriteSafeBsonLiteral( item );
         });
     }
 
     return false;
 }
 
-function isRewriteSafeFieldCondition(condition: unknown): boolean
-{
-    if (!isPlainObject(condition))
-    {
-        return isRewriteSafeBsonLiteral(condition);
-    }
+const rewriteSafeFieldConditionCache = new WeakMap<object, boolean>();
 
-    const entries = Object.entries(condition);
-    if (entries.length === 0)
+function isRewriteSafePlainFieldCondition(
+    condition: Record<string, unknown>
+): boolean
+{
+    const entries = Object.entries( condition );
+
+    if( entries.length === 0 )
     {
         return true;
     }
 
-    const operatorEntries = entries.filter(([key]) => key.startsWith('$'));
-    if (operatorEntries.length === 0)
+    const operatorEntries = entries.filter(( [ key ] ) => key.startsWith( '$' ));
+
+    if( operatorEntries.length === 0 )
     {
-        return isRewriteSafeBsonLiteral(condition);
+        return isRewriteSafeBsonLiteral( condition );
+    }
+
+    if( operatorEntries.length !== entries.length )
+    {
+        return false;
     }
 
     return operatorEntries.every(
-        ([operator, operand]) => isRewriteSafeFieldOperator(operator, operand),
+        ( [ operator, operand ] ) => isRewriteSafeFieldOperator( operator, operand )
     );
 }
 
+function isRewriteSafeFieldCondition( condition: unknown ): boolean
+{
+    if( !isPlainObject( condition ))
+    {
+        return isRewriteSafeBsonLiteral( condition );
+    }
+
+    const cached = rewriteSafeFieldConditionCache.get( condition );
+
+    if( cached !== undefined )
+    {
+        return cached;
+    }
+
+    const safe = isRewriteSafePlainFieldCondition( condition );
+    rewriteSafeFieldConditionCache.set( condition, safe );
+
+    return safe;
+}
+
 function isRewriteSafeFilterObject(
-    filter: Record<string, unknown>,
+    filter: Record<string, unknown>
 ): boolean
 {
-    for (const [key, value] of Object.entries(filter))
+    for( const key in filter )
     {
-        if (!key.startsWith('$'))
+        const value = filter[ key ];
+
+        if( !key.startsWith( '$' ))
         {
-            if (!isRewriteSafeFieldCondition(value))
+            if( !isRewriteSafeFieldCondition( value ))
             {
                 return false;
             }
+
             continue;
         }
 
-        if (key !== '$and' && key !== '$or')
+        if( key !== '$and' && key !== '$or' )
         {
             return false;
         }
 
-        if (
-            !Array.isArray(value)
+        if(
+            !Array.isArray( value )
             || value.length === 0
-            || value.some(
-                (branch) =>
-                    !isPlainObject(branch)
-                    || !isRewriteSafeFilterObject(branch),
-            )
+            || value.some(( branch ) => !isFilterRewriteSafe( branch ))
         )
         {
             return false;
@@ -478,30 +555,36 @@ function analyzeFieldCondition(
 }
 
 function analyzeLogical(
-    operand: unknown,
-    context: SemanticAnalysisContext,
-    elementRelative: boolean,
+    operand         : unknown,
+    context         : SemanticAnalysisContext,
+    elementRelative : boolean
 ): FilterSummary
 {
     const summary = emptyFilterSummary();
-    if (!Array.isArray(operand) || operand.length === 0)
+
+    if( !Array.isArray( operand ) || operand.length === 0 )
     {
-        markUnknown(summary, context, true);
+        markUnknown( summary, context, true );
+
         return summary;
     }
 
-    for (const branch of operand)
+    for( const branch of operand )
     {
-        if (!isPlainObject(branch))
+        if( !isPlainObject( branch ))
         {
-            markUnknown(summary, context, true);
+            markUnknown( summary, context, true );
             continue;
         }
+
         mergeFilterSummary(
             summary,
-            analyzeFilterObject(branch, context, elementRelative),
+            elementRelative
+                ? analyzeFilterObject( branch, context, true )
+                : analyzeFilter( branch, context )
         );
     }
+
     return summary;
 }
 
@@ -579,46 +662,86 @@ function analyzeFilterObject(
     return summary;
 }
 
+const defaultFilterSummaryCache = new WeakMap<object, FilterSummary>();
+const rewriteSafeFilterCache = new WeakMap<object, boolean>();
+
+function isDefaultFilterAnalysisContext(
+    context: SemanticAnalysisContext
+): boolean
+{
+    return (
+        context.documentScope === 'local'
+        && !context.variables?.size
+        && context.elementPath === undefined
+    );
+}
+
 export function analyzeFilter(
-    filter: unknown,
-    context: SemanticAnalysisContext = { documentScope: 'local' },
+    filter  : unknown,
+    context : SemanticAnalysisContext = { documentScope: 'local' }
 ): FilterSummary
 {
-    if (!isPlainObject(filter))
+    if( !isPlainObject( filter ))
     {
         const summary = emptyFilterSummary();
-        markUnknown(summary, context, true);
+        markUnknown( summary, context, true );
+
         return summary;
     }
 
-    return analyzeFilterObject(filter, context, false);
+    if( isDefaultFilterAnalysisContext( context ))
+    {
+        const cached = defaultFilterSummaryCache.get( filter );
+
+        if( cached !== undefined )
+        {
+            return cached;
+        }
+
+        const summary = analyzeFilterObject( filter, context, false );
+        defaultFilterSummaryCache.set( filter, summary );
+
+        return summary;
+    }
+
+    return analyzeFilterObject( filter, context, false );
 }
 
-export function isFilterRewriteSafe(
-    filter: unknown,
-    context: SemanticAnalysisContext = { documentScope: 'local' },
-): boolean
+export function isFilterRewriteSafe( filter: unknown ): boolean
 {
-    const summary = analyzeFilter(filter, context);
+    if( !isPlainObject( filter ))
+    {
+        return false;
+    }
 
-    return (
-        !summary.unknown
-        && !summary.malformed
-        && summary.determinism === 'deterministic'
-        && summary.errors === 'none-known'
-        && isPlainObject(filter)
-        && isRewriteSafeFilterObject(filter)
-    );
+    const cached = rewriteSafeFilterCache.get( filter );
+
+    if( cached !== undefined )
+    {
+        return cached;
+    }
+
+    const safe = isRewriteSafeFilterObject( filter );
+    rewriteSafeFilterCache.set( filter, safe );
+
+    return safe;
+}
+
+export function markFilterRewriteSafe( filter: Record<string, unknown> ): void
+{
+    rewriteSafeFilterCache.set( filter, true );
 }
 
 export function isFilterContradiction( filter: unknown ): boolean
 {
     if( !isPlainObject( filter )){ return false }
 
-    for( const [ key, value ] of Object.entries( filter ))
+    for( const key in filter )
     {
         if( !key.startsWith( '$' ))
         {
+            const value = ( filter as Record<string, unknown> )[ key ];
+
             if( isPlainObject( value ) && Array.isArray( value.$in ) && value.$in.length === 0 )
             {
                 return true;

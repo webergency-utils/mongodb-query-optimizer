@@ -1,11 +1,13 @@
 import { analyzeStage } from '../analyzer/semantics.js';
 import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
+import { isPlainObject } from '../utils.js';
 import { isStageProvenErrorFree } from './guarantee-guards.js';
 import { combineConjuncts, decomposeFilterIntoConjuncts, isMatchStage } from './helpers.js';
 import { containsGetField, isSafeMatchSummary, rewriteQueryDocument } from './movement-proofs.js';
 import
 {
     allocateShadowFieldName,
+    containsFunctionCall,
     findShadowTargetIndex,
     isExpressionCompletelyDeterministic,
     rangeHasCostlyStage,
@@ -137,6 +139,16 @@ export function proveHeuristicMatchPushdown(
         || context.strictFieldOrder
         || !isMatchStage( matchStage )
         || ( context.strictErrors && !isStageProvenErrorFree( matchStage ))
+    )
+    {
+        return null;
+    }
+
+    const precedingStages = pipeline.slice( 0, matchIndex );
+
+    if(
+        !precedingStages.some(( s ) => isPlainObject( s ) && ( '$addFields' in s || '$set' in s || '$project' in s ))
+        || !precedingStages.some(( s ) => isPlainObject( s ) && ( '$lookup' in s || '$graphLookup' in s || containsFunctionCall( s )))
     )
     {
         return null;

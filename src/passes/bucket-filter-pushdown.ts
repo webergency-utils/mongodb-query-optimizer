@@ -1,7 +1,7 @@
 import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
 import { PipelinePass } from './types.js';
 import { proveBucketFilterPushdown } from './bucket-pushdown-proofs.js';
-import { structuralFingerprint } from '../utils.js';
+import { isEqual } from '../utils.js';
 
 export class BucketFilterPushdownPass implements PipelinePass
 {
@@ -14,20 +14,19 @@ export class BucketFilterPushdownPass implements PipelinePass
 
         for( let i = 0; i < pipeline.length; i++ )
         {
-            const currentStage = pipeline[i];
+            const currentStage = pipeline[ i ];
 
             if( i + 1 < pipeline.length )
             {
-                const nextStage = pipeline[i + 1];
+                const nextStage = pipeline[ i + 1 ];
                 const proof = proveBucketFilterPushdown( currentStage, nextStage, context );
 
                 if( proof )
                 {
                     const alreadyPresent = (
                         result.length > 0
-                        && result[result.length - 1]?.$match !== undefined
-                        && structuralFingerprint( result[result.length - 1].$match )
-                            === structuralFingerprint( proof.prefilterStage.$match )
+                        && result[ result.length - 1 ]?.$match !== undefined
+                        && isEqual( result[ result.length - 1 ].$match, proof.prefilterStage.$match )
                     );
 
                     if( !alreadyPresent )

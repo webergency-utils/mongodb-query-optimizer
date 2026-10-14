@@ -15,19 +15,18 @@ export class RedundantLookupEliminationPass implements PipelinePass
 
     execute( pipeline: any[], context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {
-        const result = [ ...pipeline ];
-
-        for( let index = 0; index < result.length - 1; index++ )
+        for( let index = 0; index < pipeline.length - 1; index++ )
         {
-            if( !proveRedundantLookupEliminationAcrossSuffix( result[ index ], result.slice( index + 1 ), context ))
+            if( !proveRedundantLookupEliminationAcrossSuffix( pipeline[ index ], pipeline.slice( index + 1 ), context ))
             {
                 continue;
             }
 
+            const result = [ ...pipeline ];
             result.splice( index, 1 );
             return result;
         }
 
-        return result;
+        return pipeline;
     }
 }

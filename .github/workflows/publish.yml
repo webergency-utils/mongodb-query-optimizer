@@ -76,15 +76,46 @@ jobs:
           OUT="attestation.intoto.jsonl"
           ATTEST_URL="https://registry.npmjs.org/-/npm/v1/attestations/$(node -p "encodeURIComponent(require('./package.json').name)")@${VER}"
 
-          echo "Waiting for npm attestations at ${ATTEST_URL}..."
-          for i in $(seq 1 30); do
-            if curl -fsSL "${ATTEST_URL}" -o attestations.json; then
-              if jq -e '.attestations | length > 0' attestations.json >/dev/null; then
+          echo "Waiting 30s before first attempt for npm attestations at ${ATTEST_URL}..."
+          sleep 30
+
+          START_TIME=$(date +%s)
+          MAX_WAIT_SECONDS=$((15 * 60)) # 15 minutes
+          BACKOFF=10
+          MAX_BACKOFF=60
+          ATTEMPT=1
+
+          while true; do
+            echo "Checking for npm attestations (attempt ${ATTEMPT})..."
+            if curl -fsSL "${ATTEST_URL}" -o attestations.json 2>/dev/null; then
+              if jq -e '.attestations | length > 0' attestations.json >/dev/null 2>&1; then
+                echo "npm attestations found on attempt ${ATTEMPT}."
                 break
               fi
             fi
             rm -f attestations.json
-            sleep 10
+
+            ELAPSED=$(( $(date +%s) - START_TIME ))
+            if [ "${ELAPSED}" -ge "${MAX_WAIT_SECONDS}" ]; then
+              echo "Timed out after ${ELAPSED}s waiting for npm attestations (max ${MAX_WAIT_SECONDS}s)"
+              exit 1
+            fi
+
+            REMAINING=$(( MAX_WAIT_SECONDS - ELAPSED ))
+            SLEEP_TIME="${BACKOFF}"
+            if [ "${SLEEP_TIME}" -gt "${REMAINING}" ]; then
+              SLEEP_TIME="${REMAINING}"
+            fi
+
+            echo "Attestation not yet available. Retrying in ${SLEEP_TIME}s (elapsed: ${ELAPSED}s / ${MAX_WAIT_SECONDS}s)..."
+            sleep "${SLEEP_TIME}"
+
+            # Exponential backoff with factor 1.2 (rounded to nearest second)
+            BACKOFF=$(( (BACKOFF * 12 + 5) / 10 ))
+            if [ "${BACKOFF}" -gt "${MAX_BACKOFF}" ]; then
+              BACKOFF="${MAX_BACKOFF}"
+            fi
+            ATTEMPT=$(( ATTEMPT + 1 ))
           done
 
           if [ ! -f attestations.json ]; then

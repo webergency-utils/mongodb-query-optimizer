@@ -1,23 +1,53 @@
-import { isPlainObject } from '../utils.js';
+import { hasSingleKey, isPlainObject } from '../utils.js';
+
+const singleStageEntryCache = new WeakMap<object, readonly [ string, unknown ] | null>();
+const filterConjunctsCache = new WeakMap<object, Record<string, unknown>[]>();
 
 export function getSingleStageEntry( stage: unknown ): readonly [ string, unknown ] | null
 {
     if( !isPlainObject( stage )){ return null }
 
-    const keys = Object.keys( stage );
-    if( keys.length !== 1 ){ return null }
+    const cached = singleStageEntryCache.get( stage );
 
-    const key = keys[0]!;
+    if( cached !== undefined ){ return cached }
 
-    return [ key, ( stage as Record<string, unknown> )[ key ]] as const;
+    let singleKey: string | undefined;
+
+    for( const key in stage )
+    {
+        if( singleKey !== undefined )
+        {
+            singleStageEntryCache.set( stage, null );
+
+            return null;
+        }
+
+        singleKey = key;
+    }
+
+    if( singleKey === undefined )
+    {
+        singleStageEntryCache.set( stage, null );
+
+        return null;
+    }
+
+    const entry = [ singleKey, ( stage as Record<string, unknown> )[ singleKey ] ] as const;
+    singleStageEntryCache.set( stage, entry );
+
+    return entry;
 }
 
 export function getStageSpec<T = Record<string, unknown>>( stage: unknown, op: string ): T | null
 {
-    const entry = getSingleStageEntry( stage );
-    if( !entry || entry[0] !== op || !isPlainObject( entry[1] )){ return null }
+    if( !isPlainObject( stage ) || !( op in stage ) || !hasSingleKey( stage ))
+    {
+        return null;
+    }
 
-    return entry[1] as T;
+    const spec = ( stage as Record<string, unknown> )[ op ];
+
+    return isPlainObject( spec ) ? ( spec as T ) : null;
 }
 
 export function isMatchStage( stage: unknown ): stage is { readonly $match: Record<string, unknown> }
@@ -27,21 +57,32 @@ export function isMatchStage( stage: unknown ): stage is { readonly $match: Reco
 
 export function isSingleKeyStage( stage: unknown, op: string ): boolean
 {
-    const entry = getSingleStageEntry( stage );
-
-    return entry !== null && entry[0] === op;
+    return isPlainObject( stage ) && ( op in stage ) && hasSingleKey( stage );
 }
 
 export function decomposeFilterIntoConjuncts( filter: Record<string, unknown> ): Record<string, unknown>[]
 {
-    const entries = Object.entries( filter );
+    const cached = filterConjunctsCache.get( filter );
 
-    if( entries.length === 0 ){ return [] }
+    if( cached !== undefined )
+    {
+        return [ ...cached ];
+    }
+
+    if( !( '$and' in filter ) && hasSingleKey( filter ))
+    {
+        const single = [ filter ];
+        filterConjunctsCache.set( filter, single );
+
+        return [ filter ];
+    }
 
     const conjuncts: Record<string, unknown>[] = [];
 
-    for( const [ key, value ] of entries )
+    for( const key in filter )
     {
+        const value = filter[ key ];
+
         if( key === '$and' && Array.isArray( value ))
         {
             for( const branch of value )
@@ -71,14 +112,16 @@ export function decomposeFilterIntoConjuncts( filter: Record<string, unknown> ):
         }
     }
 
-    return conjuncts;
+    filterConjunctsCache.set( filter, conjuncts );
+
+    return [ ...conjuncts ];
 }
 
 export function combineConjuncts( conjuncts: readonly Record<string, unknown>[] ): Record<string, unknown>
 {
     if( conjuncts.length === 0 ){ return {} }
 
-    if( conjuncts.length === 1 ){ return conjuncts[ 0 ] }
+    if( conjuncts.length === 1 ){ return { ...conjuncts[ 0 ] } }
 
     const merged: Record<string, unknown> = {};
     const seenKeys = new Set<string>();
@@ -86,7 +129,7 @@ export function combineConjuncts( conjuncts: readonly Record<string, unknown>[] 
 
     for( const conjunct of conjuncts )
     {
-        for( const key of Object.keys( conjunct ))
+        for( const key in conjunct )
         {
             if( seenKeys.has( key ))
             {

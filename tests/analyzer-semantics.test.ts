@@ -22,8 +22,8 @@ import {
     joinProvenance,
 } from '../src/analyzer/semantics.js';
 import { analyzeExpression } from '../src/analyzer/expressions.js';
-import { analyzeFilter } from '../src/analyzer/filters.js';
-import { getStageInfo } from '../src/index.js';
+import { analyzeFilter, isFilterRewriteSafe } from '../src/analyzer/filters.js';
+import { getStageInfo, optimizeFilter } from '../src/index.js';
 
 describe('analyzer path algebra', () =>
 {
@@ -396,6 +396,130 @@ describe('filter semantics', () =>
         expect(summary.dependencies.local.has('items.price')).toBe(false);
         expect(summary.malformed).toBe(false);
         expect(summary.unknown).toBe(false);
+    });
+
+    it('memoizes default-context analyzeFilter and isFilterRewriteSafe results while bypassing non-default contexts', () =>
+    {
+        const filter =
+        {
+            $expr   : { $eq: [ '$a', '$$var.b' ] },
+            c       : { $gt: 1 }
+        };
+        const firstDefault = analyzeFilter( filter );
+        const secondDefault = analyzeFilter( filter );
+        const withProvenanceAndActivePipelines = analyzeFilter( filter, {
+            documentScope   : 'local',
+            variables       : new Map(),
+            inputProvenance : 'local',
+            activePipelines : new WeakSet()
+        });
+
+        expect( secondDefault ).toBe( firstDefault );
+        expect( withProvenanceAndActivePipelines ).toBe( firstDefault );
+
+        const foreignSummary = analyzeFilter( filter, {
+            documentScope: 'foreign'
+        });
+
+        expect( foreignSummary ).not.toBe( firstDefault );
+        expect( foreignSummary.dependencies.foreign ).toEqual( new Set([ 'a', '*', 'c' ]));
+        expect( foreignSummary.dependencies.local ).toEqual( new Set() );
+
+        const boundSummary = analyzeFilter( filter, {
+            documentScope   : 'local',
+            variables       : new Map([[ 'var', { scope: 'local', path: 'resolved' } ]])
+        });
+
+        expect( boundSummary ).not.toBe( firstDefault );
+        expect( boundSummary.dependencies.local ).toEqual( new Set([ 'a', 'resolved.b', 'c' ]));
+
+        const elementPathSummary = analyzeFilter( filter, {
+            documentScope   : 'local',
+            elementPath     : 'items'
+        });
+
+        expect( elementPathSummary ).not.toBe( firstDefault );
+
+        const sharedBranch = { nested: { $gte: 2 } };
+        const elemMatchWithLogical =
+        {
+            items:
+            {
+                $elemMatch:
+                {
+                    $or: [ sharedBranch ]
+                }
+            }
+        };
+        const elemMatchSummary = analyzeFilter( elemMatchWithLogical );
+        const topLevelLogicalSummary = analyzeFilter({ $and: [ sharedBranch ] });
+        const directBranchSummary = analyzeFilter( sharedBranch );
+
+        expect( elemMatchSummary.dependencies.element ).toEqual( new Set([ 'nested' ]));
+        expect( topLevelLogicalSummary.dependencies.local ).toEqual( new Set([ 'nested' ]));
+        expect( directBranchSummary.dependencies.local ).toEqual( new Set([ 'nested' ]));
+        expect( analyzeFilter( sharedBranch )).toBe( directBranchSummary );
+
+        const sharedSafeCondition = { $in: [ 1, 2, 3 ] };
+        const sharedUnsafeCondition = { $in: [ undefined ] };
+        const sharedElemMatchFilter = { qty: { $gt: 0 } };
+        const safeFilter =
+        {
+            a           : sharedSafeCondition,
+            items       : { $elemMatch: sharedElemMatchFilter },
+            $and        : [ sharedBranch ],
+            createdAt   : new Date( 'invalid' )
+        };
+        const siblingSafeWrapper =
+        {
+            a       : sharedSafeCondition,
+            items   : { $elemMatch: sharedElemMatchFilter },
+            $or     : [ sharedBranch ],
+            other   : 1
+        };
+
+        expect( isFilterRewriteSafe( safeFilter )).toBe( true );
+        expect( isFilterRewriteSafe( safeFilter )).toBe( true );
+        expect( isFilterRewriteSafe( siblingSafeWrapper )).toBe( true );
+        expect( isFilterRewriteSafe( sharedElemMatchFilter )).toBe( true );
+        expect( isFilterRewriteSafe( sharedBranch )).toBe( true );
+        expect( isFilterRewriteSafe({ a: sharedUnsafeCondition })).toBe( false );
+        expect( isFilterRewriteSafe({ b: sharedUnsafeCondition })).toBe( false );
+        expect( isFilterRewriteSafe( filter )).toBe( false );
+        expect( isFilterRewriteSafe( filter )).toBe( false );
+    });
+
+    it('enforces standalone rewrite-safety for Date literals, malformed operators, and oversized $or arrays (AE3)', () =>
+    {
+        expect( isFilterRewriteSafe({ a: new Date( 0 ) })).toBe( true );
+        expect( isFilterRewriteSafe({ a: new Date( 'invalid' ) })).toBe( true );
+        expect( isFilterRewriteSafe({ a: undefined })).toBe( false );
+        expect( isFilterRewriteSafe( null )).toBe( false );
+        expect( isFilterRewriteSafe([ 1 ])).toBe( false );
+        expect( isFilterRewriteSafe({ a: { $gt: 1, plain: 2 } })).toBe( false );
+        expect( isFilterRewriteSafe({ a: { $all: 1 } })).toBe( false );
+        expect( isFilterRewriteSafe({ a: { $elemMatch: [ 1 ] } })).toBe( false );
+        expect( analyzeFilter({ $dynamicPredicate: '$score' }).unknown ).toBe( true );
+
+        const cyclic: Record<string, unknown> = {};
+        cyclic.self = cyclic;
+
+        expect( isFilterRewriteSafe({ a: cyclic })).toBe( false );
+
+        const branches = Array.from(
+            { length: 100 },
+            ( _, index ) => index === 75
+                ? { $where: 'this.a > 1' }
+                : { branch: index }
+        );
+        const oversizedUnsafeFilter =
+        {
+            $or : branches,
+            a   : { $in: [ 1, 1 ] }
+        };
+
+        expect( isFilterRewriteSafe( oversizedUnsafeFilter )).toBe( false );
+        expect( optimizeFilter( oversizedUnsafeFilter )).toEqual( oversizedUnsafeFilter );
     });
 });
 
@@ -1016,5 +1140,13 @@ describe('public stage adapter', () =>
             },
         }, 25);
         expect(unionWithInfo.altersCount).toBe(true);
+
+        const reusableStage = { $match: { cachedField: 1 } };
+        const firstNonZero = analyzeStage(reusableStage, 2);
+        const secondNonZero = analyzeStage(reusableStage, 3);
+        const zeroIndexHit = analyzeStage(reusableStage, 0);
+        expect(firstNonZero.index).toBe(2);
+        expect(secondNonZero.index).toBe(3);
+        expect(zeroIndexHit.index).toBe(0);
     });
 });

@@ -6,8 +6,10 @@ import {
 import { describe, expect, it } from 'vitest';
 import {
     optimizeFilterWithCandidateProfile,
+    optimizeFilterWithContext,
     optimizeFilterWithRulesForTesting,
 } from '../src/filter-optimizer.js';
+import { resolveFilterGuarantees } from '../src/guarantees.js';
 import type { FilterRule } from '../src/filter-rule-registry.js';
 import { isFilterContradiction } from '../src/analyzer/filters.js';
 import {
@@ -115,7 +117,7 @@ describe('production filter optimizer', () =>
         expect(optimizeFilter(input)).toEqual({
             tags: { $in: [1, 2] },
             pattern: { $eq: regex },
-            _id: { $eq: objectId },
+            _id: objectId,
             payload: { $eq: { $gt: 1 } },
             $and: [
                 { tags: { $in: [2, 3] } },
@@ -148,7 +150,7 @@ describe('production filter optimizer', () =>
         expect(input.$and).toBe(originalConditions);
         expect(optimized).not.toBe(input);
         expect(optimized.pattern.$eq).toBe(regex);
-        expect(optimized._id.$eq).toBe(objectId);
+        expect(optimized._id).toBe(objectId);
     });
 
     it('keeps unsupported and dynamic filters unchanged', () =>
@@ -168,6 +170,19 @@ describe('production filter optimizer', () =>
 
         expect(optimizeFilter(unsupported)).toEqual(unsupported);
         expect(optimizeFilter(dynamic)).toEqual(dynamic);
+
+        const oversizedUnsafeOr =
+        {
+            $or: Array.from(
+                { length: 100 },
+                ( _, index ) => index === 75
+                    ? { $where: 'this.a > 1' }
+                    : { branch: index }
+            ),
+            a: { $in: [ 1, 1 ] }
+        };
+
+        expect( optimizeFilter( oversizedUnsafeOr )).toEqual( oversizedUnsafeOr );
     });
 });
 
@@ -257,7 +272,7 @@ describe('direct filter fixed-point safety', () =>
 
 describe('atomic filter candidates', () =>
 {
-    it('simplifies only finite primitive equality forms', () =>
+    it('simplifies only finite primitive, valid Date, and ObjectId equality forms', () =>
     {
         const objectId = new ObjectId('000000000000000000000001');
         const filter = {
@@ -279,13 +294,13 @@ describe('atomic filter candidates', () =>
             enabled: true,
             regex: { $eq: /active/i },
             embeddedOperator: { $eq: { $gt: 1 } },
-            objectId: { $eq: objectId },
+            objectId,
             nullValue: { $eq: null },
             nonFinite: { $eq: Number.POSITIVE_INFINITY },
         });
     });
 
-    it('simplifies singleton $in only for finite primitive values', () =>
+    it('simplifies singleton $in only for finite primitive, valid Date, and ObjectId values', () =>
     {
         const objectId = new ObjectId('000000000000000000000001');
         const filter = {
@@ -307,7 +322,7 @@ describe('atomic filter candidates', () =>
             enabled: true,
             regex: { $in: [/active/i] },
             embeddedOperator: { $in: [{ $gt: 1 }] },
-            objectId: { $in: [objectId] },
+            objectId,
             nullValue: { $in: [null] },
             nonFinite: { $in: [Number.NaN] },
         });
@@ -752,9 +767,8 @@ describe('filter-bearing pipelines', () =>
             { $match: { active: true } },
         ]);
         expect(optimized).not.toBe(pipeline);
-        expect(optimized[0].$match.pattern.$eq).not.toBe(regex);
-        expect(optimized[0].$match.pattern.$eq).toEqual(regex);
-        expect(optimized[0].$match._id.$eq).toBe(objectId);
+        expect(optimized[0].$match.pattern.$eq).toBe(regex);
+        expect(optimized[0].$match._id).toBe(objectId);
     });
 
     it('keeps invalid filter-bearing stages structurally unchanged', () =>
@@ -913,9 +927,9 @@ describe('filter-bearing pipelines', () =>
             createdAt: { $in: [] },
         });
 
-        // Collapses equal inclusive Date bounds to $eq
+        // Collapses equal inclusive Date bounds to direct Date equality
         expect(optimizeFilter({ createdAt: { $gte: d2, $lte: new Date(d2.getTime()) } })).toEqual({
-            createdAt: { $eq: d2 },
+            createdAt: d2,
         });
 
         // Invalid Date is left untouched
@@ -1115,7 +1129,7 @@ describe('filter-bearing pipelines', () =>
     });
 });
 
-describe( 'production safe filter profile (5 active rules)', () =>
+describe( 'production safe filter profile (8 active rules)', () =>
 {
     it( 'deduplicates identical scalar and multikey range branches', () =>
     {
@@ -1128,7 +1142,7 @@ describe( 'production safe filter profile (5 active rules)', () =>
         } ) ).toEqual( { tags: { $gt: 5 } } );
     } );
 
-    it( 'flattens nested associative logical arrays', () =>
+    it( 'flattens nested associative logical arrays and merges non-conflicting conjunctions', () =>
     {
         expect( productionOptimizeFilter( {
             $and: [
@@ -1136,7 +1150,9 @@ describe( 'production safe filter profile (5 active rules)', () =>
                 { c: 3 }
             ]
         } ) ).toEqual( {
-            $and: [ { a: 1 }, { b: 2 }, { c: 3 } ]
+            a: 1,
+            b: 2,
+            c: 3
         } );
 
         expect( productionOptimizeFilter( {
@@ -1188,8 +1204,8 @@ describe( 'production safe filter profile (5 active rules)', () =>
                 { tags: { $lt: 10 } }
             ]
         } ) ).toEqual( {
+            tags: { $gt: 5 },
             $and: [
-                { tags: { $gt: 5 } },
                 { tags: { $lt: 10 } }
             ]
         } );
@@ -1252,5 +1268,343 @@ describe( 'production safe filter profile (5 active rules)', () =>
             ]
         }) ).toEqual({ a: 1 });
     } );
+
+    it( 'AE2: collapses duplicate ObjectId while retaining key-order-distinct subdocuments in order', () =>
+    {
+        const oid1 = new ObjectId( '65b9f1a0e4b0a1b2c3d4e5f6' );
+        const oid2 = new ObjectId( '65b9f1a0e4b0a1b2c3d4e5f6' );
+        const sub1 = { a: 1, b: 2 };
+        const sub2 = { b: 2, a: 1 };
+        const input = {
+            tags: { $in: [ oid1, oid2, sub1, sub2 ] }
+        };
+
+        const optimized = optimizeFilter( input );
+
+        expect( optimized ).toEqual({
+            tags: { $in: [ oid1, sub1, sub2 ] }
+        });
+        expect( optimized.tags.$in[ 0 ] ).toBe( oid1 );
+        expect( optimized.tags.$in[ 1 ] ).toBe( sub1 );
+        expect( optimized.tags.$in[ 2 ] ).toBe( sub2 );
+    } );
+
+    it( 'enforces 64 vs 65 element cap on logical AST branches while supporting unconstrained linear value arrays', () =>
+    {
+        const in64 = [ ...Array.from({ length: 63 }, ( _, i ) => i ), 0 ];
+        const in65 = [ ...Array.from({ length: 64 }, ( _, i ) => i ), 0 ];
+
+        expect( optimizeFilter({ a: { $in: in64 } }).a.$in ).toHaveLength( 63 );
+
+        const resIn65 = optimizeFilter({ a: { $in: in65 }, b: { $eq: 1 } });
+        expect( resIn65.a.$in ).toHaveLength( 64 );
+        expect( resIn65.b ).toBe( 1 );
+
+        expect( optimizeFilter({ a: { $nin: in64 } }).a.$nin ).toHaveLength( 63 );
+        const resNin65 = optimizeFilter({ a: { $nin: in65 }, b: { $eq: 1 } });
+        expect( resNin65.a.$nin ).toHaveLength( 64 );
+        expect( resNin65.b ).toBe( 1 );
+
+        expect( optimizeFilter({ a: { $all: in64 } }).a.$all ).toHaveLength( 63 );
+        const resAll65 = optimizeFilter({ a: { $all: in65 }, b: { $eq: 1 } });
+        expect( resAll65.a.$all ).toHaveLength( 64 );
+        expect( resAll65.b ).toBe( 1 );
+
+        // Cross-filtering and range pruning supported on large value arrays
+        const crossIn65 = optimizeFilter({ a: { $in: in65, $ne: 0, $gt: 10 } });
+        expect( crossIn65.a.$in.every(( x: number ) => x > 10 && x !== 0 )).toBe( true );
+
+        const crossNin65 = optimizeFilter({ a: { $in: [ 0, 1 ], $nin: in65 } });
+        expect( crossNin65.a.$in ).toEqual([]);
+
+        const crossEqNin65 = optimizeFilter({ a: { $eq: 0, $nin: in65 } });
+        expect( crossEqNin65.a.$in ).toEqual([]);
+
+        const crossAll65 = optimizeFilter({ a: { $all: in65, $ne: 0 } });
+        expect( crossAll65.a.$in ).toEqual([]);
+
+        // $and 64 vs 65 (with root 'a' occupied so conflicting branches remain in $and)
+        const and64 = [ ...Array.from({ length: 63 }, ( _, i ) => ({ a: { $gt: i + 1 } })), { a: { $gt: 1 } } ];
+        const and65 = [ ...Array.from({ length: 64 }, ( _, i ) => ({ a: { $gt: i + 1 } })), { a: { $gt: 1 } } ];
+
+        expect( productionOptimizeFilter({ a: { $gt: 0 }, $and: and64 }).$and ).toHaveLength( 63 );
+        const resAnd65 = productionOptimizeFilter({ a: { $gt: 0 }, $and: and65, tenant: 'acme' });
+        expect( resAnd65.$and ).toBe( and65 );
+        expect( resAnd65.tenant ).toBe( 'acme' );
+
+        // $or 64 vs 65
+        const or64 = [ ...Array.from({ length: 63 }, ( _, i ) => ({ a: i })), { a: 0 } ];
+        const or65 = [ ...Array.from({ length: 64 }, ( _, i ) => ({ a: i })), { a: 0 } ];
+
+        expect( optimizeFilter({ $or: or64 }) ).toEqual({
+            a: { $in: Array.from({ length: 63 }, ( _, i ) => i ) }
+        });
+        const resOr65 = optimizeFilter({ $or: or65, b: { $eq: 2 } });
+        expect( resOr65.$or ).toBe( or65 );
+        expect( resOr65.b ).toBe( 2 );
+
+        // $or with > 64 branches still collapses empty-object tautology and prunes contradictions
+        const or65WithEmpty = [ ...Array.from({ length: 64 }, ( _, i ) => ({ a: i })), {} ];
+        expect( optimizeFilter({ $or: or65WithEmpty, b: { $eq: 2 } }) ).toEqual({ b: 2 });
+
+        // $or-to-$in branch cap (> 64 elements in a branch $in) and accumulator cap (> 64 combined unique values)
+        const resOrBranchIn65 = optimizeFilter({ $or: [ { a: { $in: in65 } }, { a: 99 } ] });
+        expect( resOrBranchIn65 ).toEqual({ $or: [ { a: { $in: optimizeFilter({ a: { $in: in65 } }).a.$in } }, { a: 99 } ] });
+
+        const in40First = Array.from({ length: 40 }, ( _, i ) => i );
+        const in40Second = Array.from({ length: 40 }, ( _, i ) => i + 40 );
+        const resOrCombined80 = optimizeFilter({
+            $or: [ { a: { $in: in40First } }, { a: { $in: in40Second } } ]
+        });
+        expect( resOrCombined80 ).toEqual({
+            $or: [ { a: { $in: in40First } }, { a: { $in: in40Second } } ]
+        });
+
+        // $nor 64 vs 65
+        const nor64 = [ ...Array.from({ length: 63 }, ( _, i ) => ({ a: i })), { a: 0 } ];
+        const nor65 = [ ...Array.from({ length: 64 }, ( _, i ) => ({ a: i })), { a: 0 } ];
+
+        expect( optimizeFilter({ $nor: nor64 }).$nor ).toHaveLength( 63 );
+        const resNor65 = optimizeFilter({ $nor: nor65, b: { $eq: 2 } });
+        expect( resNor65.$nor ).toBe( nor65 );
+        expect( resNor65.b ).toBe( 2 );
+    } );
+
+    it( 'sweeps $elemMatch children inside $all arrays and preserves copy-on-write references', () =>
+    {
+        const firstElem = { $elemMatch: { a: 1 } };
+        const secondElem = { $elemMatch: { b: { $eq: 2 } } };
+        const input = {
+            items: { $all: [ firstElem, secondElem ] }
+        };
+
+        const optimized = optimizeFilter( input );
+
+        expect( optimized ).toEqual({
+            items: { $all: [ { $elemMatch: { a: 1 } }, { $elemMatch: { b: 2 } } ] }
+        });
+        expect( optimized.items.$all[ 0 ] ).toBe( firstElem );
+        expect( optimized.items.$all[ 1 ] ).toEqual({ $elemMatch: { b: 2 } });
+
+        const optimalAll = [ { $elemMatch: { a: 1 } }, { $elemMatch: { b: 2 } } ];
+        const optimalInput = { items: { $all: optimalAll } };
+        const optimalResult = optimizeFilter( optimalInput );
+
+        expect( optimalResult.items ).toBe( optimalInput.items );
+        expect( optimalResult.items.$all ).toBe( optimalAll );
+    } );
+
+    it( 'preserves copy-on-write reference identity on already-optimal filters', () =>
+    {
+        const oid = new ObjectId( '65b9f1a0e4b0a1b2c3d4e5f6' );
+        const date = new Date( '2026-01-01T00:00:00.000Z' );
+        const regex = /^active/i;
+        const meta = { region: 'eu', tier: 2 };
+        const inArr = [ 'open', 'pending' ];
+        const notCond = { $gt: 100 };
+        const elemMatchCond = { score: { $gt: 5 } };
+        const tagsRoot = { $gt: 1 };
+        const andBranches = [ { tags: { $lt: 10 } }, { tags: { $ne: 5 } } ];
+        const orBranches = [ { x: 1 }, { y: 2 } ];
+
+        const input = {
+            _id: oid,
+            createdAt: date,
+            pattern: regex,
+            meta,
+            status: { $in: inArr },
+            amount: { $not: notCond },
+            items: { $elemMatch: elemMatchCond },
+            tags: tagsRoot,
+            $and: andBranches,
+            $or: orBranches
+        };
+
+        const optimized = productionOptimizeFilter( input );
+
+        expect( optimized ).not.toBe( input );
+        expect( optimized ).toEqual( input );
+        expect( optimized._id ).toBe( oid );
+        expect( optimized.createdAt ).toBe( date );
+        expect( optimized.pattern ).toBe( regex );
+        expect( optimized.meta ).toBe( meta );
+        expect( optimized.status ).toBe( input.status );
+        expect( optimized.status.$in ).toBe( inArr );
+        expect( optimized.amount ).toBe( input.amount );
+        expect( optimized.amount.$not ).toBe( notCond );
+        expect( optimized.items ).toBe( input.items );
+        expect( optimized.items.$elemMatch ).toBe( elemMatchCond );
+        expect( optimized.tags ).toBe( tagsRoot );
+        expect( optimized.$and ).toBe( andBranches );
+        expect( optimized.$or ).toBe( orBranches );
+
+        const contextResult = optimizeFilterWithContext( input, resolveFilterGuarantees() );
+        expect( contextResult ).toBe( input );
+    } );
+
+    it( 'deduplicates identical fields across $and branches, absorbs multi-key $or branches, and prunes $elemMatch-subsumed dotted fields', () =>
+    {
+        const oid = new ObjectId( '65b9f1a0e4b0a1b2c3d4e5f6' );
+
+        // Partial conjunction merge: deduplicates 'deleted' while preserving conflicting 'score' range
+        expect( optimizeFilter({
+            $and: [
+                { score: { $gt: 1 }, deleted: { $ne: true } },
+                { score: { $lt: 10 }, deleted: { $ne: true } }
+            ]
+        }) ).toEqual({
+            score: { $gt: 1 },
+            deleted: { $ne: true },
+            $and: [
+                { score: { $lt: 10 } }
+            ]
+        });
+
+        // Multi-key $or branch absorbed by enclosing conjunction
+        expect( optimizeFilter({
+            a: 'HIRED',
+            b: { $gte: 10 },
+            $or: [
+                { a: 'HIRED', b: { $gte: 10 } },
+                { c: 'fallback' }
+            ]
+        }) ).toEqual({
+            a: 'HIRED',
+            b: { $gte: 10 }
+        });
+
+        // $elemMatch subsumption of redundant top-level dotted equality (both uncloned and cloned)
+        expect( optimizeFilter({
+            members: {
+                $elemMatch: {
+                    accountID: oid,
+                    active: true,
+                    $or: [ { role: 'admin' }, { role: 'owner' } ]
+                }
+            },
+            'members.accountID': oid,
+            'members.other': 'keep'
+        }) ).toEqual({
+            members: {
+                $elemMatch: {
+                    accountID: oid,
+                    active: true,
+                    $or: [ { role: 'admin' }, { role: 'owner' } ]
+                }
+            },
+            'members.other': 'keep'
+        });
+
+        expect( optimizeFilter({
+            $and: [
+                {
+                    members: {
+                        $elemMatch: {
+                            accountID: { $eq: oid },
+                            active: { $eq: true }
+                        }
+                    },
+                    deleted: { $ne: true }
+                },
+                {
+                    'members.accountID': { $eq: oid },
+                    deleted: { $ne: true }
+                }
+            ]
+        }) ).toEqual({
+            members: {
+                $elemMatch: {
+                    accountID: oid,
+                    active: true
+                }
+            },
+            deleted: { $ne: true }
+        });
+    } );
+
+    it( 'hoists non-conflicting field predicates from $and branches that also contain $or and unwraps remaining $or', () =>
+    {
+        const oid = new ObjectId( 'a7c0b7c058eff18075755c1b' );
+
+        // Simulates Query #11 / #17 / #52 pattern
+        expect( optimizeFilter({
+            type: 'job-document',
+            $and: [
+                {
+                    deleted: { $ne: true },
+                    active: { $ne: false },
+                    $or: [
+                        { 'briefingID': { $exists: false } },
+                        { 'briefingID': null }
+                    ]
+                },
+                {
+                    'relations.jobIDs': oid
+                }
+            ]
+        }) ).toEqual({
+            type: 'job-document',
+            'relations.jobIDs': oid,
+            deleted: { $ne: true },
+            active: { $ne: false },
+            $or: [
+                { 'briefingID': { $exists: false } },
+                { 'briefingID': null }
+            ]
+        });
+
+        // Simulates Query #54 nested conjunction unwrapping
+        expect( optimizeFilter({
+            deleted: { $ne: true },
+            $and: [
+                {
+                    deleted: { $ne: true },
+                    $and: [
+                        {
+                            status: 'open',
+                            $and: [
+                                {
+                                    deleted: { $ne: true },
+                                    $or: [
+                                        { 'app.status': 'submitted' },
+                                        { 'app.status': 'interviewing' }
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }) ).toEqual({
+            deleted: { $ne: true },
+            status: 'open',
+            'app.status': {
+                $in: [ 'submitted', 'interviewing' ]
+            }
+        });
+    } );
+
+    it( 'canonicalizes singleton $in and explicit $eq for BSON ObjectId and Date instances', () =>
+    {
+        const oid = new ObjectId( '40946bd76a4a1e4489a6a406' );
+        const date = new Date( '2026-10-14T12:00:00.000Z' );
+
+        expect( optimizeFilter({
+            'account.id': { $eq: oid },
+            'created.at': { $eq: date }
+        }) ).toEqual({
+            'account.id': oid,
+            'created.at': date
+        });
+
+        expect( optimizeFilter({
+            'account.id': { $in: [ oid ] },
+            'created.at': { $in: [ date ] }
+        }) ).toEqual({
+            'account.id': oid,
+            'created.at': date
+        });
+    } );
 } );
+
 

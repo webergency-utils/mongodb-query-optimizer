@@ -11,7 +11,7 @@ import {
 import {
     getPipelineTransformationRegistryStatus,
 } from '../src/passes/registry.js';
-import { structuralFingerprint } from '../src/utils.js';
+import { isEqual } from '../src/utils.js';
 import {
     GENERATED_INTERACTION_CASE_COUNT,
     GENERATED_INTERACTION_SEED,
@@ -72,10 +72,8 @@ describe('deterministic generated active-rule interactions', () =>
         expect(first).toHaveLength(GENERATED_INTERACTION_CASE_COUNT);
         expect(generatedInteractionSemanticCases).toEqual(first);
         expect(new Set(first.map((testCase) => testCase.id)).size).toBe(first.length);
-        expect(structuralFingerprint(first)).toBe(structuralFingerprint(second));
-        expect(structuralFingerprint(first)).not.toBe(
-            structuralFingerprint(alternate),
-        );
+        expect( isEqual( first, second )).toBe( true );
+        expect( isEqual( first, alternate )).toBe( false );
     });
 
     it('covers every active filter and pipeline ID at top level and nested', () =>
@@ -133,9 +131,7 @@ describe('deterministic generated active-rule interactions', () =>
                 const twice = optimizeFilter(once);
 
                 expect(testCase.filter).toEqual(snapshot);
-                expect(structuralFingerprint(once)).not.toBe(
-                    structuralFingerprint(testCase.filter),
-                );
+                expect( isEqual( once, testCase.filter )).toBe( false );
                 expect(twice).toEqual(once);
                 continue;
             }
@@ -145,9 +141,7 @@ describe('deterministic generated active-rule interactions', () =>
             const twice = optimizePipeline(once);
 
             expect(testCase.pipeline).toEqual(snapshot);
-            expect(structuralFingerprint(once)).not.toBe(
-                structuralFingerprint(testCase.pipeline),
-            );
+            expect( isEqual( once, testCase.pipeline )).toBe( false );
             expect(twice).toEqual(once);
             expectStrictStageShapes(testCase.pipeline);
             expectStrictStageShapes(once);

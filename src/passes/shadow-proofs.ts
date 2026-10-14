@@ -505,11 +505,11 @@ export function validateShadowRange(
 
 const COSTLY_STAGE_OPERATORS = new Set([ '$lookup', '$graphLookup' ]);
 
-function containsFunctionCall( value: unknown ): boolean
+export function containsFunctionCall( value: unknown, inExpr: boolean = false ): boolean
 {
     if( Array.isArray( value ))
     {
-        return value.some( containsFunctionCall );
+        return value.some(( item ) => containsFunctionCall( item, inExpr ));
     }
 
     if( !isPlainObject( value ))
@@ -517,7 +517,19 @@ function containsFunctionCall( value: unknown ): boolean
         return false;
     }
 
-    return Object.entries( value ).some(( [ key, nested ] ) => key === '$function' || containsFunctionCall( nested ));
+    for( const [ key, nested ] of Object.entries( value ))
+    {
+        if( key === '$function' ){ return true }
+
+        if( key === '$literal' || ( !inExpr && ( key === '$in' || key === '$nin' ))){ continue }
+
+        if( containsFunctionCall( nested, inExpr || key === '$expr' ))
+        {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 /**

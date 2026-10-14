@@ -18,31 +18,36 @@ export class SortProjectCommutePass implements PipelinePass
 
     execute( pipeline: any[], _context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {
-        let changed = false;
-        const result = [ ...pipeline ];
+        let result: any[] | null = null;
+        let current = pipeline;
 
-        for( let index = 1; index < result.length; index++ )
+        for( let index = 1; index < current.length; index++ )
         {
             let currentIndex = index;
 
             while( currentIndex > 0 )
             {
                 if( !proveSimpleProjectAdvanceAcrossSort(
-                    result[ currentIndex - 1 ],
-                    result[ currentIndex ]
+                    current[ currentIndex - 1 ],
+                    current[ currentIndex ]
                 ))
                 {
                     break;
+                }
+
+                if( result === null )
+                {
+                    result = [ ...pipeline ];
+                    current = result;
                 }
 
                 const previousStage = result[ currentIndex - 1 ];
                 result[ currentIndex - 1 ] = result[ currentIndex ];
                 result[ currentIndex ] = previousStage;
                 currentIndex--;
-                changed = true;
             }
         }
 
-        return changed ? result : pipeline;
+        return result ?? pipeline;
     }
 }

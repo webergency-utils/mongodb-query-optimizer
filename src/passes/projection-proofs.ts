@@ -94,53 +94,77 @@ function hasDeterministicErrorFreeEvaluation(
     );
 }
 
+const safeAddFieldStageCache = new WeakMap<object, AddFieldStage | null>();
+const anyAddFieldStageCache = new WeakMap<object, AddFieldStage | null>();
+
 export function parseAddFieldStage(
     stage: unknown,
     requireSafeEvaluation: boolean,
 ): AddFieldStage | null
 {
-    const entry = getSingleStageEntry(stage);
-    if (
+    const entry = getSingleStageEntry( stage );
+
+    if(
         !entry
-        || !ADD_FIELD_OPERATORS.has(entry[0])
-        || !isPlainObject(entry[1])
+        || !ADD_FIELD_OPERATORS.has( entry[ 0 ] )
+        || !isPlainObject( entry[ 1 ] )
     )
     {
         return null;
     }
 
-    const projection = analyzeProjection(entry[1], 'add-fields');
-    if (
+    const stageObj = stage as object;
+    const cache = requireSafeEvaluation ? safeAddFieldStageCache : anyAddFieldStageCache;
+    const cached = cache.get( stageObj );
+
+    if( cached !== undefined )
+    {
+        return cached;
+    }
+
+    const projection = analyzeProjection( entry[ 1 ], 'add-fields' );
+
+    if(
         projection.unknown
         || projection.hasPathCollisions
         || projection.mode !== 'add-fields'
-        || Object.keys(entry[1]).length === 0
-        || Array.from(projection.computedPaths).some((path) => !isExactPath(path))
+        || Object.keys( entry[ 1 ] ).length === 0
+        || Array.from( projection.computedPaths ).some(( path ) => !isExactPath( path ))
     )
     {
+        cache.set( stageObj, null );
+
         return null;
     }
 
-    const semantics = analyzeStage(stage);
-    if (
-        semantics.operator !== entry[0]
+    const semantics = analyzeStage( stage );
+
+    if(
+        semantics.operator !== entry[ 0 ]
         || semantics.projection?.mode !== 'add-fields'
         || semantics.children.length > 0
-        || !hasOnlyKnownDependencyPaths(semantics)
+        || !hasOnlyKnownDependencyPaths( semantics )
         || (
             requireSafeEvaluation
-            && !hasDeterministicErrorFreeEvaluation(semantics)
+            && !hasDeterministicErrorFreeEvaluation( semantics )
         )
     )
     {
+        cache.set( stageObj, null );
+
         return null;
     }
 
-    return {
-        operator: entry[0] as '$addFields' | '$set',
-        specification: entry[1],
-        semantics,
+    const parsed: AddFieldStage =
+    {
+        operator        : entry[ 0 ] as '$addFields' | '$set',
+        specification   : entry[ 1 ],
+        semantics
     };
+
+    cache.set( stageObj, parsed );
+
+    return parsed;
 }
 
 export function dependenciesReadAnyPath(
@@ -181,7 +205,7 @@ function substituteFieldRefInExpression(
     {
         if( expr === `$${ targetField }` )
         {
-            return structuredClone( replacement );
+            return replacement;
         }
         return expr;
     }
@@ -246,7 +270,7 @@ function tryInlineSameFieldOverwrite(
         return null;
     }
 
-    const secondSpec: Record<string, unknown> = structuredClone( second.specification );
+    const secondSpec: Record<string, unknown> = { ...second.specification };
 
     for( const firstField of first.semantics.writes )
     {

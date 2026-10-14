@@ -1,4 +1,4 @@
-import { deepClone, isEmptyObject, isPlainObject } from '../utils.js';
+import { isEmptyObject, isPlainObject } from '../utils.js';
 import { getStageSpec } from './helpers.js';
 
 export interface SortByCountSimplificationProof
@@ -60,7 +60,7 @@ export function proveSortByCountSimplification(
 
     return {
         sortByCountStage : {
-            $sortByCount : deepClone( groupSpec._id )
+            $sortByCount : groupSpec._id
         }
     };
 }

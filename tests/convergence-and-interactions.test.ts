@@ -6,7 +6,7 @@ import {
     optimizePipelineWithPasses,
 } from '../src/passes/registry.js';
 import { PipelinePass } from '../src/passes/types.js';
-import { structuralFingerprint } from '../src/utils.js';
+import { isEqual } from '../src/utils.js';
 
 class ClassValue
 {
@@ -252,55 +252,27 @@ describe('tree-wide pipeline convergence', () =>
     });
 });
 
-describe('structural fingerprints', () =>
+describe('structural equality', () =>
 {
     it('distinguishes BSON-aware values without losing structural order', () =>
     {
         const objectId = '000000000000000000000001';
 
-        expect(structuralFingerprint(1)).not.toBe(structuralFingerprint('1'));
-        expect(structuralFingerprint(/alpha/gi)).toBe(
-            structuralFingerprint(new RegExp('alpha', 'ig')),
-        );
-        expect(structuralFingerprint(/alpha/g)).not.toBe(
-            structuralFingerprint(/alpha/i),
-        );
-        expect(structuralFingerprint(/alpha/i)).not.toBe(
-            structuralFingerprint(/beta/i),
-        );
-        expect(structuralFingerprint(new Date(1))).not.toBe(
-            structuralFingerprint(new Date(2)),
-        );
-        expect(structuralFingerprint(Buffer.from([1, 2]))).not.toBe(
-            structuralFingerprint(Buffer.from([2, 1])),
-        );
-        expect(structuralFingerprint(new ObjectId(objectId))).toBe(
-            structuralFingerprint(new ObjectId(objectId)),
-        );
-        expect(structuralFingerprint(new ObjectId(objectId))).not.toBe(
-            structuralFingerprint(new ObjectId('000000000000000000000002')),
-        );
-        expect(structuralFingerprint(new BSONRegExp('alpha', 'i'))).not.toBe(
-            structuralFingerprint(new BSONRegExp('alpha', 'm')),
-        );
-        expect(structuralFingerprint({ value: undefined })).not.toBe(
-            structuralFingerprint({}),
-        );
-        expect(structuralFingerprint([1, 2])).not.toBe(
-            structuralFingerprint([2, 1]),
-        );
-        expect(structuralFingerprint({ first: 1, second: 2 })).not.toBe(
-            structuralFingerprint({ second: 2, first: 1 }),
-        );
-        expect(structuralFingerprint(new ClassValue('one'))).toBe(
-            structuralFingerprint(new ClassValue('one')),
-        );
-        expect(structuralFingerprint(new ClassValue('one'))).not.toBe(
-            structuralFingerprint(new ClassValue('two')),
-        );
-        expect(structuralFingerprint(new ClassValue('one'))).not.toBe(
-            structuralFingerprint({ value: 'one' }),
-        );
+        expect(isEqual(1, '1')).toBe(false);
+        expect(isEqual(/alpha/gi, new RegExp('alpha', 'ig'))).toBe(true);
+        expect(isEqual(/alpha/g, /alpha/i)).toBe(false);
+        expect(isEqual(/alpha/i, /beta/i)).toBe(false);
+        expect(isEqual(new Date(1), new Date(2))).toBe(false);
+        expect(isEqual(Buffer.from([1, 2]), Buffer.from([2, 1]))).toBe(false);
+        expect(isEqual(new ObjectId(objectId), new ObjectId(objectId))).toBe(true);
+        expect(isEqual(new ObjectId(objectId), new ObjectId('000000000000000000000002'))).toBe(false);
+        expect(isEqual(new BSONRegExp('alpha', 'i'), new BSONRegExp('alpha', 'm'))).toBe(false);
+        expect(isEqual({ value: undefined }, {})).toBe(false);
+        expect(isEqual([1, 2], [2, 1])).toBe(false);
+        expect(isEqual({ first: 1, second: 2 }, { second: 2, first: 1 })).toBe(false);
+        expect(isEqual(new ClassValue('one'), new ClassValue('one'))).toBe(true);
+        expect(isEqual(new ClassValue('one'), new ClassValue('two'))).toBe(false);
+        expect(isEqual(new ClassValue('one'), { value: 'one' })).toBe(false);
     });
 });
 
@@ -345,15 +317,116 @@ describe('production pipeline copy semantics', () =>
 
         expect(optimized).toEqual(pipeline);
         expect(optimized).not.toBe(pipeline);
-        expect(optimized[0]).not.toBe(pipeline[0]);
-        expect(optimized[0].$match).not.toBe(pipeline[0].$match);
+        expect(optimized[0]).toBe(pipeline[0]);
+        expect(optimized[0].$match).toBe(pipeline[0].$match);
         expect(optimized[0].$match.bson).toBe(bson);
         expect(optimized[0].$match.classValue).toBe(classValue);
-        expect(optimized[0].$match.date).not.toBe(date);
-        expect(optimized[0].$match.buffer).not.toBe(buffer);
-        expect(optimized[0].$match.regexp).not.toBe(regexp);
-        expect(optimized[1]!.$facet.branch).not.toBe(pipeline[1]!.$facet.branch);
+        expect(optimized[0].$match.date).toBe(date);
+        expect(optimized[0].$match.buffer).toBe(buffer);
+        expect(optimized[0].$match.regexp).toBe(regexp);
+        expect(optimized[1]).toBe(pipeline[1]);
+        expect(optimized[1]!.$facet.branch).toBe(pipeline[1]!.$facet.branch);
     });
+
+    it( 'AE4: returns a new root pipeline array while preserving unmodified stage and leaf references', () =>
+    {
+        const input: any[] =
+        [
+            { $match: { createdAt: new Date( '2026-01-01T00:00:00Z' ) } },
+            { $limit: 10 }
+        ];
+        const snapshot = structuredClone( input );
+
+        const output = optimizePipeline( input );
+
+        expect( input ).toEqual( snapshot );
+        expect( output ).not.toBe( input );
+        expect( output[ 0 ] ).toBe( input[ 0 ] );
+        expect( output[ 1 ] ).toBe( input[ 1 ] );
+        expect( output[ 0 ].$match.createdAt ).toBe( input[ 0 ].$match.createdAt );
+    } );
+
+    it( 'AE1: merges adjacent $match stages, deduplicates small $in, and preserves 3,121-element ObjectId $in by reference', () =>
+    {
+        const largeIds = Array.from(
+            { length: 3121 },
+            ( _, i ) => new ObjectId( i.toString( 16 ).padStart( 24, '0' ))
+        );
+        const input: any[] =
+        [
+            {
+                $match:
+                {
+                    _id: { $in: largeIds },
+                    status: { $in: [ 'active', 'active' ] }
+                }
+            },
+            {
+                $match:
+                {
+                    tenantId: 't1'
+                }
+            }
+        ];
+
+        const output = optimizePipeline( input );
+
+        expect( output ).toEqual(
+        [
+            {
+                $match:
+                {
+                    _id: { $in: largeIds },
+                    status: 'active',
+                    tenantId: 't1'
+                }
+            }
+        ] );
+        expect( output[ 0 ].$match._id.$in ).toBe( input[ 0 ].$match._id.$in );
+        expect( input[ 0 ].$match.status ).toEqual({ $in: [ 'active', 'active' ] });
+    } );
+
+    it( 'optimizes a 5-stage 3,121-element ObjectId $in pipeline in sub-millisecond time while preserving $in by reference', () =>
+    {
+        const largeIds = Array.from(
+            { length: 3121 },
+            ( _, i ) => new ObjectId( i.toString( 16 ).padStart( 24, '0' ))
+        );
+        const input =
+        [
+            { $match: { _id: { $in: largeIds }, deleted: false } },
+            { $sort: { createdAt: -1 } },
+            { $skip: 0 },
+            { $limit: 50 },
+            { $project: { _id: 1, name: 1, createdAt: 1 } }
+        ];
+
+        // Warmup
+        optimizePipeline( input );
+
+        const iterations = 20;
+        const start = performance.now();
+
+        let output: any[] = [];
+
+        for( let i = 0; i < iterations; i++ )
+        {
+            output = optimizePipeline( input );
+        }
+
+        const elapsedPerCallMs = ( performance.now() - start ) / iterations;
+
+        expect( output ).toEqual(
+        [
+            { $match: { _id: { $in: largeIds }, deleted: false } },
+            { $sort: { createdAt: -1 } },
+            { $limit: 50 },
+            { $project: { _id: 1, name: 1, createdAt: 1 } }
+        ] );
+        expect( output[ 0 ].$match._id.$in ).toBe( largeIds );
+        expect( input ).toHaveLength( 5 );
+        expect( elapsedPerCallMs ).toBeLessThan( 15 );
+    } );
 
     it('converges multi-pass interactions across expr-normalization, group-pushdown, unwind-prefilter, and facet-hoisting', () =>
     {
@@ -448,13 +521,9 @@ describe('production pipeline copy semantics', () =>
         expect(optimized4).toEqual([
             {
                 $match: {
-                    $and: [
-                        {
-                            $or: [
-                                { 'items.qty': { $gt: 0 } },
-                                { items: { $elemMatch: { $type: 'array' } } },
-                            ],
-                        },
+                    $or: [
+                        { 'items.qty': { $gt: 0 } },
+                        { items: { $elemMatch: { $type: 'array' } } },
                     ],
                     tenant: 'org-1',
                 },

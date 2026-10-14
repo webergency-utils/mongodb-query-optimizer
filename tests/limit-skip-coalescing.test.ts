@@ -14,7 +14,7 @@ import { optimizePipelineWithCandidateProfile } from '../src/passes/registry.js'
 import {
     productionSemanticCases,
 } from './fixtures/semantic-cases.js';
-import { structuralFingerprint } from '../src/utils.js';
+import { isEqual } from '../src/utils.js';
 
 const LIMIT_SKIP = ['limit-skip-coalescing'] as const;
 
@@ -359,8 +359,7 @@ describe('limit and skip coalescing scheduling', () =>
             const optimized = optimizePipeline(testCase.pipeline as any[]);
             return [
                 testCase.id,
-                structuralFingerprint(optimized)
-                    === structuralFingerprint(testCase.pipeline)
+                isEqual( optimized, testCase.pipeline )
                     ? 'barrier'
                     : 'rewrite',
             ];

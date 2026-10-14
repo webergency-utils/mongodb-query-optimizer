@@ -1,4 +1,4 @@
-import { deepClone, isPlainObject } from '../utils.js';
+import { isPlainObject } from '../utils.js';
 
 function isFieldPath(value: unknown): value is string
 {
@@ -86,21 +86,21 @@ function normalizeBinaryComparison(
         {
             case '$eq':
                 return isPlainObject(lit1) && Object.keys(lit1).some((k) => k.startsWith('$'))
-                    ? { [field]: { $eq: deepClone(lit1) } }
-                    : { [field]: deepClone(lit1) };
+                    ? { [field]: { $eq: lit1 } }
+                    : { [field]: lit1 };
             case '$ne':
-                return { [field]: { $ne: deepClone(lit1) } };
+                return { [field]: { $ne: lit1 } };
             case '$gt':
-                return { [field]: { $gt: deepClone(lit1) } };
+                return { [field]: { $gt: lit1 } };
             case '$gte':
-                return { [field]: { $gte: deepClone(lit1) } };
+                return { [field]: { $gte: lit1 } };
             case '$lt':
-                return { [field]: { $lt: deepClone(lit1) } };
+                return { [field]: { $lt: lit1 } };
             case '$lte':
-                return { [field]: { $lte: deepClone(lit1) } };
+                return { [field]: { $lte: lit1 } };
             case '$in':
                 return Array.isArray(lit1)
-                    ? { [field]: { $in: deepClone(lit1.map(unwrapLiteral)) } }
+                    ? { [field]: { $in: lit1.map(unwrapLiteral) } }
                     : null;
             default:
                 return null;
@@ -115,22 +115,22 @@ function normalizeBinaryComparison(
         {
             case '$eq':
                 return isPlainObject(lit0) && Object.keys(lit0).some((k) => k.startsWith('$'))
-                    ? { [field]: { $eq: deepClone(lit0) } }
-                    : { [field]: deepClone(lit0) };
+                    ? { [field]: { $eq: lit0 } }
+                    : { [field]: lit0 };
             case '$ne':
-                return { [field]: { $ne: deepClone(lit0) } };
+                return { [field]: { $ne: lit0 } };
             case '$gt':
                 // arg0 > field <=> field < arg0
-                return { [field]: { $lt: deepClone(lit0) } };
+                return { [field]: { $lt: lit0 } };
             case '$gte':
                 // arg0 >= field <=> field <= arg0
-                return { [field]: { $lte: deepClone(lit0) } };
+                return { [field]: { $lte: lit0 } };
             case '$lt':
                 // arg0 < field <=> field > arg0
-                return { [field]: { $gt: deepClone(lit0) } };
+                return { [field]: { $gt: lit0 } };
             case '$lte':
                 // arg0 <= field <=> field >= arg0
-                return { [field]: { $gte: deepClone(lit0) } };
+                return { [field]: { $gte: lit0 } };
             default:
                 return null;
         }
@@ -259,7 +259,7 @@ export function proveExprToNativeMatch(
 
             return {
                 [value.input.slice(1)]: {
-                    $regex: deepClone(rawRegex),
+                    $regex: rawRegex,
                     $options: rawOptions,
                 },
             };
@@ -267,7 +267,7 @@ export function proveExprToNativeMatch(
 
         return {
             [value.input.slice(1)]: {
-                $regex: deepClone(rawRegex),
+                $regex: rawRegex,
             },
         };
     }
@@ -326,7 +326,7 @@ export function proveExprToNativeMatch(
             {
                 return {
                     [arg0.slice(1)]: {
-                        $nin: deepClone(lit1.map(unwrapLiteral)),
+                        $nin: lit1.map(unwrapLiteral),
                     },
                 };
             }
@@ -436,7 +436,7 @@ export function proveCorrelatedLookupEqualityNormalization(
 
     const localField = letBinding.slice( 1 );
     const foreignField = foreignOperand.slice( 1 );
-    const remainingPipeline = deepClone( spec.pipeline.slice( 1 )) as unknown[];
+    const remainingPipeline = spec.pipeline.slice( 1 );
     const varStillUsed = containsVariableReference( remainingPipeline, varOperand );
 
     const nextLet: Record<string, unknown> = {};
@@ -444,7 +444,7 @@ export function proveCorrelatedLookupEqualityNormalization(
     {
         if( k !== varName || varStillUsed )
         {
-            nextLet[ k ] = deepClone( v );
+            nextLet[ k ] = v;
         }
     }
 

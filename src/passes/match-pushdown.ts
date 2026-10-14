@@ -13,12 +13,12 @@ export class MatchPushdownPass implements PipelinePass
 
     execute( pipeline: any[], context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {
-        let changed = false;
-        const result = [ ...pipeline ];
+        let result: any[] | null = null;
+        let current = pipeline;
 
-        for( let index = 1; index < result.length; index++ )
+        for( let index = 1; index < current.length; index++ )
         {
-            if( !result[ index ] || typeof result[ index ] !== 'object' || !( '$match' in result[ index ] ))
+            if( !current[ index ] || typeof current[ index ] !== 'object' || !( '$match' in current[ index ] ))
             {
                 continue;
             }
@@ -27,19 +27,30 @@ export class MatchPushdownPass implements PipelinePass
 
             while( currentIndex > 0 )
             {
-                const downstream = result.slice( currentIndex + 1 );
+                const prev = current[ currentIndex - 1 ];
+                if( prev && typeof prev === 'object' && '$match' in prev )
+                {
+                    break;
+                }
+
+                const downstream = current.slice( currentIndex + 1 );
                 const proof = proveMatchPushdownAcrossStage(
-                    result[ currentIndex - 1 ],
-                    result[ currentIndex ],
+                    prev,
+                    current[ currentIndex ],
                     context,
                     downstream
                 );
 
-                if( !proof ){ break }
+                if( !proof ){ break; }
 
-                const previousStage = result[ currentIndex - 1 ];
+                if( result === null )
+                {
+                    result = [ ...pipeline ];
+                    current = result;
+                }
+
                 result[ currentIndex - 1 ] = proof.matchStage;
-                result[ currentIndex ] = previousStage;
+                result[ currentIndex ] = prev;
 
                 if( proof.residualStage )
                 {
@@ -48,10 +59,9 @@ export class MatchPushdownPass implements PipelinePass
                 }
 
                 currentIndex--;
-                changed = true;
             }
         }
 
-        return changed ? result : pipeline;
+        return result ?? pipeline;
     }
 }

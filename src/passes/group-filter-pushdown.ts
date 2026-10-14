@@ -1,7 +1,7 @@
 import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
 import { PipelinePass } from './types.js';
 import { proveGroupFilterPushdown } from './group-pushdown-proofs.js';
-import { structuralFingerprint } from '../utils.js';
+import { isEqual } from '../utils.js';
 
 export class GroupFilterPushdownPass implements PipelinePass
 {
@@ -20,13 +20,13 @@ export class GroupFilterPushdownPass implements PipelinePass
             {
                 const nextStage = pipeline[ i + 1 ];
                 const proof = proveGroupFilterPushdown( currentStage, nextStage, context );
-                if (proof)
+
+                if( proof )
                 {
                     const alreadyPresent = (
                         result.length > 0
-                        && result[result.length - 1]?.$match !== undefined
-                        && structuralFingerprint(result[result.length - 1].$match)
-                            === structuralFingerprint(proof.prefilterStage.$match)
+                        && result[ result.length - 1 ]?.$match !== undefined
+                        && isEqual( result[ result.length - 1 ].$match, proof.prefilterStage.$match )
                     );
 
                     if (!alreadyPresent)

@@ -576,255 +576,311 @@ function analyzeElementOperator(
         return unknownExpressionSummary(context);
     }
 
-    const summary = analyzeExpression(operand.input, context);
-    const variableName = typeof operand.as === "string"
+    const summary = emptyExpressionSummary();
+    mergeExpressionSummary( summary, analyzeExpression( operand.input, context ));
+    const variableName = typeof operand.as === 'string'
         ? operand.as
-        : "this";
-    const bindings = new Map(context.variables ?? []);
-    bindings.set(variableName, inferBinding(operand.input, context));
+        : 'this';
+    const bindings = new Map( context.variables ?? [] );
+    bindings.set( variableName, inferBinding( operand.input, context ));
 
-    if (operator === "$map")
+    if( operator === '$map' )
     {
-        if (!("in" in operand))
+        if( !( 'in' in operand ))
         {
-            mergeExpressionSummary(summary, unknownExpressionSummary(context));
+            mergeExpressionSummary( summary, unknownExpressionSummary( context ));
         }
         else
         {
             mergeExpressionSummary(
                 summary,
-                analyzeExpression(operand.in, withVariables(context, bindings)),
+                analyzeExpression( operand.in, withVariables( context, bindings ))
             );
         }
     }
-    else if ("cond" in operand)
+    else if( 'cond' in operand )
     {
         mergeExpressionSummary(
             summary,
-            analyzeExpression(operand.cond, withVariables(context, bindings)),
+            analyzeExpression( operand.cond, withVariables( context, bindings ))
         );
     }
     else
     {
-        mergeExpressionSummary(summary, unknownExpressionSummary(context));
+        mergeExpressionSummary( summary, unknownExpressionSummary( context ));
     }
 
-    if ("limit" in operand)
+    if( 'limit' in operand )
     {
-        mergeExpressionSummary(summary, analyzeExpression(operand.limit, context));
+        mergeExpressionSummary( summary, analyzeExpression( operand.limit, context ));
     }
 
-    summary.errors = joinErrors(summary.errors, "may-error");
+    summary.errors = joinErrors( summary.errors, 'may-error' );
+
     return summary;
 }
 
 function analyzeReduce(
-    operand: unknown,
-    context: SemanticAnalysisContext,
+    operand : unknown,
+    context : SemanticAnalysisContext
 ): ExpressionSummary
 {
-    if (
-        !isPlainObject(operand)
-        || !("input" in operand)
-        || !("initialValue" in operand)
-        || !("in" in operand)
+    if(
+        !isPlainObject( operand )
+        || !( 'input' in operand )
+        || !( 'initialValue' in operand )
+        || !( 'in' in operand )
     )
     {
-        return unknownExpressionSummary(context);
+        return unknownExpressionSummary( context );
     }
 
-    const summary = analyzeExpression(operand.input, context);
+    const summary = emptyExpressionSummary();
+    mergeExpressionSummary( summary, analyzeExpression( operand.input, context ));
     mergeExpressionSummary(
         summary,
-        analyzeExpression(operand.initialValue, context),
+        analyzeExpression( operand.initialValue, context )
     );
 
-    const bindings = new Map(context.variables ?? []);
-    bindings.set("this", inferBinding(operand.input, context));
-    bindings.set("value", {
-        scope: context.documentScope,
-        unknown: true,
+    const bindings = new Map( context.variables ?? [] );
+    bindings.set( 'this', inferBinding( operand.input, context ));
+    bindings.set( 'value', {
+        scope   : context.documentScope,
+        unknown : true
     });
     mergeExpressionSummary(
         summary,
-        analyzeExpression(operand.in, withVariables(context, bindings)),
+        analyzeExpression( operand.in, withVariables( context, bindings ))
     );
-    summary.errors = joinErrors(summary.errors, "may-error");
+    summary.errors = joinErrors( summary.errors, 'may-error' );
+
     return summary;
 }
 
 function analyzeUserCode(
-    operator: "$function" | "$accumulator",
-    operand: unknown,
-    context: SemanticAnalysisContext,
+    operator    : '$function' | '$accumulator',
+    operand     : unknown,
+    context     : SemanticAnalysisContext
 ): ExpressionSummary
 {
     const summary = emptyExpressionSummary();
-    if (!isPlainObject(operand))
+
+    if( !isPlainObject( operand ))
     {
-        mergeExpressionSummary(summary, unknownExpressionSummary(context));
+        mergeExpressionSummary( summary, unknownExpressionSummary( context ));
     }
-    else if (operator === "$function" && Array.isArray(operand.args))
+    else if( operator === '$function' && Array.isArray( operand.args ))
     {
-        mergeExpressionSummary(summary, analyzeExpression(operand.args, context));
+        mergeExpressionSummary( summary, analyzeExpression( operand.args, context ));
     }
-    else if (
-        operator === "$accumulator"
-        && Array.isArray(operand.initArgs)
-        && Array.isArray(operand.accumulateArgs)
+    else if(
+        operator === '$accumulator'
+        && Array.isArray( operand.initArgs )
+        && Array.isArray( operand.accumulateArgs )
     )
     {
         mergeExpressionSummary(
             summary,
-            analyzeExpression(operand.initArgs, context),
+            analyzeExpression( operand.initArgs, context )
         );
         mergeExpressionSummary(
             summary,
-            analyzeExpression(operand.accumulateArgs, context),
+            analyzeExpression( operand.accumulateArgs, context )
         );
     }
     else
     {
-        mergeExpressionSummary(summary, unknownExpressionSummary(context));
+        mergeExpressionSummary( summary, unknownExpressionSummary( context ));
     }
 
-    summary.determinism = summary.determinism === "unknown"
-        ? "unknown"
-        : "volatile";
-    summary.errors = summary.errors === "unknown"
-        ? "unknown"
-        : "may-error";
+    summary.determinism = summary.determinism === 'unknown'
+        ? 'unknown'
+        : 'volatile';
+    summary.errors = summary.errors === 'unknown'
+        ? 'unknown'
+        : 'may-error';
+
     return summary;
 }
 
 function analyzeOperator(
-    operator: string,
-    operand: unknown,
-    context: SemanticAnalysisContext,
+    operator    : string,
+    operand     : unknown,
+    context     : SemanticAnalysisContext
 ): ExpressionSummary
 {
-    if (operator === "$literal")
+    if( operator === '$literal' )
     {
         return emptyExpressionSummary();
     }
 
-    if (operator === "$getField")
+    if( operator === '$getField' )
     {
-        return analyzeGetField(operand, context);
+        return analyzeGetField( operand, context );
     }
 
-    if (operator === "$let")
+    if( operator === '$let' )
     {
-        return analyzeLet(operand, context);
+        return analyzeLet( operand, context );
     }
 
-    if (operator === "$map" || operator === "$filter")
+    if( operator === '$map' || operator === '$filter' )
     {
-        return analyzeElementOperator(operator, operand, context);
+        return analyzeElementOperator( operator, operand, context );
     }
 
-    if (operator === "$reduce")
+    if( operator === '$reduce' )
     {
-        return analyzeReduce(operand, context);
+        return analyzeReduce( operand, context );
     }
 
-    if (operator === "$rand")
+    if( operator === '$rand' )
     {
-        const summary = analyzeExpression(operand, context);
+        const summary = emptyExpressionSummary();
+        mergeExpressionSummary( summary, analyzeExpression( operand, context ));
         summary.determinism = joinDeterminism(
             summary.determinism,
-            "volatile",
+            'volatile'
         );
-        if (!isRandOperand(operand))
+
+        if( !isRandOperand( operand ))
         {
-            summary.errors = joinErrors(summary.errors, "may-error");
+            summary.errors = joinErrors( summary.errors, 'may-error' );
         }
+
         return summary;
     }
 
-    if (operator === "$function" || operator === "$accumulator")
+    if( operator === '$function' || operator === '$accumulator' )
     {
-        return analyzeUserCode(operator, operand, context);
+        return analyzeUserCode( operator, operand, context );
     }
 
-    const summary = analyzeExpression(operand, context);
-    if (!KNOWN_EXPRESSION_OPERATORS.has(operator))
+    const summary = emptyExpressionSummary();
+    mergeExpressionSummary( summary, analyzeExpression( operand, context ));
+
+    if( !KNOWN_EXPRESSION_OPERATORS.has( operator ))
     {
-        summary.determinism = joinDeterminism(summary.determinism, "volatile");
-        summary.errors = joinErrors(summary.errors, "may-error");
+        summary.determinism = joinDeterminism( summary.determinism, 'volatile' );
+        summary.errors = joinErrors( summary.errors, 'may-error' );
         summary.unknown = true;
+
         return summary;
     }
 
-    const validator = VALIDATED_TOTAL_EXPRESSION_OPERATORS.get(operator);
-    if (!validator || !validator(operand))
+    const validator = VALIDATED_TOTAL_EXPRESSION_OPERATORS.get( operator );
+
+    if( !validator || !validator( operand ))
     {
-        summary.errors = joinErrors(summary.errors, "may-error");
+        summary.errors = joinErrors( summary.errors, 'may-error' );
     }
 
     return summary;
 }
 
-export function analyzeExpression(
-    expression: unknown,
-    context: SemanticAnalysisContext = { documentScope: "local" },
+const defaultExpressionSummaryCache = new WeakMap<object, ExpressionSummary>();
+
+function isDefaultExpressionAnalysisContext(
+    context: SemanticAnalysisContext
+): boolean
+{
+    return (
+        context.documentScope === 'local'
+        && !context.variables?.size
+    );
+}
+
+function analyzePlainExpressionObject(
+    expression  : Record<string, unknown>,
+    context     : SemanticAnalysisContext
 ): ExpressionSummary
 {
-    if (typeof expression === "string")
+    const entries = Object.entries( expression );
+    const operatorEntries = entries.filter(( [ key ] ) => key.startsWith( '$' ));
+
+    if( operatorEntries.length === 0 )
     {
-        return analyzeString(expression, context);
+        const summary = emptyExpressionSummary();
+
+        for( const [ , value ] of entries )
+        {
+            mergeExpressionSummary( summary, analyzeExpression( value, context ));
+        }
+
+        return summary;
     }
 
-    if (
+    if( entries.length !== 1 || operatorEntries.length !== 1 )
+    {
+        const summary = emptyExpressionSummary();
+
+        for( const [ , value ] of entries )
+        {
+            mergeExpressionSummary( summary, analyzeExpression( value, context ));
+        }
+
+        mergeExpressionSummary( summary, unknownExpressionSummary( context ));
+
+        return summary;
+    }
+
+    return analyzeOperator(
+        operatorEntries[ 0 ]![ 0 ],
+        operatorEntries[ 0 ]![ 1 ],
+        context
+    );
+}
+
+export function analyzeExpression(
+    expression  : unknown,
+    context     : SemanticAnalysisContext = { documentScope: 'local' }
+): ExpressionSummary
+{
+    if( typeof expression === 'string' )
+    {
+        return analyzeString( expression, context );
+    }
+
+    if(
         expression === null
         || expression === undefined
-        || typeof expression !== "object"
+        || typeof expression !== 'object'
     )
     {
         return emptyExpressionSummary();
     }
 
-    if (Array.isArray(expression))
+    if( Array.isArray( expression ))
     {
         const summary = emptyExpressionSummary();
-        for (const item of expression)
+
+        for( const item of expression )
         {
-            mergeExpressionSummary(summary, analyzeExpression(item, context));
+            mergeExpressionSummary( summary, analyzeExpression( item, context ));
         }
+
         return summary;
     }
 
-    if (!isPlainObject(expression))
+    if( !isPlainObject( expression ))
     {
         return emptyExpressionSummary();
     }
 
-    const entries = Object.entries(expression);
-    const operatorEntries = entries.filter(([key]) => key.startsWith("$"));
-    if (operatorEntries.length === 0)
+    if( isDefaultExpressionAnalysisContext( context ))
     {
-        const summary = emptyExpressionSummary();
-        for (const [, value] of entries)
+        const cached = defaultExpressionSummaryCache.get( expression );
+
+        if( cached !== undefined )
         {
-            mergeExpressionSummary(summary, analyzeExpression(value, context));
+            return cached;
         }
+
+        const summary = analyzePlainExpressionObject( expression, context );
+        defaultExpressionSummaryCache.set( expression, summary );
+
         return summary;
     }
 
-    if (entries.length !== 1 || operatorEntries.length !== 1)
-    {
-        const summary = emptyExpressionSummary();
-        for (const [, value] of entries)
-        {
-            mergeExpressionSummary(summary, analyzeExpression(value, context));
-        }
-        mergeExpressionSummary(summary, unknownExpressionSummary(context));
-        return summary;
-    }
-
-    return analyzeOperator(
-        operatorEntries[0]![0],
-        operatorEntries[0]![1],
-        context,
-    );
+    return analyzePlainExpressionObject( expression, context );
 }

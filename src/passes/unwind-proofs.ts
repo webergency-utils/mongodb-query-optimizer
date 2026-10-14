@@ -1,6 +1,6 @@
 import { analyzeStage } from '../analyzer/semantics.js';
 import { GuaranteeContext } from '../guarantees.js';
-import { deepClone, isPlainObject } from '../utils.js';
+import { isPlainObject } from '../utils.js';
 import { isStageProvenErrorFree } from './guarantee-guards.js';
 import
 {
@@ -194,7 +194,7 @@ export function proveUnwindPrefilter(
         {
             if( isQualifyingPrefilterValue( val ))
             {
-                dottedConjuncts.push({ [ key ]: deepClone( val ) });
+                dottedConjuncts.push({ [ key ]: val });
             }
         }
         else if( key === '$or' && Array.isArray( val ) && val.length > 0 )
@@ -217,7 +217,7 @@ export function proveUnwindPrefilter(
                     && isQualifyingPrefilterValue( bVal )
                 )
                 {
-                    branchConditions.push({ [ bKey ]: deepClone( bVal ) });
+                    branchConditions.push({ [ bKey ]: bVal });
                 }
                 else
                 {

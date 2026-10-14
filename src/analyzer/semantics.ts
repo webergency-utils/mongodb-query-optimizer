@@ -1257,52 +1257,69 @@ function analyzeKnownStage(
 const defaultStageSemanticsCache = new WeakMap<object, StageSemantics>();
 
 export function analyzeStage(
-    stage: unknown,
-    index = 0,
-    suppliedContext?: Partial<SemanticAnalysisContext>,
+    stage           : unknown,
+    index           = 0,
+    suppliedContext?: Partial<SemanticAnalysisContext>
 ): StageSemantics
 {
-    if (index === 0 && suppliedContext === undefined && isPlainObject(stage))
+    if( suppliedContext === undefined && isPlainObject( stage ))
     {
-        const cached = defaultStageSemanticsCache.get(stage);
-        if (cached !== undefined)
+        const cached = defaultStageSemanticsCache.get( stage );
+
+        if( cached !== undefined )
         {
-            return cached;
+            return index === 0 ? cached : { ...cached, index };
         }
     }
 
-    const context = normalizeContext(suppliedContext);
-    if (!isPlainObject(stage))
+    const context = normalizeContext( suppliedContext );
+
+    if( !isPlainObject( stage ))
     {
-        return conservativeTop(stage, index, "unknown", context, true);
+        return conservativeTop( stage, index, 'unknown', context, true );
     }
 
-    const entries = Object.entries(stage);
-    if (entries.length !== 1)
+    let operator: string | undefined;
+
+    for( const key in stage )
     {
-        return conservativeTop(stage, index, "unknown", context, true);
+        if( operator !== undefined )
+        {
+            return conservativeTop( stage, index, 'unknown', context, true );
+        }
+
+        operator = key;
     }
 
-    const [operator, value] = entries[0]!;
-    if (!KNOWN_STAGE_OPERATORS.has(operator))
+    if( operator === undefined )
     {
-        return conservativeTop(stage, index, operator, context, false);
+        return conservativeTop( stage, index, 'unknown', context, true );
     }
 
-    const summary = createStageSemantics(stage, index, operator, context);
-    analyzeKnownStage(operator, value, summary, context);
-    if (summary.malformed)
+    const value = ( stage as Record<string, unknown> )[ operator ];
+
+    if( !KNOWN_STAGE_OPERATORS.has( operator ))
     {
-        const top = conservativeTop(stage, index, operator, context, true);
+        return conservativeTop( stage, index, operator, context, false );
+    }
+
+    const summary = createStageSemantics( stage, index, operator, context );
+    analyzeKnownStage( operator, value, summary, context );
+
+    if( summary.malformed )
+    {
+        const top = conservativeTop( stage, index, operator, context, true );
         top.projection = summary.projection;
         top.children = summary.children;
+
         return top;
     }
 
-    summary.observable = observableFromStage(summary);
-    if (index === 0 && suppliedContext === undefined)
+    summary.observable = observableFromStage( summary );
+
+    if( suppliedContext === undefined )
     {
-        defaultStageSemanticsCache.set(stage, summary);
+        defaultStageSemanticsCache.set( stage, index === 0 ? summary : { ...summary, index : 0 } );
     }
 
     return summary;

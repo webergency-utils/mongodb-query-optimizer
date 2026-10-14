@@ -147,10 +147,13 @@ Every pass is designed for high-throughput query proxy gateways, query compilers
 | **Contradiction Short-Circuit** | **21.35 µs** | **~46,800 ops/sec** | Fast SAT contradiction reduction |
 | **Standard 8-Stage Complex Pipeline** | **37.77 µs** | **~26,500 ops/sec** | Full fixed-point convergence across 19 passes |
 | **Complex Boolean Filter Normalization** | **20.38 µs** | **~49,000 ops/sec** | De Morgan reduction & multikey `$and` merging |
+| **5-Stage 3,121-Element `ObjectId` `$in` Pipeline** | **~216 µs** | **>4,600 ops/sec** | Bounded array analysis (`<= 64`) & copy-on-write preservation |
 
 - **0 Runtime Dependencies**: Pure TypeScript with zero runtime overhead (`dependencies: {}`).
-- **Compact Footprint**: ~158 KB ESM bundle with complete tree-shaking support.
-- **Reference Preservation**: If no optimization applies to a stage or pipeline, original references are preserved, avoiding intermediate heap allocation.
+- **Compact Footprint**: ~153 KB ESM bundle with complete tree-shaking support.
+- **Copy-on-Write Reference Sharing**: `optimizePipeline` and `optimizeFilter` return a new root array or object without mutating caller inputs, while sharing unmodified stage, sub-filter, operator-array, and BSON leaf references (`===`) via copy-on-write to avoid upfront deep cloning and intermediate heap churn.
+- **BSON-Aware `isEqual` Convergence & Deduplication**: Fixed-point convergence, cycle detection, and clause deduplication use a short-circuiting, key-order-sensitive, cycle-safe BSON `isEqual` comparator paired with `O(1)` primitive `Set` fast paths rather than string serialization.
+- **High-Performance Linear Array Deduplication & Analysis**: Value arrays (`$in`/`$nin`/`$all`) are deduplicated and cross-pruned in linear $O(N)$ time with zero string allocations using direct 32-bit integer BSON tables and native `Set` routers (handling 3,000+ `ObjectId`s or scalars in microseconds). The optimizer uses an allocation-free copy-on-write strategy (allocating a shallow clone only upon encountering the first duplicate, and setting `.length` in-place). A 64-element safety cap is maintained specifically for complex arbitrary subdocuments (`MAX_COMPLEX_ARRAY_LENGTH = 64`) and logical AST branch trees (`$and`/`$or`/`$nor`) to guard against $O(N^2)$ deep structural recursion.
 
 ### Sound Multikey Array Semantics
 In MongoDB, `{ tags: { $gt: 5, $lt: 10 } }` requires a single array element to satisfy both bounds, whereas `{ $and: [{ tags: { $gt: 5 } }, { tags: { $lt: 10 } }] }` can be satisfied by different elements (e.g. `tags: [3, 12]`). The optimizer strictly respects this distinction and never merges potentially multikey range filters into single subdocuments without schema proof.
@@ -179,7 +182,7 @@ Optimizes an array of MongoDB aggregation pipeline stages with formal equivalenc
   - `strictErrors` (`boolean`, default: `false`): When `true`, preserves runtime error occurrence and evaluation timing. Note: pipelines containing write stages (`$out`, `$merge`) automatically elevate to `strictErrors: true`.
 
 #### Returns
-- `T[]`: A new, optimized aggregation pipeline array. The original input array is never mutated.
+- `T[]`: A new root aggregation pipeline array (`output !== pipeline`). The original input is never mutated, and unmodified stages, nested sub-filters, large operator arrays (`> 64` items), and BSON leaf values are shared by reference (`===`) via copy-on-write.
 
 #### Code Example
 ```typescript
@@ -211,7 +214,7 @@ Normalizes and simplifies a MongoDB query filter document.
   - `strictErrors` (`boolean`, default: `false`): Preserves runtime error conditions. (Recommended for `updateOne`, `updateMany`, `deleteOne`, `deleteMany` filters).
 
 #### Returns
-- `T`: The simplified filter document. If no optimizations apply, a clean structurally equivalent filter is returned.
+- `T`: A new root filter document (`output !== filter` for object inputs). The original input is never mutated, and unmodified sub-filters, operator arrays, and BSON leaf values are shared by reference (`===`) via copy-on-write.
 
 #### Code Example
 ```typescript
@@ -344,7 +347,7 @@ console.log(info.isDestructive);  // true
 The optimizer detects non-deterministic expressions such as `$rand` or `$function` and prevents moving or merging stages that contain them to ensure random generators and timestamp semantics are never compromised.
 
 ### Custom BSON Types (ObjectId, Long, Decimal128, RegExp)
-All custom BSON objects from the official `mongodb` driver are preserved by structural reference or value clone. Regex literals and `BSONRegExp` instances are never collapsed into scalar equality.
+All custom BSON objects, `Date` instances, `RegExp` literals, and `Buffer` values are preserved by reference (`===`) through copy-on-write and compared structurally via BSON-aware `isEqual`. Regex literals and `BSONRegExp` instances are never collapsed into scalar equality.
 
 ### Multikey Array Filters Preserved in `$and`
 If you notice that `{ $and: [{ score: { $gt: 5 } }, { score: { $lt: 10 } }] }` is not collapsed into `{ score: { $gt: 5, $lt: 10 } }`, this is intentional: MongoDB multikey array semantics evaluate `$and` across independent array elements, whereas a single subdocument requires a single matching element. Without schema knowledge, collapsing them would alter query results.

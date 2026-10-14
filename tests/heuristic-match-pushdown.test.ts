@@ -189,6 +189,14 @@ describe( 'HeuristicMatchPushdownPass proof and execution', () =>
             { $match: { $expr: { $gt: [ { $getField: 'k' }, 1 ] } } }
         ];
         expect( proveHeuristicMatchPushdown( getFieldPipeline, 2, context )).toBeNull();
+
+        // Ignores $getField inside $literal or query-filter $in/$nin literal arrays
+        const safeInLiteralPipeline = [
+            lookup,
+            { $addFields: { k: { $size: '$tags' } } },
+            { $match: { k: { $in: [ 1, 2 ], $nin: [ 0 ] }, $expr: { $ne: [ '$k', { $literal: { $getField: 'k' } } ] } } }
+        ];
+        expect( proveHeuristicMatchPushdown( safeInLiteralPipeline, 2, context )).not.toBeNull();
     });
 
     it( 'rejects when crossed range has only cheap stages', () =>
@@ -278,4 +286,66 @@ describe( 'HeuristicMatchPushdownPass proof and execution', () =>
         expect( proveHeuristicMatchPushdown([ { $match: { a: 1 } }, { $sort: { a: 1 } } ], 1, context )).toBeNull();
         expect( pass.execute([ { $sort: { a: 1 } } ], context )).toEqual([ { $sort: { a: 1 } } ]);
     });
+
+    it( 'fast-paths before decomposing $match conjuncts when no costly stage or no computed-field provider precedes $match (R13)', () =>
+    {
+        let matchAccessCount = 0;
+        const trapMatchStage = {
+            $match: new Proxy( { k: { $gt: 1 } }, {
+                ownKeys( target )
+                {
+                    matchAccessCount++;
+                    return Reflect.ownKeys( target );
+                }
+            })
+        };
+
+        // Case 1: computed-field provider present, but no costly stage ($lookup/$graphLookup/$function)
+        expect( proveHeuristicMatchPushdown([
+            { $unset: 'unrelated' },
+            { $addFields: { k: { $size: '$tags' } } },
+            trapMatchStage
+        ], 2, context )).toBeNull();
+        expect( matchAccessCount ).toBe( 0 );
+
+        // Case 2: costly stage ($lookup) present, but no computed-field provider ($addFields/$set/$project)
+        expect( proveHeuristicMatchPushdown([
+            lookup,
+            { $unset: 'unrelated' },
+            trapMatchStage
+        ], 2, context )).toBeNull();
+        expect( matchAccessCount ).toBe( 0 );
+
+        // Case 3: $graphLookup and $project precede $match -> proceeds to inspect $match
+        expect( proveHeuristicMatchPushdown([
+            { $graphLookup: { from: 'emps', startWith: '$reportsTo', connectFromField: 'reportsTo', connectToField: 'name', as: 'hierarchy' } },
+            { $project: { k: '$score' } },
+            trapMatchStage
+        ], 2, context )).not.toBeNull();
+        expect( matchAccessCount ).toBeGreaterThan( 0 );
+
+        // Case 4: non-object (null) stage entry preceding $addFields and $match does not throw
+        expect( proveHeuristicMatchPushdown([
+            null,
+            { $addFields: { k: { $size: '$tags' } } },
+            { $match: { k: { $gt: 1 } } }
+        ], 2, context )).toBeNull();
+
+        // Case 5: ignores $function inside $literal or query-filter $in/$nin arrays, but detects $function inside $expr
+        matchAccessCount = 0;
+        expect( proveHeuristicMatchPushdown([
+            { $match: { a: { $in: [ { $function: { body: 'return 1;', args: [], lang: 'js' } } ], $nin: [ 0 ] } } },
+            { $addFields: { lit: { $literal: { $function: { body: 'return 1;', args: [], lang: 'js' } } }, k: { $size: '$tags' } } },
+            trapMatchStage
+        ], 2, context )).toBeNull();
+        expect( matchAccessCount ).toBe( 0 );
+
+        expect( proveHeuristicMatchPushdown([
+            { $match: { $expr: { $in: [ { $function: { body: 'return 1;', args: [], lang: 'js' } }, [ 1 ] ] } } },
+            { $addFields: { k: { $ifNull: [ '$score', 0 ] } } },
+            trapMatchStage
+        ], 2, context )).not.toBeNull();
+        expect( matchAccessCount ).toBeGreaterThan( 0 );
+    });
 });
+

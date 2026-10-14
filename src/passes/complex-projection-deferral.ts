@@ -38,17 +38,14 @@ export class ComplexProjectionDeferralPass implements PipelinePass
 
     execute( pipeline: any[], context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {
-        const result = [ ...pipeline ];
-
-        for( let index = 0; index < result.length - 1; index++ )
+        for( let index = 0; index < pipeline.length - 1; index++ )
         {
-            const downstream = result.slice( index + 2 );
-
-            if( proveAddFieldDeferralAcrossSort( result[ index ], result[ index + 1 ] ))
+            if( proveAddFieldDeferralAcrossSort( pipeline[ index ], pipeline[ index + 1 ] ))
             {
+                const downstream = pipeline.slice( index + 2 );
                 if( !canMoveStageAcrossStage(
-                    result[ index ],
-                    result[ index + 1 ],
+                    pipeline[ index ],
+                    pipeline[ index + 1 ],
                     'later',
                     context,
                     downstream
@@ -57,6 +54,7 @@ export class ComplexProjectionDeferralPass implements PipelinePass
                     continue;
                 }
 
+                const result = [ ...pipeline ];
                 [ result[ index ], result[ index + 1 ] ] = [
                     result[ index + 1 ],
                     result[ index ]
@@ -65,37 +63,41 @@ export class ComplexProjectionDeferralPass implements PipelinePass
             }
 
             if(
-                index + 2 < result.length
-                && isPositiveLimitOrSkipStage( result[ index + 2 ] )
+                index + 2 < pipeline.length
+                && isPositiveLimitOrSkipStage( pipeline[ index + 2 ] )
                 && !context.strictFieldOrder
-                && canSplitFieldAddingStage( result[ index + 1 ], context, downstream )
             )
             {
-                const splitProof = proveAddFieldSplitAcrossSort( result[ index ], result[ index + 1 ] )
-                    ?? proveProjectSplitAcrossSort( result[ index ], result[ index + 1 ] );
-                if(
-                    splitProof
-                    && canMoveStageAcrossStage(
-                        splitProof.deferredStage,
-                        result[ index + 1 ],
-                        'later',
-                        context,
-                        downstream
-                    )
-                )
+                const downstream = pipeline.slice( index + 2 );
+                if( canSplitFieldAddingStage( pipeline[ index + 1 ], context, downstream ))
                 {
-                    result.splice(
-                        index,
-                        2,
-                        splitProof.retainedStage,
-                        result[ index + 1 ],
-                        splitProof.deferredStage
-                    );
-                    return result;
+                    const splitProof = proveAddFieldSplitAcrossSort( pipeline[ index ], pipeline[ index + 1 ] )
+                        ?? proveProjectSplitAcrossSort( pipeline[ index ], pipeline[ index + 1 ] );
+                    if(
+                        splitProof
+                        && canMoveStageAcrossStage(
+                            splitProof.deferredStage,
+                            pipeline[ index + 1 ],
+                            'later',
+                            context,
+                            downstream
+                        )
+                    )
+                    {
+                        const result = [ ...pipeline ];
+                        result.splice(
+                            index,
+                            2,
+                            splitProof.retainedStage,
+                            result[ index + 1 ],
+                            splitProof.deferredStage
+                        );
+                        return result;
+                    }
                 }
             }
         }
 
-        return result;
+        return pipeline;
     }
 }
