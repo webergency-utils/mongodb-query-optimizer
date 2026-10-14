@@ -423,6 +423,102 @@ describe( 'ExpressionSimplificationPass unit and proof tests', () =>
         expect( simplifyExpression({ $cond: { if: '$flag', then: { $literal: '$x' }, else: { $literal: '$x' } } })).toEqual({ $literal: '$x' });
         expect( simplifyExpression({ $cond: [ { $divide: [ '$a', '$b' ] }, 42, 42 ] })).toEqual({ $cond: [ { $divide: [ '$a', '$b' ] }, 42, 42 ] });
         expect( simplifyExpression({ $cond: [ { $rand: {} }, 42, 42 ] })).toEqual({ $cond: [ { $rand: {} }, 42, 42 ] });
+
+        // Boolean operand deduplication in $and / $or and identical $ifNull collapse (#20)
+        expect( simplifyExpression({
+            $and: [
+                { $eq: [ '$a', 1 ] },
+                { $eq: [ '$a', 1 ] },
+                { $gt: [ '$b', 2 ] }
+            ]
+        })).toEqual({
+            $and: [
+                { $eq: [ '$a', 1 ] },
+                { $gt: [ '$b', 2 ] }
+            ]
+        });
+
+        expect( simplifyExpression({
+            $or: [
+                { $eq: [ '$a', 1 ] },
+                { $eq: [ '$a', 1 ] }
+            ]
+        })).toEqual({ $eq: [ '$a', 1 ] });
+
+        expect( simplifyExpression({ $ifNull: [ '$x', '$x' ] })).toBe( '$x' );
+        expect( simplifyExpression({
+            $ifNull: [ { $eq: [ '$a', 1 ] }, { $eq: [ '$a', 1 ] } ]
+        })).toEqual({ $eq: [ '$a', 1 ] });
+        expect( simplifyExpression({
+            $cond: [ '$flag', { $eq: [ '$a', 1 ] }, { $eq: [ '$a', 1 ] } ]
+        })).toEqual({ $eq: [ '$a', 1 ] });
+        expect( simplifyExpression({
+            $cond: { if: '$flag', then: { $eq: [ '$a', 1 ] }, else: { $eq: [ '$a', 1 ] } }
+        })).toEqual({ $eq: [ '$a', 1 ] });
+        expect( simplifyExpression({ $ifNull: [ { $rand: {} }, { $rand: {} } ] })).toEqual({
+            $ifNull: [ { $rand: {} }, { $rand: {} } ]
+        });
+
+        // Boolean constant comparisons (#20)
+        expect( simplifyExpression({ $eq: [ true, true ] })).toBe( true );
+        expect( simplifyExpression({ $eq: [ true, false ] })).toBe( false );
+        expect( simplifyExpression({ $ne: [ true, false ] })).toBe( true );
+        expect( simplifyExpression({ $ne: [ false, false ] })).toBe( false );
+
+        // Math operators: $sqrt, $pow, $trunc, $round (#19)
+        expect( simplifyExpression({ $sqrt: 16 })).toBe( 4 );
+        expect( simplifyExpression({ $sqrt: [ 0 ] })).toBe( 0 );
+        expect( simplifyExpression({ $sqrt: -1 })).toEqual({ $sqrt: -1 });
+        expect( simplifyExpression({ $pow: [ 2, 10 ] })).toBe( 1024 );
+        expect( simplifyExpression({ $pow: [ 0, 2 ] })).toBe( 0 );
+        expect( simplifyExpression({ $pow: [ 10, 1000 ] })).toEqual({ $pow: [ 10, 1000 ] });
+        expect( simplifyExpression({ $pow: [ '$x', 2 ] })).toEqual({ $pow: [ '$x', 2 ] });
+        expect( simplifyExpression({ $trunc: 3.9 })).toBe( 3 );
+        expect( simplifyExpression({ $trunc: [ -0.4 ] })).toBe( 0 );
+        expect( simplifyExpression({ $trunc: [ 3.9, 0 ] })).toBe( 3 );
+        expect( simplifyExpression({ $trunc: [ -0.4, 0 ] })).toBe( 0 );
+        expect( simplifyExpression({ $trunc: [ 3.9, 1 ] })).toEqual({ $trunc: [ 3.9, 1 ] });
+        expect( simplifyExpression({ $round: 3.6 })).toBe( 4 );
+        expect( simplifyExpression({ $round: [ -0.2 ] })).toBe( 0 );
+        expect( simplifyExpression({ $round: [ 3.6, 0 ] })).toBe( 4 );
+        expect( simplifyExpression({ $round: [ -0.2, 0 ] })).toBe( 0 );
+
+        // String operators: $trim, $ltrim, $rtrim, $substrBytes, $substrCP (#19)
+        expect( simplifyExpression({ $trim: { input: '  hello  ' } })).toBe( 'hello' );
+        expect( simplifyExpression({ $ltrim: { input: '  hello  ' } })).toBe( 'hello  ' );
+        expect( simplifyExpression({ $rtrim: { input: '  $hello  ' } })).toBe( '  $hello' );
+        expect( simplifyExpression({ $ltrim: { input: '  $hello' } })).toEqual({ $literal: '$hello' });
+        expect( simplifyExpression({ $trim: { input: '  hello  ', chars: ' ' } })).toEqual({
+            $trim: { input: '  hello  ', chars: ' ' }
+        });
+        expect( simplifyExpression({ $trim: { input: '$field' } })).toEqual({ $trim: { input: '$field' } });
+        expect( simplifyExpression({ $substrBytes: [ 'abcdef', 1, 3 ] })).toBe( 'bcd' );
+        expect( simplifyExpression({ $substrCP: [ 'a$bc', 1, 3 ] })).toEqual({ $literal: '$bc' });
+        expect( simplifyExpression({ $substrCP: [ '$field', 0, 2 ] })).toEqual({ $substrCP: [ '$field', 0, 2 ] });
+
+        // Array operators: $concatArrays, $isArray, $arrayElemAt, $first, $last, $reverseArray (#18)
+        expect( simplifyExpression({ $concatArrays: [ [ 1, 2 ], [ 'a', true ] ] })).toEqual([ 1, 2, 'a', true ]);
+        expect( simplifyExpression({ $concatArrays: [ [ 1 ], '$dynamic' ] })).toEqual({
+            $concatArrays: [ [ 1 ], '$dynamic' ]
+        });
+        expect( simplifyExpression({ $isArray: [ [ 1, 2 ] ] })).toBe( true );
+        expect( simplifyExpression({ $isArray: 'scalar' })).toBe( false );
+        expect( simplifyExpression({ $isArray: '$field' })).toEqual({ $isArray: '$field' });
+        expect( simplifyExpression({ $isArray: [ 1, 2 ] })).toEqual({ $isArray: [ 1, 2 ] });
+        expect( simplifyExpression({ $arrayElemAt: [ [ 'a', 'b', 'c' ], 1 ] })).toBe( 'b' );
+        expect( simplifyExpression({ $arrayElemAt: [ [ 'a', 'b', 'c' ], -1 ] })).toBe( 'c' );
+        expect( simplifyExpression({ $arrayElemAt: [ [ 'a', 'b' ], 5 ] })).toEqual({
+            $arrayElemAt: [ [ 'a', 'b' ], 5 ]
+        });
+        expect( simplifyExpression({ $arrayElemAt: [ '$arr', 0 ] })).toEqual({
+            $arrayElemAt: [ '$arr', 0 ]
+        });
+        expect( simplifyExpression({ $first: [ [ 10, 20, 30 ] ] })).toBe( 10 );
+        expect( simplifyExpression({ $last: [ [ 10, 20, 30 ] ] })).toBe( 30 );
+        expect( simplifyExpression({ $first: [ [] ] })).toEqual({ $first: [ [] ] });
+        expect( simplifyExpression({ $first: '$arr' })).toEqual({ $first: '$arr' });
+        expect( simplifyExpression({ $reverseArray: [ [ 1, 2, 3 ] ] })).toEqual([ 3, 2, 1 ]);
+        expect( simplifyExpression({ $reverseArray: '$arr' })).toEqual({ $reverseArray: '$arr' });
     });
 
     it( 'never simplifies or inspects inside $literal subtrees', () =>
@@ -646,5 +742,110 @@ describe( 'ExpressionSimplificationPass unit and proof tests', () =>
 
         expect( pass.execute( unchanged, defaultContext )).toBe( unchanged );
         expect( pass.execute([ null, 'invalid' ], defaultContext )).toEqual([ null, 'invalid' ]);
+    });
+
+    it( 'folds constant $size, $filter, $map, type conversions, and string operators and simplifies $bucket/$sortByCount/$replaceRoot/$replaceWith', () =>
+    {
+        // Constant $size, $filter, $map (#19)
+        expect( simplifyExpression({ $size: [ [ 1, 2, 3 ] ] })).toBe( 3 );
+        expect( simplifyExpression({ $size: { $filter: { input: [ 10, 20 ], cond: true } } })).toBe( 2 );
+        expect( simplifyExpression({ $filter: { input: [ 1, 2 ], cond: true } })).toEqual([ 1, 2 ]);
+        expect( simplifyExpression({ $filter: { input: [ 1, 2 ], cond: false } })).toEqual([]);
+        expect( simplifyExpression({ $filter: { input: [ 1, 2 ], cond: '$$this' } })).toEqual({
+            $filter: { input: [ 1, 2 ], cond: '$$this' }
+        });
+        expect( simplifyExpression({ $filter: { input: [ 1, 2 ], cond: true, limit: 1 } })).toEqual({
+            $filter: { input: [ 1, 2 ], cond: true, limit: 1 }
+        });
+        expect( simplifyExpression({ $map: { input: [], in: '$$this' } })).toEqual([]);
+        expect( simplifyExpression({ $map: { input: [ 1 ], in: '$$this' } })).toEqual({
+            $map: { input: [ 1 ], in: '$$this' }
+        });
+
+        // Constant $toBool, $toString, $toInt, $toDouble, $type, $split, $indexOfBytes, $indexOfCP (#20)
+        expect( simplifyExpression({ $toBool: 1 })).toBe( true );
+        expect( simplifyExpression({ $toBool: 0 })).toBe( false );
+        expect( simplifyExpression({ $toBool: null })).toEqual({ $toBool: null });
+        expect( simplifyExpression({ $toBool: [ 1, 2 ] })).toEqual({ $toBool: [ 1, 2 ] });
+        expect( simplifyExpression({ $toBool: '$x' })).toEqual({ $toBool: '$x' });
+        expect( simplifyExpression({ $toString: 42 })).toBe( '42' );
+        expect( simplifyExpression({ $toString: { $literal: '$abc' } })).toEqual({ $literal: '$abc' });
+        expect( simplifyExpression({ $toString: null })).toEqual({ $toString: null });
+        expect( simplifyExpression({ $toInt: 3.9 })).toBe( 3 );
+        expect( simplifyExpression({ $toInt: -0.2 })).toBe( 0 );
+        expect( simplifyExpression({ $toInt: true })).toBe( 1 );
+        expect( simplifyExpression({ $toInt: false })).toBe( 0 );
+        expect( simplifyExpression({ $toInt: '123' })).toBe( 123 );
+        expect( simplifyExpression({ $toInt: '-0' })).toBe( 0 );
+        expect( simplifyExpression({ $toInt: '999999999999999999999' })).toEqual({ $toInt: '999999999999999999999' });
+        expect( simplifyExpression({ $toInt: 'abc' })).toEqual({ $toInt: 'abc' });
+        expect( simplifyExpression({ $toDouble: 5.5 })).toBe( 5.5 );
+        expect( simplifyExpression({ $toDouble: -0 })).toBe( 0 );
+        expect( simplifyExpression({ $toDouble: true })).toBe( 1 );
+        expect( simplifyExpression({ $toDouble: false })).toBe( 0 );
+        expect( simplifyExpression({ $toDouble: 'abc' })).toEqual({ $toDouble: 'abc' });
+        expect( simplifyExpression({ $type: null })).toBe( 'null' );
+        expect( simplifyExpression({ $type: true })).toBe( 'bool' );
+        expect( simplifyExpression({ $type: 'hello' })).toBe( 'string' );
+        expect( simplifyExpression({ $type: 42 })).toEqual({ $type: 42 });
+        expect( simplifyExpression({ $split: [ 'a,b,c', ',' ] })).toEqual([ 'a', 'b', 'c' ]);
+        expect( simplifyExpression({ $split: [ '$a,b', ',' ] })).toEqual({ $split: [ '$a,b', ',' ] });
+        expect( simplifyExpression({ $split: [ 'a,$b', ',' ] })).toEqual({ $split: [ 'a,$b', ',' ] });
+        expect( simplifyExpression({ $indexOfBytes: [ 'hello world', 'world' ] })).toBe( 6 );
+        expect( simplifyExpression({ $indexOfCP: [ 'hello', 'z' ] })).toBe( -1 );
+        expect( simplifyExpression({ $indexOfCP: [ '$field', 'z' ] })).toEqual({ $indexOfCP: [ '$field', 'z' ] });
+
+        // Stage coverage for $sortByCount, $replaceWith, $replaceRoot, $bucket
+        const stagePipeline = [
+            { $sortByCount: { $cond: [ true, '$tag', '$other' ] } },
+            { $sortByCount: '$tag' },
+            { $replaceWith: { a: { $add: [ 1, 2 ] } } },
+            { $replaceWith: '$sub' },
+            { $replaceRoot: { newRoot: { a: { $add: [ 1, 2 ] } } } },
+            { $replaceRoot: { newRoot: '$sub' } },
+            {
+                $bucket: {
+                    groupBy: { $add: [ 1, 2 ] },
+                    boundaries: [ 0, 10 ],
+                    output: {
+                        total: { $sum: { $add: [ 2, 3 ] } },
+                        unchanged: { $max: '$x' },
+                        nonAccObj: { $unknownAcc: '$x' },
+                        nonPlain: 1
+                    }
+                }
+            },
+            {
+                $bucket: {
+                    groupBy: '$year',
+                    boundaries: [ 0, 10 ],
+                    output: {
+                        unchanged: { $max: '$x' }
+                    }
+                }
+            },
+            { $bucket: { boundaries: [ 0, 10 ] } },
+            { $limit: 5 }
+        ];
+
+        const simplifiedStages = pass.execute( stagePipeline, defaultContext );
+        expect( simplifiedStages[ 0 ] ).toEqual({ $sortByCount: '$tag' });
+        expect( simplifiedStages[ 1 ] ).toEqual({ $sortByCount: '$tag' });
+        expect( simplifiedStages[ 2 ] ).toEqual({ $replaceWith: { a: 3 } });
+        expect( simplifiedStages[ 3 ] ).toEqual({ $replaceWith: '$sub' });
+        expect( simplifiedStages[ 4 ] ).toEqual({ $replaceRoot: { newRoot: { a: 3 } } });
+        expect( simplifiedStages[ 5 ] ).toEqual({ $replaceRoot: { newRoot: '$sub' } });
+        expect( simplifiedStages[ 6 ] ).toEqual({
+            $bucket: {
+                groupBy: 3,
+                boundaries: [ 0, 10 ],
+                output: {
+                    total: { $sum: 5 },
+                    unchanged: { $max: '$x' },
+                    nonAccObj: { $unknownAcc: '$x' },
+                    nonPlain: 1
+                }
+            }
+        });
     });
 });

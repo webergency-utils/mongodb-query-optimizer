@@ -1038,6 +1038,80 @@ describe('filter-bearing pipelines', () =>
         })).toEqual({
             status: { $not: { $eq: 'a' }, $ne: 'b' },
         });
+
+        // Prunes $in elements outside numeric and Date range bounds
+        expect(optimizeFilter({
+            score: { $in: [1, 5, 10, 15, 20], $gte: 5, $lt: 15 },
+        })).toEqual({
+            score: { $in: [5, 10], $gte: 5, $lt: 15 },
+        });
+        expect(optimizeFilter({
+            score: { $in: [5, 10], $gt: 5, $lte: 10 },
+        })).toEqual({
+            score: { $in: [10], $gt: 5, $lte: 10 },
+        });
+        expect(optimizeFilter({
+            score: { $in: [1, 2], $gt: 10 },
+        })).toEqual({
+            score: { $in: [] },
+        });
+        expect(optimizeFilter({
+            score: { $in: [5, 'ten', 20], $lt: 10 },
+        })).toEqual({
+            score: { $in: [5, 'ten'], $lt: 10 },
+        });
+        const d1 = new Date('2025-01-01T00:00:00Z');
+        const d2 = new Date('2025-06-01T00:00:00Z');
+        const d3 = new Date('2025-12-01T00:00:00Z');
+        expect(optimizeFilter({
+            createdAt: { $in: [d1, d2, d3], $gt: d1, $lte: d2 },
+        })).toEqual({
+            createdAt: { $in: [d2], $gt: d1, $lte: d2 },
+        });
+
+        // Deduplicates $all and detects contradiction against $ne / $nin
+        expect(optimizeFilter({
+            tags: { $all: ['a', 'b', 'a', /foo/i, /foo/i] },
+        })).toEqual({
+            tags: { $all: ['a', 'b', /foo/i] },
+        });
+        expect(optimizeFilter({
+            tags: { $all: ['a', 'b'], $ne: 'b' },
+        })).toEqual({
+            tags: { $in: [] },
+        });
+        expect(optimizeFilter({
+            tags: { $all: ['a', 'b'], $nin: ['x', 'a'] },
+        })).toEqual({
+            tags: { $in: [] },
+        });
+        expect(optimizeFilter({
+            tags: { $all: [/foo/], $ne: 'foo' },
+        })).toEqual({
+            tags: { $all: [/foo/], $ne: 'foo' },
+        });
+
+        // Consolidates same-field scalar equality / $in branches in $or (#18)
+        expect(optimizeFilter({
+            $or: [
+                { status: 'active' },
+                { status: { $eq: 'pending' } },
+                { status: { $in: ['review', 'active'] } },
+            ],
+        })).toEqual({
+            status: { $in: ['active', 'pending', 'review'] },
+        });
+
+        // Extracts common factors shared across all $or branches (#17)
+        expect(optimizeFilter({
+            $or: [
+                { tenant: 'acme', role: 'admin' },
+                { tenant: 'acme', role: 'owner' },
+            ],
+        })).toEqual({
+            tenant: 'acme',
+            role: { $in: ['admin', 'owner'] },
+        });
     });
 });
 
@@ -1131,6 +1205,52 @@ describe( 'production safe filter profile (5 active rules)', () =>
         };
 
         expect( productionOptimizeFilter( dynamic ) ).toEqual( dynamic );
+    } );
+
+    it( 'normalizes constant $expr, $nor single-branch/contradiction/tautology, and $and/$or boolean absorption', () =>
+    {
+        // Constant $expr truthy drops $expr; falsy collapses to contradiction
+        expect( productionOptimizeFilter({ $expr: true, a: 1 }) ).toEqual({ a: 1 });
+        expect( productionOptimizeFilter({ $expr: 42 }) ).toEqual({});
+        expect( productionOptimizeFilter({ $expr: false, a: 1 }) ).toEqual({ _id: { $in: [] } });
+        expect( productionOptimizeFilter({ $expr: 0 }) ).toEqual({ _id: { $in: [] } });
+        expect( productionOptimizeFilter({ $expr: null }) ).toEqual({ _id: { $in: [] } });
+
+        // $nor tautological branch -> contradiction; contradictory branch -> pruned; single branch -> $ne / $nin
+        expect( productionOptimizeFilter({
+            $nor: [ {}, { a: 1 } ]
+        }) ).toEqual({ _id: { $in: [] } });
+
+        expect( productionOptimizeFilter({
+            $nor: [ { a: { $in: [] } }, { b: 'x' } ]
+        }) ).toEqual({ b: { $ne: 'x' } });
+
+        expect( productionOptimizeFilter({
+            $nor: [ { b: { $eq: 10 } } ]
+        }) ).toEqual({ b: { $ne: 10 } });
+
+        expect( productionOptimizeFilter({
+            $nor: [ { b: { $in: [ 1, 2 ] } } ]
+        }) ).toEqual({ b: { $nin: [ 1, 2 ] } });
+
+        expect( productionOptimizeFilter({
+            $nor: [ { a: { $in: [] } } ]
+        }) ).toEqual({});
+
+        // Boolean absorption: A && (A || B) -> A, A || (A && B) -> A
+        expect( productionOptimizeFilter({
+            $and: [
+                { a: 1 },
+                { $or: [ { a: 1 }, { b: 2 } ] }
+            ]
+        }) ).toEqual({ a: 1 });
+
+        expect( productionOptimizeFilter({
+            $or: [
+                { a: 1 },
+                { $and: [ { a: 1 }, { b: 2 } ] }
+            ]
+        }) ).toEqual({ a: 1 });
     } );
 } );
 

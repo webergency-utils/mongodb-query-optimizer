@@ -111,6 +111,25 @@ describe( 'proveUnwindPrefilter', () =>
                 ]
             }
         });
+
+        // Extracts qualifying conjunct even when paired with non-qualifying $ne on unwound path
+        const mixedMatch =
+        {
+            $match:
+            {
+                'items.status': 'active',
+                'items.tag': { $ne: 'deleted' }
+            }
+        };
+        const mixedProof = proveUnwindPrefilter( unwind, mixedMatch );
+        expect( mixedProof?.prefilterStage ).toEqual({
+            $match: {
+                $or: [
+                    { 'items.status': 'active' },
+                    { items: { $elemMatch: { $type: 'array' } } }
+                ]
+            }
+        });
     } );
 
     it( 'rejects when preserveNullAndEmptyArrays is true', () =>
@@ -482,6 +501,51 @@ describe( 'UnwindPrefilterPass', () =>
         const result = pass.execute( pipeline );
         expect( result ).toEqual( pipeline );
     } );
+
+    it( 'synthesizes prefilter for $or of qualifying predicates on the unwound path and rejects invalid branches', () =>
+    {
+        const pipeline = [
+            { $unwind: '$items' },
+            {
+                $match: {
+                    $or: [
+                        { 'items.sku': 'A' },
+                        { 'items.price': { $gt: 50 } }
+                    ]
+                }
+            }
+        ];
+
+        expect( pass.execute( pipeline )[ 0 ] ).toEqual({
+            $match: {
+                $or: [
+                    {
+                        $or: [
+                            { 'items.sku': 'A' },
+                            { 'items.price': { $gt: 50 } }
+                        ]
+                    },
+                    { items: { $elemMatch: { $type: 'array' } } }
+                ]
+            }
+        });
+
+        // Rejects $or when a branch is non-object, multi-key, or non-qualifying
+        expect( pass.execute([
+            { $unwind: '$items' },
+            { $match: { $or: [ 'invalid' ] } }
+        ])).toHaveLength( 2 );
+
+        expect( pass.execute([
+            { $unwind: '$items' },
+            { $match: { $or: [ { 'items.sku': 'A', 'items.price': 10 } ] } }
+        ])).toHaveLength( 2 );
+
+        expect( pass.execute([
+            { $unwind: '$items' },
+            { $match: { $or: [ { 'items.sku': 'A' }, { other: 1 } ] } }
+        ])).toHaveLength( 2 );
+    });
 } );
 
 describe( 'optimizePipeline execution parity for unwind prefilter', () =>

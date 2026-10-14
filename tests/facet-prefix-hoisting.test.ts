@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+    proveFacetDeadBranchPruning,
     proveFacetPrefixHoisting,
+    proveUnionWithPushdown,
 } from '../src/passes/facet-proofs.js';
 import {
     FacetPrefixHoistingPass,
@@ -247,6 +249,18 @@ describe('proveFacetPrefixHoisting', () =>
             }
         };
         expect( proveFacetPrefixHoisting( volatileLookupFacet )).toBeNull();
+
+        // Hoists shared $count and $sortByCount stages
+        const countAndSortByCountFacet = {
+            $facet: {
+                a: [ { $sortByCount: '$category' }, { $limit: 5 } ],
+                b: [ { $sortByCount: '$category' }, { $count: 'numCategories' } ]
+            }
+        };
+        const countSortProof = proveFacetPrefixHoisting( countAndSortByCountFacet );
+        expect( countSortProof?.hoistedStages ).toEqual([
+            { $sortByCount: '$category' }
+        ]);
     });
 
     it('rejects when leading stage is not a plain object or has multiple keys', () =>
@@ -386,6 +400,200 @@ describe('FacetPrefixHoistingPass', () =>
 
         // Blocked under strictErrors
         expect(pass.execute(pipeline, { strictFieldOrder: false, strictErrors: true })).toEqual(pipeline);
+    });
+
+    it('prunes dead $facet branches discarded downstream while keeping at least one branch', () =>
+    {
+        // Prunes branch b when downstream $project only includes branch a
+        expect(pass.execute([
+            {
+                $facet: {
+                    a: [ { $limit: 5 } ],
+                    b: [ { $count: 'total' } ],
+                },
+            },
+            { $project: { a: 1 } },
+        ])).toEqual([
+            {
+                $facet: {
+                    a: [ { $limit: 5 } ],
+                },
+            },
+            { $project: { a: 1 } },
+        ]);
+
+        // Keeps at least one branch when all branches are discarded (e.g. $unset all)
+        expect(proveFacetDeadBranchPruning(
+            {
+                $facet: {
+                    a: [ { $limit: 5 } ],
+                    b: [ { $count: 'total' } ],
+                },
+            },
+            [ { $unset: [ 'a', 'b' ] } ]
+        )).toEqual({
+            $facet: {
+                b: [ { $count: 'total' } ],
+            },
+        });
+
+        // Tracks intermediate stage reads before downstream discard
+        expect(proveFacetDeadBranchPruning(
+            {
+                $facet: {
+                    a: [ { $limit: 5 } ],
+                    b: [ { $limit: 10 } ],
+                },
+            },
+            [
+                { $match: { 'b.0.active': true } },
+                { $project: { a: 1 } },
+            ]
+        )).toBeNull();
+
+        expect(proveFacetDeadBranchPruning(
+            {
+                $facet: {
+                    a: [ { $limit: 5 } ],
+                    b: [ { $limit: 10 } ],
+                    c: [ { $limit: 15 } ],
+                },
+            },
+            [
+                { $match: { 'a.0.active': true } },
+                { $project: { a: 1, b: 1 } },
+            ]
+        )).toEqual({
+            $facet: {
+                a: [ { $limit: 5 } ],
+                b: [ { $limit: 10 } ],
+            },
+        });
+
+        // Rejection cases: invalid input, empty suffix, single branch, strictErrors on throwing branch, non-continuable intermediate
+        expect(proveFacetDeadBranchPruning({ $match: {} }, [ { $project: { a: 1 } } ])).toBeNull();
+        expect(proveFacetDeadBranchPruning({ $facet: { a: [], b: [] } }, [])).toBeNull();
+        expect(proveFacetDeadBranchPruning({ $facet: { a: [] } }, [ { $project: { a: 1 } } ])).toBeNull();
+        expect(proveFacetDeadBranchPruning(
+            {
+                $facet: {
+                    a: [ { $addFields: { x: { $divide: [ '$a', 0 ] } } } ],
+                    b: [ { $addFields: { y: { $divide: [ '$b', 0 ] } } } ],
+                },
+            },
+            [ { $project: { a: 1 } } ],
+            { strictFieldOrder: false, strictErrors: true }
+        )).toBeNull();
+        expect(proveFacetDeadBranchPruning(
+            {
+                $facet: {
+                    a: [ { $limit: 5 } ],
+                    b: [ { $limit: 10 } ],
+                },
+            },
+            [ { $limit: 1 } ]
+        )).toBeNull();
+        expect(proveFacetDeadBranchPruning(
+            {
+                $facet: {
+                    a: [ { $limit: 5 } ],
+                    b: [ { $limit: 10 } ],
+                },
+            },
+            [ { $replaceRoot: { newRoot: '$other' } }, { $project: { a: 1 } } ]
+        )).toBeNull();
+    });
+
+    it('pushes post-$unionWith $match and head $limit / $skip+$limit into $unionWith subpipeline', () =>
+    {
+        // Post-$unionWith $match pushdown (both string shorthand and object form)
+        expect(pass.execute([
+            { $unionWith: 'archivedOrders' },
+            { $match: { status: 'completed' } },
+        ])).toEqual([
+            { $match: { status: 'completed' } },
+            {
+                $unionWith: {
+                    coll: 'archivedOrders',
+                    pipeline: [ { $match: { status: 'completed' } } ],
+                },
+            },
+        ]);
+
+        // Head $limit pushdown into $unionWith subpipeline (and tightening larger inner $limit)
+        expect(pass.execute([
+            { $unionWith: { coll: 'archivedOrders', pipeline: [ { $sort: { ts: -1 } } ] } },
+            { $limit: 10 },
+        ])).toEqual([
+            {
+                $unionWith: {
+                    coll: 'archivedOrders',
+                    pipeline: [ { $sort: { ts: -1 } }, { $limit: 10 } ],
+                },
+            },
+            { $limit: 10 },
+        ]);
+
+        expect(proveUnionWithPushdown(
+            { $unionWith: { coll: 'archivedOrders', pipeline: [ { $limit: 50 } ] } },
+            [ { $skip: 5 }, { $limit: 10 } ]
+        )).toEqual({
+            updatedUnionStage: {
+                $unionWith: {
+                    coll: 'archivedOrders',
+                    pipeline: [ { $limit: 15 } ],
+                },
+            },
+        });
+
+        // Does not re-push when inner $limit is already <= cap
+        expect(proveUnionWithPushdown(
+            { $unionWith: { coll: 'archivedOrders', pipeline: [ { $limit: 5 } ] } },
+            [ { $limit: 10 } ]
+        )).toBeNull();
+
+        // Rejection guards
+        expect(proveUnionWithPushdown({ $match: {} }, [ { $limit: 5 } ])).toBeNull();
+        expect(proveUnionWithPushdown({ $unionWith: 'c' }, [])).toBeNull();
+        expect(proveUnionWithPushdown({ $unionWith: null }, [ { $limit: 5 } ])).toBeNull();
+        expect(proveUnionWithPushdown(
+            { $unionWith: { coll: 'c', pipeline: [ { $addFields: { x: { $divide: [ '$a', 0 ] } } } ] } },
+            [ { $limit: 5 } ],
+            { strictFieldOrder: false, strictErrors: true }
+        )).toBeNull();
+        expect(proveUnionWithPushdown(
+            { $unionWith: 'c' },
+            [ { $skip: 5 }, { $sort: { a: 1 } } ]
+        )).toBeNull();
+        expect(proveUnionWithPushdown(
+            { $unionWith: 'c' },
+            [ null ]
+        )).toBeNull();
+        expect(proveUnionWithPushdown(
+            { $unionWith: 'c' },
+            [ { $limit: 5 } ]
+        )).toEqual({
+            updatedUnionStage: {
+                $unionWith: {
+                    coll: 'c',
+                    pipeline: [ { $limit: 5 } ]
+                }
+            }
+        });
+        expect(proveUnionWithPushdown(
+            { $unionWith: 'c' },
+            [ { $match: { status: 'ok' } } ],
+            { strictFieldOrder: false, strictErrors: true }
+        )).not.toBeNull();
+        expect(proveUnionWithPushdown(
+            { $unionWith: 'c' },
+            [ { $match: { $expr: { $divide: [ '$a', 0 ] } } } ],
+            { strictFieldOrder: false, strictErrors: true }
+        )).toBeNull();
+        expect(proveUnionWithPushdown(
+            { $unionWith: 'c' },
+            [ { $match: { $expr: { $rand: {} } } } ]
+        )).toBeNull();
     });
 });
 

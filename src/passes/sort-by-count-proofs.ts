@@ -64,3 +64,18 @@ export function proveSortByCountSimplification(
         }
     };
 }
+
+export function proveSeparatedSortByCountSimplification(
+    groupStage : unknown,
+    matchStage : unknown,
+    sortStage  : unknown
+): SortByCountSimplificationProof | null
+{
+    const matchSpec = getStageSpec<Record<string, any>>( matchStage, '$match' );
+    if( !matchSpec )
+    {
+        return null;
+    }
+
+    return proveSortByCountSimplification( groupStage, sortStage );
+}

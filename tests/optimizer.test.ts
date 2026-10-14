@@ -1431,5 +1431,41 @@ describe('correctness regressions', () => {
         expect(optimized[0].$match.name.flags).toBe('i');
         expect(optimized[0].$match.status).toBe('active');
     });
+
+    it('should eliminate dead $unionWith when its subpipeline starts with a proven filter contradiction', () => {
+        const pipeline = [
+            { $match: { status: 'active' } },
+            {
+                $unionWith: {
+                    coll: 'archived_orders',
+                    pipeline: [
+                        { $match: { age: { $gt: 50, $lt: 20 } } },
+                        { $project: { _id: 1 } }
+                    ]
+                }
+            },
+            {
+                $unionWith: {
+                    coll: 'valid_orders',
+                    pipeline: [
+                        { $match: { status: 'open' } }
+                    ]
+                }
+            }
+        ];
+
+        const optimized = optimizePipeline(pipeline);
+        expect(optimized).toEqual([
+            { $match: { status: 'active' } },
+            {
+                $unionWith: {
+                    coll: 'valid_orders',
+                    pipeline: [
+                        { $match: { status: 'open' } }
+                    ]
+                }
+            }
+        ]);
+    });
 });
 

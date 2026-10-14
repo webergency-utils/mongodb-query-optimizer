@@ -688,4 +688,144 @@ describe('optimizePipeline execution parity for group filter pushdown', () =>
         const result = pass.execute( pipeline, { strictFieldOrder: false, strictErrors: true } );
         expect( result ).toEqual( pipeline );
     });
+
+    it('pushes direct fields and null-rejection for computed composite _id subkeys while retaining postfilter', () =>
+    {
+        const groupWithComputedComposite = {
+            $group: {
+                _id: {
+                    dept: '$department',
+                    upperRole: { $toUpper: '$role' },
+                    lowerRole: { $toLower: '$role' }
+                },
+                count: { $sum: 1 }
+            }
+        };
+
+        const proof = proveGroupFilterPushdown(
+            groupWithComputedComposite,
+            {
+                $match: {
+                    '_id.dept': 'Sales',
+                    '_id.upperRole': 'MANAGER',
+                    '_id.lowerRole': { $in: [ 'manager', 'lead' ] },
+                    '_id.upperRole.nested': 'ignored',
+                    count: { $gt: 0 }
+                }
+            }
+        );
+
+        expect(proof).toEqual({
+            prefilterStage: {
+                $match: {
+                    department: 'Sales',
+                    role: { $exists: true, $ne: null }
+                }
+            },
+            postfilterStage: {
+                $match: {
+                    '_id.upperRole': 'MANAGER',
+                    '_id.lowerRole': { $in: [ 'manager', 'lead' ] },
+                    '_id.upperRole.nested': 'ignored',
+                    count: { $gt: 0 }
+                }
+            }
+        });
+
+        expect(proveGroupFilterPushdown(
+            groupWithComputedComposite,
+            { $match: { '_id.unknownKey': 'Sales' } }
+        )).toBeNull();
+
+        expect(proveGroupFilterPushdown(
+            {
+                $group: {
+                    _id: {
+                        dept: '$department',
+                        bad: { $add: [ '$a', '$b' ] }
+                    }
+                }
+            },
+            { $match: { '_id.dept': 'Sales' } }
+        )).toBeNull();
+
+        expect(proveGroupFilterPushdown(
+            {
+                $group: {
+                    _id: {
+                        dept: '$department',
+                        bad: { notAnOp: '$a' }
+                    }
+                }
+            },
+            { $match: { '_id.dept': 'Sales' } }
+        )).toBeNull();
+
+        // $or branches over _id
+        const simpleGroup = {
+            $group: {
+                _id: '$department',
+                total: { $sum: '$salary' }
+            }
+        };
+        expect(proveGroupFilterPushdown(
+            simpleGroup,
+            {
+                $match: {
+                    $or: [
+                        { _id: 'Sales' },
+                        { _id: 'Engineering' }
+                    ],
+                    total: { $gt: 100 }
+                }
+            }
+        )).toEqual({
+            prefilterStage: {
+                $match: {
+                    $or: [
+                        { department: 'Sales' },
+                        { department: 'Engineering' }
+                    ]
+                }
+            },
+            postfilterStage: {
+                $match: { total: { $gt: 100 } }
+            }
+        });
+
+        // Retains $or in postfilter when a branch is non-object or references accumulator
+        expect(proveGroupFilterPushdown(
+            simpleGroup,
+            {
+                $match: {
+                    _id: 'Sales',
+                    $or: [
+                        { _id: 'Sales' },
+                        { total: { $gt: 100 } }
+                    ]
+                }
+            }
+        )?.postfilterStage).toEqual({
+            $match: {
+                $or: [
+                    { _id: 'Sales' },
+                    { total: { $gt: 100 } }
+                ]
+            }
+        });
+
+        expect(proveGroupFilterPushdown(
+            simpleGroup,
+            {
+                $match: {
+                    _id: 'Sales',
+                    $or: [ 'invalid' as any ]
+                }
+            }
+        )?.postfilterStage).toEqual({
+            $match: {
+                $or: [ 'invalid' ]
+            }
+        });
+    });
 });

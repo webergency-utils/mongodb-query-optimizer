@@ -1254,12 +1254,23 @@ function analyzeKnownStage(
     }
 }
 
+const defaultStageSemanticsCache = new WeakMap<object, StageSemantics>();
+
 export function analyzeStage(
     stage: unknown,
     index = 0,
     suppliedContext?: Partial<SemanticAnalysisContext>,
 ): StageSemantics
 {
+    if (index === 0 && suppliedContext === undefined && isPlainObject(stage))
+    {
+        const cached = defaultStageSemanticsCache.get(stage);
+        if (cached !== undefined)
+        {
+            return cached;
+        }
+    }
+
     const context = normalizeContext(suppliedContext);
     if (!isPlainObject(stage))
     {
@@ -1289,6 +1300,11 @@ export function analyzeStage(
     }
 
     summary.observable = observableFromStage(summary);
+    if (index === 0 && suppliedContext === undefined)
+    {
+        defaultStageSemanticsCache.set(stage, summary);
+    }
+
     return summary;
 }
 

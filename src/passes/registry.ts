@@ -241,6 +241,11 @@ function optimizeStageChildrenForSweep(
         return stage;
     }
 
+    if( !( '$facet' in stage ) && !( '$lookup' in stage ) && !( '$unionWith' in stage ))
+    {
+        return stage;
+    }
+
     let current = stage;
     const facet = current.$facet;
 
@@ -368,6 +373,17 @@ function applyGlobalSweepWithDirty(
         }
     }
 
+    if( stageTypes.has( '$unionWith' ))
+    {
+        const withoutDeadUnionWith = current.filter(( stage ) => !isDeadUnionWithStage( stage, context ));
+
+        if( withoutDeadUnionWith.length !== current.length )
+        {
+            current = withoutDeadUnionWith;
+            modified = true;
+        }
+    }
+
     for( let i = 0; i < current.length; i++ )
     {
         const stage = current[ i ];
@@ -391,6 +407,40 @@ function applyGlobalSweepWithDirty(
         pipeline : current,
         modified
     };
+}
+
+function isDeadUnionWithStage( stage: any, context: GuaranteeContext ): boolean
+{
+    if( context.strictErrors || !stage || typeof stage !== 'object' || Array.isArray( stage ))
+    {
+        return false;
+    }
+
+    const unionWith = stage.$unionWith;
+
+    if(
+        !unionWith
+        || typeof unionWith !== 'object'
+        || Array.isArray( unionWith )
+        || typeof unionWith.coll !== 'string'
+        || unionWith.coll.length === 0
+        || !Array.isArray( unionWith.pipeline )
+        || unionWith.pipeline.length === 0
+    )
+    {
+        return false;
+    }
+
+    const firstSubStage = unionWith.pipeline[ 0 ];
+
+    return Boolean(
+        firstSubStage
+        && typeof firstSubStage === 'object'
+        && !Array.isArray( firstSubStage )
+        && firstSubStage.$match
+        && isFilterContradiction( firstSubStage.$match )
+        && !hasUnionWithAfter( unionWith.pipeline, 0 )
+    );
 }
 
 function hasUnionWithAfter( pipeline: readonly any[], fromIndex: number ): boolean
@@ -432,10 +482,10 @@ export function optimizePipelineWithPasses(
         return pipeline;
     }
 
-    let pristine: any;
+    let current: any;
     try
     {
-        pristine = deepClone( pipeline );
+        current = deepClone( pipeline );
     }
     catch
     {
@@ -444,18 +494,17 @@ export function optimizePipelineWithPasses(
 
     if( passes.length === 0 )
     {
-        return pristine;
+        return current;
     }
 
     if( !Number.isSafeInteger( sweepBudget ) || sweepBudget <= 0 )
     {
-        return pristine;
+        return current;
     }
 
     try
     {
         const context = resolvePipelineGuarantees( pipeline, options );
-        let current = deepClone( pristine );
         let currentFingerprint: string | null = null;
         let history: Set<string> | null = null;
 
@@ -488,7 +537,7 @@ export function optimizePipelineWithPasses(
 
             if( history!.has( nextFingerprint ))
             {
-                return pristine;
+                return deepClone( pipeline );
             }
 
             history!.add( nextFingerprint );
@@ -496,19 +545,27 @@ export function optimizePipelineWithPasses(
             currentFingerprint = nextFingerprint;
         }
 
-        return pristine;
+        return deepClone( pipeline );
     }
     catch
     {
-        return pristine;
+        return deepClone( pipeline );
     }
 }
+
+const activePipelinePasses: readonly PipelinePass[] = Object.freeze(
+    resolveCandidatePasses( activePipelineTransformationIds )
+);
+
+const defaultCandidatePipelinePasses: readonly PipelinePass[] = Object.freeze(
+    resolveCandidatePasses( candidatePipelineProfile )
+);
 
 export function optimizePipelineWithProductionRegistry( pipeline: any, options?: OptimizerOptions ): any
 {
     return optimizePipelineWithPasses(
         pipeline,
-        resolveCandidatePasses( activePipelineTransformationIds ),
+        activePipelinePasses,
         DEFAULT_GLOBAL_SWEEP_BUDGET,
         options
     );
@@ -524,7 +581,9 @@ export function optimizePipelineWithCandidateProfile(
     options?: OptimizerOptions,
 ): any
 {
-    const passes = resolveCandidatePasses(selectedTransformationIds);
+    const passes = selectedTransformationIds === candidatePipelineProfile
+        ? defaultCandidatePipelinePasses
+        : resolveCandidatePasses(selectedTransformationIds);
     const run = () => optimizePipelineWithPasses( pipeline, passes, DEFAULT_GLOBAL_SWEEP_BUDGET, options );
 
     if (selectedFilterRuleIds)

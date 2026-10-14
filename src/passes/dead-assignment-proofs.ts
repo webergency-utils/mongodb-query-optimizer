@@ -1,5 +1,5 @@
 import { DEFAULT_GUARANTEE_CONTEXT, type GuaranteeContext } from '../guarantees';
-import { isExactTopLevelPath } from '../analyzer/paths';
+import { isExactTopLevelPath, relatePaths } from '../analyzer/paths';
 import { analyzeProjection, projectionVisibility } from '../analyzer/projections';
 import { analyzeStage } from '../analyzer/semantics';
 import { isPlainObject } from '../utils';
@@ -125,6 +125,28 @@ function parseProjectForComputedPruning( stage: unknown ): Record<string, unknow
     return entry[ 1 ];
 }
 
+function allExactUnsetFields( stage: unknown ): Set<string> | null
+{
+    const entry = getSingleStageEntry( stage );
+    if( !entry || entry[ 0 ] !== '$unset' )
+    {
+        return null;
+    }
+
+    const values = Array.isArray( entry[ 1 ] ) ? entry[ 1 ] : [ entry[ 1 ] ];
+    if(
+        values.length === 0
+        || values.some(
+            ( value ) => typeof value !== 'string' || relatePaths( value, value ) !== 'exact'
+        )
+    )
+    {
+        return null;
+    }
+
+    return new Set( values as string[] );
+}
+
 /**
  * Proves that one or more computed assignments in an `$addFields`, `$set`, or
  * inclusion `$project` stage, or field removals in an `$unset` stage, are dead
@@ -138,14 +160,18 @@ export function proveDeadAssignmentElimination(
 {
     if( !Array.isArray( suffix ) || suffix.length === 0 ){ return null }
 
-    const unsetFields = exactUnsetFields( sourceStage );
+    const unsetFields = allExactUnsetFields( sourceStage );
     if( unsetFields )
     {
         const deadFields: string[] = [];
 
         for( const path of unsetFields )
         {
-            if( isFieldDeadInSuffix( path, suffix, context ))
+            const checkPath = isExactTopLevelPath( path )
+                ? path
+                : path.slice( 0, path.indexOf( '.' ));
+
+            if( isFieldDeadInSuffix( checkPath, suffix, context ))
             {
                 deadFields.push( path );
             }
@@ -254,5 +280,113 @@ export function proveDeadAssignmentElimination(
     return {
         replacementStage,
         eliminatedFields: Array.from( deadFields )
+    };
+}
+
+function collectGuaranteedPresentTopLevelFields( prefix: readonly unknown[] ): Set<string>
+{
+    const guaranteed = new Set<string>();
+
+    for( const stage of prefix )
+    {
+        const addField = parseAddFieldStage( stage, false );
+        if( addField )
+        {
+            for( const key of Object.keys( addField.specification ))
+            {
+                if( isExactTopLevelPath( key ))
+                {
+                    guaranteed.add( key );
+                }
+            }
+            continue;
+        }
+
+        const unset = allExactUnsetFields( stage );
+        if( unset )
+        {
+            for( const path of unset )
+            {
+                guaranteed.delete( path.split( '.' )[ 0 ]! );
+            }
+            continue;
+        }
+
+        const semantics = analyzeStage( stage );
+        if(
+            semantics.malformed
+            || semantics.unknown
+            || (
+                semantics.operator !== '$match'
+                && semantics.operator !== '$sort'
+                && semantics.operator !== '$limit'
+                && semantics.operator !== '$skip'
+            )
+        )
+        {
+            guaranteed.clear();
+        }
+    }
+
+    return guaranteed;
+}
+
+export function proveNoOpSelfAssignmentElimination(
+    prefix      : readonly unknown[],
+    sourceStage : unknown,
+    context     : GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT
+): DeadAssignmentProof | null
+{
+    if( context.strictFieldOrder || prefix.length === 0 )
+    {
+        return null;
+    }
+
+    const source = parseAddFieldStage( sourceStage, false );
+    if( !source )
+    {
+        return null;
+    }
+
+    const guaranteed = collectGuaranteedPresentTopLevelFields( prefix );
+    if( guaranteed.size === 0 )
+    {
+        return null;
+    }
+
+    const deadFields: string[] = [];
+
+    for( const [ path, expression ] of Object.entries( source.specification ))
+    {
+        if(
+            guaranteed.has( path )
+            && (
+                expression === `$${ path }`
+                || expression === `$$ROOT.${ path }`
+                || expression === `$$CURRENT.${ path }`
+            )
+        )
+        {
+            deadFields.push( path );
+        }
+    }
+
+    if( deadFields.length === 0 )
+    {
+        return null;
+    }
+
+    const deadSet = new Set( deadFields );
+    const remaining = Object.entries( source.specification ).filter(
+        ([ path ]) => !deadSet.has( path )
+    );
+
+    const replacementStage = remaining.length === 0
+        ? null
+        : { [ source.operator ]: Object.fromEntries( remaining ) };
+
+    return {
+        replacementStage,
+        eliminatedFields: deadFields
     };
 }

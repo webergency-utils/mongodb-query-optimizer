@@ -1,6 +1,11 @@
 import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
 import { PipelinePass } from './types.js';
-import { proveSortByCountSimplification } from './sort-by-count-proofs.js';
+import
+{
+    proveSeparatedSortByCountSimplification,
+    proveSortByCountSimplification
+}
+from './sort-by-count-proofs.js';
 
 export class SortByCountSimplificationPass implements PipelinePass
 {
@@ -13,17 +18,31 @@ export class SortByCountSimplificationPass implements PipelinePass
 
         for( let i = 0; i < pipeline.length; i++ )
         {
-            const currentStage = pipeline[i];
+            const currentStage = pipeline[ i ];
 
             if( i + 1 < pipeline.length )
             {
-                const nextStage = pipeline[i + 1];
+                const nextStage = pipeline[ i + 1 ];
                 const proof = proveSortByCountSimplification( currentStage, nextStage );
 
                 if( proof )
                 {
                     result.push( proof.sortByCountStage );
                     i++;
+                    continue;
+                }
+            }
+
+            if( i + 2 < pipeline.length )
+            {
+                const midStage = pipeline[ i + 1 ];
+                const sortStage = pipeline[ i + 2 ];
+                const separatedProof = proveSeparatedSortByCountSimplification( currentStage, midStage, sortStage );
+
+                if( separatedProof )
+                {
+                    result.push( separatedProof.sortByCountStage, midStage );
+                    i += 2;
                     continue;
                 }
             }

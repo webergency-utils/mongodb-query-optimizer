@@ -171,9 +171,138 @@ function writesCanSafelyMerge(
     return true;
 }
 
+function substituteFieldRefInExpression(
+    expr        : unknown,
+    targetField : string,
+    replacement : unknown
+): unknown
+{
+    if( typeof expr === 'string' )
+    {
+        if( expr === `$${ targetField }` )
+        {
+            return structuredClone( replacement );
+        }
+        return expr;
+    }
+
+    if( Array.isArray( expr ))
+    {
+        return expr.map(( item ) => substituteFieldRefInExpression( item, targetField, replacement ));
+    }
+
+    if( !isPlainObject( expr ))
+    {
+        return expr;
+    }
+
+    const entries = Object.entries( expr );
+    if( entries.length === 1 && entries[ 0 ]![ 0 ] === '$literal' )
+    {
+        return expr;
+    }
+
+    const result: Record<string, unknown> = {};
+
+    for( const [ key, val ] of entries )
+    {
+        result[ key ] = substituteFieldRefInExpression( val, targetField, replacement );
+    }
+
+    return result;
+}
+
+function containsExplicitDocumentVariableRef( value: unknown ): boolean
+{
+    if( typeof value === 'string' )
+    {
+        return value.startsWith( '$$CURRENT' ) || value.startsWith( '$$ROOT' );
+    }
+
+    if( Array.isArray( value ))
+    {
+        return value.some( containsExplicitDocumentVariableRef );
+    }
+
+    if( !isPlainObject( value ))
+    {
+        return false;
+    }
+
+    return Object.values( value ).some( containsExplicitDocumentVariableRef );
+}
+
+function tryInlineSameFieldOverwrite(
+    first  : AddFieldStage,
+    second : AddFieldStage
+): Record<string, unknown> | null
+{
+    if(
+        containsGetField( first.specification )
+        || containsGetField( second.specification )
+        || containsExplicitDocumentVariableRef( second.specification )
+    )
+    {
+        return null;
+    }
+
+    const secondSpec: Record<string, unknown> = structuredClone( second.specification );
+
+    for( const firstField of first.semantics.writes )
+    {
+        if( !dependenciesReadAnyPath( second.semantics, [ firstField ] ))
+        {
+            continue;
+        }
+
+        if(
+            !isExactTopLevelPath( firstField )
+            || !( firstField in second.specification )
+            || !second.semantics.dependencies.local.has( firstField )
+        )
+        {
+            return null;
+        }
+
+        for( const dep of second.semantics.dependencies.local )
+        {
+            if( dep.startsWith( `${ firstField }.` ))
+            {
+                return null;
+            }
+        }
+
+        for( const [ secondKey, secondExpr ] of Object.entries( second.specification ))
+        {
+            if( secondKey === firstField )
+            {
+                continue;
+            }
+
+            const summary = analyzeExpression( secondExpr, { documentScope: 'local' });
+            if( !arePathsDisjoint( summary.dependencies.local, [ firstField ] ))
+            {
+                return null;
+            }
+        }
+
+        secondSpec[ firstField ] = substituteFieldRefInExpression(
+            secondSpec[ firstField ],
+            firstField,
+            first.specification[ firstField ]
+        );
+    }
+
+    return {
+        ...first.specification,
+        ...secondSpec
+    };
+}
+
 /**
  * Proves that two adjacent add/set stages can share one input document.
- * The proof rejects hierarchical collisions and second-stage reads of first writes.
+ * The proof rejects hierarchical collisions and second-stage reads of first writes,
+ * unless the second stage overwrites the exact same top-level field it reads.
  */
 export function proveAdjacentAddFieldMerge(
     firstStage: unknown,
@@ -192,13 +321,29 @@ export function proveAdjacentAddFieldMerge(
             first.semantics.writes,
             second.semantics.writes,
         )
-        || dependenciesReadAnyPath(
+    )
+    {
+        return null;
+    }
+
+    if (
+        dependenciesReadAnyPath(
             second.semantics,
             first.semantics.writes,
         )
     )
     {
-        return null;
+        const inlined = tryInlineSameFieldOverwrite( first, second );
+        if( !inlined )
+        {
+            return null;
+        }
+
+        return {
+            mergedStage: {
+                [ first.operator ]: inlined
+            }
+        };
     }
 
     return {
@@ -328,6 +473,81 @@ function excludedIdValue(
     return first.specification._id;
 }
 
+function proveSimpleToComputedInclusionProjectMerge(
+    first       : SimpleProject,
+    secondStage : unknown
+): AdjacentProjectMergeProof | null
+{
+    const entry = getSingleStageEntry( secondStage );
+    if(
+        !entry
+        || entry[ 0 ] !== '$project'
+        || !isPlainObject( entry[ 1 ])
+        || Object.keys( entry[ 1 ]).length === 0
+        || containsGetField( entry[ 1 ])
+    )
+    {
+        return null;
+    }
+
+    const secondSpec = entry[ 1 ];
+    for( const path of Object.keys( secondSpec ))
+    {
+        if( !isExactTopLevelPath( path ))
+        {
+            return null;
+        }
+    }
+
+    const semantics = analyzeStage( secondStage );
+    const projection = semantics.projection;
+    if(
+        !hasDeterministicErrorFreeEvaluation( semantics )
+        || !hasOnlyKnownDependencyPaths( semantics )
+        || !projection
+        || projection.unknown
+        || projection.mode !== 'inclusion'
+        || projection.computedPaths.size === 0
+    )
+    {
+        return null;
+    }
+
+    const nonIdDeps = Array.from( semantics.dependencies.local ).filter(( dep ) => dep !== '_id' );
+    if( nonIdDeps.length === 0 )
+    {
+        return null;
+    }
+
+    for( const dep of nonIdDeps )
+    {
+        if( projectionVisibility( first.projection, dep ) !== 'visible' )
+        {
+            return null;
+        }
+    }
+
+    if(
+        isIncluded( secondSpec._id )
+        && projectionVisibility( first.projection, '_id' ) !== 'visible'
+    )
+    {
+        return null;
+    }
+
+    const merged: Record<string, unknown> = { ...secondSpec };
+    if( !( '_id' in merged ) && excludesId( first ))
+    {
+        merged._id = first.specification._id;
+    }
+
+    return {
+        mergedStage: {
+            $project: merged
+        }
+    };
+}
+
 /**
  * Proves composition for pure top-level flag projections. A later explicit
  * include may not request a field already hidden by the first projection.
@@ -357,6 +577,11 @@ export function proveAdjacentProjectMerge(
     const second = secondUnset
         ? parseSimpleProject({ $project: Object.fromEntries( Array.from( secondUnset, ( f ) => [ f, 0 ] )) })
         : parseSimpleProject( secondStage );
+
+    if( first && !second && !secondUnset )
+    {
+        return proveSimpleToComputedInclusionProjectMerge( first, secondStage );
+    }
 
     if( !first || !second )
     {
@@ -669,9 +894,59 @@ export function parseProjectionCommuteSortKeys(sortStage: unknown): string[] | n
     return keys;
 }
 
+function canAdvanceComputedProjectAcrossSort(
+    projectStage : unknown,
+    sortKeys     : readonly string[]
+): boolean
+{
+    const entry = getSingleStageEntry( projectStage );
+    if(
+        !entry
+        || entry[ 0 ] !== '$project'
+        || !isPlainObject( entry[ 1 ])
+        || Object.keys( entry[ 1 ]).length === 0
+    )
+    {
+        return false;
+    }
+
+    const semantics = analyzeStage( projectStage );
+    const projection = semantics.projection;
+    if(
+        semantics.operator !== '$project'
+        || !hasDeterministicErrorFreeEvaluation( semantics )
+        || semantics.observable.errors !== 'none-known'
+        || !hasOnlyKnownDependencyPaths( semantics )
+        || !projection
+        || projection.unknown
+        || projection.hasPathCollisions
+        || projection.mode !== 'inclusion'
+        || projection.computedPaths.size === 0
+        || containsGetField( entry[ 1 ])
+    )
+    {
+        return false;
+    }
+
+    for( const path of Object.keys( entry[ 1 ]) )
+    {
+        if( !isExactTopLevelPath( path ))
+        {
+            return false;
+        }
+    }
+
+    return sortKeys.every(( sortKey ) =>
+        projectionVisibility( projection, sortKey ) === 'visible'
+        && arePathsDisjoint([ sortKey ], projection.computedPaths )
+    );
+}
+
 /**
- * Proves that a simple flag project or exact top-level unset keeps every sort
- * key visible, so it may move before the sort without changing successful order.
+ * Proves that a simple flag project, exact top-level unset, or inclusion
+ * project with deterministic error-free computed fields disjoint from the sort
+ * keys keeps every sort key visible, so it may move before the sort without
+ * changing successful order.
  */
 export function proveSimpleProjectAdvanceAcrossSort(
     sortStage: unknown,
@@ -691,14 +966,14 @@ export function proveSimpleProjectAdvanceAcrossSort(
     }
 
     const project = parseSimpleProject(projectStage);
-    if (!project)
+    if (project)
     {
-        return false;
+        return keys.every((path) =>
+            projectionVisibility(project.projection, path) === 'visible',
+        );
     }
 
-    return keys.every((path) =>
-        projectionVisibility(project.projection, path) === 'visible',
-    );
+    return canAdvanceComputedProjectAcrossSort( projectStage, keys );
 }
 
 /**
@@ -777,6 +1052,103 @@ export function proveAddFieldSplitAcrossSort(
         deferredStage: {
             [ source.operator ]: Object.fromEntries( deferredEntries )
         }
+    };
+}
+
+/**
+ * Splits an inclusion `$project` stage across an adjacent `$sort` when the
+ * `$project` computes at least one sort key and also computes additional
+ * non-sort fields whose dependencies are preserved as pass-through inclusions
+ * in the retained `$project`.
+ */
+export function proveProjectSplitAcrossSort(
+    projectStage : unknown,
+    sortStage    : unknown
+): AddFieldSplitAcrossSortProof | null
+{
+    const entry = getSingleStageEntry( projectStage );
+    const sortKeys = parseProjectionCommuteSortKeys( sortStage );
+    if(
+        !entry
+        || entry[ 0 ] !== '$project'
+        || !isPlainObject( entry[ 1 ])
+        || !sortKeys
+        || containsGetField( entry[ 1 ])
+    )
+    {
+        return null;
+    }
+
+    const semantics = analyzeStage( projectStage );
+    const projection = semantics.projection;
+    if(
+        semantics.operator !== '$project'
+        || !hasDeterministicErrorFreeEvaluation( semantics )
+        || semantics.observable.errors !== 'none-known'
+        || !hasOnlyKnownDependencyPaths( semantics )
+        || !projection
+        || projection.unknown
+        || projection.hasPathCollisions
+        || projection.mode !== 'inclusion'
+        || projection.computedPaths.size < 2
+    )
+    {
+        return null;
+    }
+
+    const entries = Object.entries( entry[ 1 ]);
+    const retainedEntries: Array<[ string, unknown ]> = [];
+    const deferredEntries: Array<[ string, unknown ]> = [];
+    let hasComputedSortKey = false;
+
+    for( const [ fieldPath, expr ] of entries )
+    {
+        if( !isExactTopLevelPath( fieldPath ))
+        {
+            return null;
+        }
+
+        if( isProjectionFlag( expr ))
+        {
+            retainedEntries.push([ fieldPath, expr ]);
+            continue;
+        }
+
+        if( fieldPath !== '_id' && arePathsDisjoint([ fieldPath ], sortKeys ))
+        {
+            deferredEntries.push([ fieldPath, expr ]);
+        }
+        else
+        {
+            hasComputedSortKey = true;
+            retainedEntries.push([ fieldPath, expr ]);
+        }
+    }
+
+    if( !hasComputedSortKey || deferredEntries.length === 0 )
+    {
+        return null;
+    }
+
+    const retainedStage = { $project: Object.fromEntries( retainedEntries ) };
+    const deferredStage = { $addFields: Object.fromEntries( deferredEntries ) };
+    const retainedProjection = analyzeProjection( retainedStage.$project, 'project' );
+    const deferredSemantics = analyzeStage( deferredStage );
+
+    for( const dep of deferredSemantics.dependencies.local )
+    {
+        if(
+            projectionVisibility( retainedProjection, dep ) !== 'visible'
+            || !arePathsDisjoint([ dep ], retainedProjection.computedPaths )
+        )
+        {
+            return null;
+        }
+    }
+
+    return {
+        retainedStage,
+        deferredStage
     };
 }
 
@@ -939,6 +1311,86 @@ export function proveUnusedFieldPruning(
     );
 }
 
+function proveUnusedGroupAccumulatorPruning(
+    groupStage       : unknown,
+    suffix           : readonly unknown[],
+    requireErrorFree = true
+): UnusedFieldPruningProof | null
+{
+    const entry = getSingleStageEntry( groupStage );
+    if( !entry || entry[ 0 ] !== '$group' || suffix.length === 0 )
+    {
+        return null;
+    }
+
+    const groupSemantics = analyzeStage( groupStage );
+    if(
+        groupSemantics.unknown
+        || groupSemantics.malformed
+        || !hasOnlyKnownDependencyPaths( groupSemantics )
+    )
+    {
+        return null;
+    }
+
+    const groupSpec = entry[ 1 ] as Record<string, Record<string, unknown>>;
+    const live = new Set<string>();
+
+    for( const [ key, accSpec ] of Object.entries( groupSpec ))
+    {
+        if( key === '_id' )
+        {
+            continue;
+        }
+
+        const accArg = accSpec[ Object.keys( accSpec )[ 0 ]! ];
+        if( isSafePrunableAssignment( accArg, requireErrorFree ))
+        {
+            live.add( key );
+        }
+    }
+
+    if( live.size === 0 )
+    {
+        return null;
+    }
+
+    for( const stage of suffix )
+    {
+        const removedFields = Array.from( live ).filter(
+            ( path ) => isExactPathDiscardedByFollower( path, stage )
+        );
+
+        if( removedFields.length > 0 )
+        {
+            const removedSet = new Set( removedFields );
+            const remainingEntries = Object.entries( groupSpec ).filter(
+                ([ k ]) => !removedSet.has( k )
+            );
+
+            return {
+                replacementStage: {
+                    $group: Object.fromEntries( remainingEntries )
+                },
+                removedFields
+            };
+        }
+
+        const semantics = analyzeStage( stage );
+        for( const path of observedLiveFields( semantics, live ))
+        {
+            live.delete( path );
+        }
+
+        if( live.size === 0 || !canContinuePastStage( semantics, live ))
+        {
+            return null;
+        }
+    }
+
+    return null;
+}
+
 /**
  * Same kill as adjacent pruning, but the killer may sit after a suffix that
  * does not observe the dead writes. Exclusion projects, unknown stages,
@@ -950,6 +1402,16 @@ export function proveUnusedFieldPruningThroughSuffix(
     requireErrorFree = true,
 ): UnusedFieldPruningProof | null
 {
+    const groupProof = proveUnusedGroupAccumulatorPruning(
+        sourceStage,
+        suffix,
+        requireErrorFree
+    );
+    if( groupProof )
+    {
+        return groupProof;
+    }
+
     const source = parseAddFieldStage(sourceStage, false);
     if (!source || suffix.length === 0)
     {

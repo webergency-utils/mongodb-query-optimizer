@@ -120,6 +120,39 @@ export function proveGroupFilterPushdown(
                 prefilterConjuncts.push( { [ `${ sourceField }.${ sub }` ]: deepClone( val ) } );
                 hasIdCondition = true;
             }
+            else if( key === '$or' && Array.isArray( val ) && val.length > 0 )
+            {
+                const pushedBranches: Record<string, any>[] = [];
+                let allBranchesPureId = true;
+
+                for( const branch of val )
+                {
+                    if( !isPlainObject( branch ))
+                    {
+                        allBranchesPureId = false;
+                        break;
+                    }
+
+                    const branchProof = proveGroupFilterPushdown( groupStage, { $match: branch }, context );
+                    if( !branchProof || branchProof.postfilterStage !== null )
+                    {
+                        allBranchesPureId = false;
+                        break;
+                    }
+
+                    pushedBranches.push( branchProof.prefilterStage.$match );
+                }
+
+                if( allBranchesPureId )
+                {
+                    prefilterConjuncts.push({ $or: pushedBranches });
+                    hasIdCondition = true;
+                }
+                else
+                {
+                    postfilterConjuncts.push( deepClone( conjunct ) );
+                }
+            }
             else
             {
                 postfilterConjuncts.push( deepClone( conjunct ) );
@@ -129,19 +162,56 @@ export function proveGroupFilterPushdown(
     else if( isPlainObject( idSpec ))
     {
         const idKeys = Object.keys( idSpec );
-        const allStringPaths = (
-            idKeys.length > 0
-            && idKeys.every(
-                ( k ) =>
-                    !k.startsWith( '$' )
-                    && typeof idSpec[ k ] === 'string'
-                    && idSpec[ k ].startsWith( '$' )
-                    && !idSpec[ k ].startsWith( '$$' )
-                    && idSpec[ k ].length > 1
-            )
-        );
+        const directFieldMap = new Map<string, string>();
+        const computedFieldMap = new Map<string, string>();
+        let isValidComposite = idKeys.length > 0 && !idKeys.some(( k ) => k.startsWith( '$' ));
 
-        if( allStringPaths )
+        if( isValidComposite )
+        {
+            for( const k of idKeys )
+            {
+                const subSpec = idSpec[ k ];
+
+                if(
+                    typeof subSpec === 'string'
+                    && subSpec.startsWith( '$' )
+                    && !subSpec.startsWith( '$$' )
+                    && subSpec.length > 1
+                )
+                {
+                    directFieldMap.set( k, subSpec.slice( 1 ));
+                }
+                else if( isPlainObject( subSpec ))
+                {
+                    const subOpKeys = Object.keys( subSpec );
+                    const subOpArg = subOpKeys.length === 1 && subOpKeys[ 0 ]!.startsWith( '$' )
+                        ? subSpec[ subOpKeys[ 0 ]! ]
+                        : null;
+
+                    if(
+                        typeof subOpArg === 'string'
+                        && subOpArg.startsWith( '$' )
+                        && !subOpArg.startsWith( '$$' )
+                        && subOpArg.length > 1
+                    )
+                    {
+                        computedFieldMap.set( k, subOpArg.slice( 1 ));
+                    }
+                    else
+                    {
+                        isValidComposite = false;
+                        break;
+                    }
+                }
+                else
+                {
+                    isValidComposite = false;
+                    break;
+                }
+            }
+        }
+
+        if( isValidComposite && computedFieldMap.size === 0 )
         {
             for( const conjunct of conjuncts )
             {
@@ -155,9 +225,9 @@ export function proveGroupFilterPushdown(
                     const subKey = dotIdx === -1 ? rest : rest.slice( 0, dotIdx );
                     const subPath = dotIdx === -1 ? '' : rest.slice( dotIdx );
 
-                    if( subKey in idSpec )
+                    if( directFieldMap.has( subKey ))
                     {
-                        const sourceField = idSpec[ subKey ].slice( 1 ) + subPath;
+                        const sourceField = directFieldMap.get( subKey )! + subPath;
                         prefilterConjuncts.push( { [ sourceField ]: deepClone( val ) } );
                         hasIdCondition = true;
                     }
@@ -172,9 +242,9 @@ export function proveGroupFilterPushdown(
                     {
                         for( const [ subKey, subVal ] of Object.entries( val ))
                         {
-                            if( subKey in idSpec )
+                            if( directFieldMap.has( subKey ))
                             {
-                                const sourceField = idSpec[ subKey ].slice( 1 );
+                                const sourceField = directFieldMap.get( subKey )!;
                                 prefilterConjuncts.push( { [ sourceField ]: deepClone( subVal ) } );
                                 hasIdCondition = true;
                             }
@@ -183,6 +253,56 @@ export function proveGroupFilterPushdown(
                                 return null;
                             }
                         }
+                    }
+                    else
+                    {
+                        return null;
+                    }
+                }
+                else
+                {
+                    postfilterConjuncts.push( deepClone( conjunct ) );
+                }
+            }
+        }
+        else if( isValidComposite && computedFieldMap.size > 0 )
+        {
+            const nullRejectedSources = new Set<string>();
+
+            for( const conjunct of conjuncts )
+            {
+                const entries = Object.entries( conjunct );
+                const [ key, val ] = entries[ 0 ]!;
+
+                if( key.startsWith( '_id.' ))
+                {
+                    const rest = key.slice( 4 );
+                    const dotIdx = rest.indexOf( '.' );
+                    const subKey = dotIdx === -1 ? rest : rest.slice( 0, dotIdx );
+                    const subPath = dotIdx === -1 ? '' : rest.slice( dotIdx );
+
+                    if( directFieldMap.has( subKey ))
+                    {
+                        const sourceField = directFieldMap.get( subKey )! + subPath;
+                        prefilterConjuncts.push( { [ sourceField ]: deepClone( val ) } );
+                        hasIdCondition = true;
+                    }
+                    else if( computedFieldMap.has( subKey ))
+                    {
+                        if( dotIdx === -1 && conditionRejectsNull( val ))
+                        {
+                            const sourceField = computedFieldMap.get( subKey )!;
+
+                            if( !nullRejectedSources.has( sourceField ))
+                            {
+                                nullRejectedSources.add( sourceField );
+                                prefilterConjuncts.push( { [ sourceField ]: { $exists: true, $ne: null } } );
+                            }
+
+                            hasIdCondition = true;
+                        }
+
+                        postfilterConjuncts.push( deepClone( conjunct ) );
                     }
                     else
                     {

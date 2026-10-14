@@ -95,6 +95,21 @@ export function parseTopKFollower(
 
         if( typeof limitVal === 'number' && Number.isSafeInteger( limitVal ) && limitVal > 0 )
         {
+            if( sortIndex + 2 < pipeline.length )
+            {
+                const secondEntry = getSingleStageEntry( pipeline[ sortIndex + 2 ] );
+                if(
+                    secondEntry
+                    && secondEntry[ 0 ] === '$skip'
+                    && typeof secondEntry[ 1 ] === 'number'
+                    && Number.isSafeInteger( secondEntry[ 1 ] )
+                    && secondEntry[ 1 ] >= 0
+                )
+                {
+                    return { sliceLength: 3 };
+                }
+            }
+
             return { sliceLength: 2 };
         }
 

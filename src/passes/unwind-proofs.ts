@@ -192,12 +192,44 @@ export function proveUnwindPrefilter(
 
         if( key === arrayPath || key.startsWith( prefix ))
         {
-            if( !isQualifyingPrefilterValue( val ))
+            if( isQualifyingPrefilterValue( val ))
             {
-                return null;
+                dottedConjuncts.push({ [ key ]: deepClone( val ) });
+            }
+        }
+        else if( key === '$or' && Array.isArray( val ) && val.length > 0 )
+        {
+            const branchConditions: Record<string, any>[] = [];
+            let allBranchesQualify = true;
+
+            for( const branch of val )
+            {
+                const branchEntries = Object.entries( branch as Record<string, any> );
+                if( branchEntries.length !== 1 )
+                {
+                    allBranchesQualify = false;
+                    break;
+                }
+
+                const [ bKey, bVal ] = branchEntries[ 0 ]!;
+                if(
+                    ( bKey === arrayPath || bKey.startsWith( prefix ))
+                    && isQualifyingPrefilterValue( bVal )
+                )
+                {
+                    branchConditions.push({ [ bKey ]: deepClone( bVal ) });
+                }
+                else
+                {
+                    allBranchesQualify = false;
+                    break;
+                }
             }
 
-            dottedConjuncts.push({ [ key ]: deepClone( val ) });
+            if( allBranchesQualify )
+            {
+                dottedConjuncts.push({ $or: branchConditions });
+            }
         }
     }
 

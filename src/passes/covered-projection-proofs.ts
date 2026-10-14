@@ -3,7 +3,6 @@ import { isValidProjectionPath } from '../analyzer/projections';
 import { analyzeStage } from '../analyzer/semantics';
 import { DEFAULT_GUARANTEE_CONTEXT, type GuaranteeContext } from '../guarantees';
 import { getSingleStageEntry, getStageSpec } from './helpers.js';
-import { parseSimpleProject } from './projection-proofs';
 
 export interface CoveredProjectionProof
 {
@@ -247,6 +246,26 @@ function isDependencyFreeCollapsingStage( stage : unknown ): boolean
     );
 }
 
+function isErrorFreeCountNeutralStage( stage : unknown ): boolean
+{
+    const entry = getSingleStageEntry( stage );
+    if( !entry || entry[ 0 ] === '$lookup' )
+    {
+        return false;
+    }
+
+    const semantics = analyzeStage( stage );
+
+    return (
+        !semantics.malformed
+        && !semantics.unknown
+        && !semantics.observable.unknown
+        && semantics.determinism === 'deterministic'
+        && semantics.observable.determinism === 'deterministic'
+        && semantics.observable.errors === 'none-known'
+    );
+}
+
 function dropCountNeutralPrefix(
     pipeline     : any[],
     countIndex   : number,
@@ -270,7 +289,7 @@ function dropCountNeutralPrefix(
 
         if( preservesRowCount( stage ))
         {
-            if( !shapeReaderKept && ( !strictErrors || parseSimpleProject( stage )))
+            if( !shapeReaderKept && ( !strictErrors || isErrorFreeCountNeutralStage( stage )))
             {
                 pipeline.splice( cursor, 1 );
                 countIndex--;

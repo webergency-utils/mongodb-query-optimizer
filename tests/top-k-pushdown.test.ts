@@ -48,6 +48,8 @@ describe( 'top-k-proofs unit and branch analysis', () =>
 
         // Limit follower
         expect( parseTopKFollower( [ { $sort: { a: 1 } }, { $limit: 10 } ], 0 )).toEqual({ sliceLength: 2 });
+        expect( parseTopKFollower( [ { $sort: { a: 1 } }, { $limit: 10 }, { $skip: 3 } ], 0 )).toEqual({ sliceLength: 3 });
+        expect( parseTopKFollower( [ { $sort: { a: 1 } }, { $limit: 10 }, { $skip: -1 } ], 0 )).toEqual({ sliceLength: 2 });
         expect( parseTopKFollower( [ { $sort: { a: 1 } }, { $limit: -5 } ], 0 )).toBeNull();
         expect( parseTopKFollower( [ { $sort: { a: 1 } }, { $limit: 0 } ], 0 )).toBeNull();
         expect( parseTopKFollower( [ { $sort: { a: 1 } }, { $limit: 1.5 } ], 0 )).toBeNull();

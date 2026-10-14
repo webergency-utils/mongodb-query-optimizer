@@ -80,6 +80,50 @@ describe( 'shadow-proofs shared gates', () =>
             { $sort: { cnt: -1 } }
         ], 2, [ 'cnt' ], context )).toBeNull();
     });
+
+    it( 'inlines upstream chained $addFields/$set providers and respects barriers', () =>
+    {
+        const chainedPipeline = [
+            { $lookup: { from: 'extra', localField: '_id', foreignField: 'ref', as: 'extra' } },
+            { $addFields: { baseScore: { $size: '$tags' } } },
+            { $project: { baseScore: 1, other: 1 } },
+            { $set: { finalScore: { $add: [ '$baseScore', '$other', { $literal: '$baseScore' }, 10 ] } } },
+            { $sort: { finalScore: -1 } }
+        ];
+        const resolved = resolveShadowProviders( chainedPipeline, 4, [ 'finalScore' ], context );
+
+        expect( resolved ).not.toBeNull();
+        expect( resolved!.computed.get( 'finalScore' )?.providerIndex ).toBe( 1 );
+        expect( resolved!.computed.get( 'finalScore' )?.expr ).toEqual({
+            $add: [ { $size: '$tags' }, '$other', { $literal: '$baseScore' }, 10 ]
+        });
+        expect( resolved!.computed.get( 'finalScore' )?.dependencies ).toEqual( new Set([ 'tags', 'other' ]));
+
+        // Skips inlining when intermediate stage touches upstream dependency
+        const touchedBetweenPipeline = [
+            { $addFields: { baseScore: { $size: '$tags' } } },
+            { $set: { tags: [] } },
+            { $set: { finalScore: { $add: [ '$baseScore', 1 ] } } },
+            { $sort: { finalScore: -1 } }
+        ];
+        const touchedResolved = resolveShadowProviders( touchedBetweenPipeline, 3, [ 'finalScore' ], context );
+        expect( touchedResolved!.computed.get( 'finalScore' )?.providerIndex ).toBe( 2 );
+
+        // Skips inlining when upstream provider is a $project or non-deterministic
+        const nonAddFieldsUpstream = [
+            { $project: { baseScore: '$tags' } },
+            { $set: { finalScore: { $size: '$baseScore' } } },
+            { $sort: { finalScore: -1 } }
+        ];
+        expect( resolveShadowProviders( nonAddFieldsUpstream, 2, [ 'finalScore' ], context )!.computed.get( 'finalScore' )?.providerIndex ).toBe( 1 );
+
+        const nonDetUpstream = [
+            { $addFields: { baseScore: { $add: [ '$a', { $rand: {} } ] } } },
+            { $set: { finalScore: { $add: [ '$baseScore', 1 ] } } },
+            { $sort: { finalScore: -1 } }
+        ];
+        expect( resolveShadowProviders( nonDetUpstream, 2, [ 'finalScore' ], context )!.computed.get( 'finalScore' )?.providerIndex ).toBe( 1 );
+    });
 });
 
 describe( 'shadow-proofs determinism by $function substitution', () =>

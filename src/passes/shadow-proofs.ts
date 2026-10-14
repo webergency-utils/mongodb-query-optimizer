@@ -166,18 +166,142 @@ function isPassThroughProjectField( stage: unknown, key: string ): boolean
 function isEligibleProjectComputedExpression( spec: Record<string, unknown>, key: string ): boolean
 {
     const projection = analyzeProjection( spec, 'project' );
-
     if( projection.unknown || projection.hasPathCollisions || !projection.computedPaths.has( key ))
     {
         return false;
     }
 
     const expr = spec[ key ];
+    if( typeof expr === 'string' )
+    {
+        return expr.startsWith( '$' ) && !expr.startsWith( '$$' ) && expr.length > 1;
+    }
 
-    return (
-        ( typeof expr === 'string' && expr.startsWith( '$' ) && !expr.startsWith( '$$' ) && expr.length > 1 )
-        || ( isPlainObject( expr ) && Object.keys( expr ).length === 1 && Object.keys( expr )[ 0 ]!.startsWith( '$' ))
+    return isPlainObject( expr ) && Object.keys( expr ).length === 1 && Object.keys( expr )[ 0 ]!.startsWith( '$' );
+}
+
+function substituteExpressionFieldRefs(
+    expr         : unknown,
+    substitutions: ReadonlyMap<string, unknown>
+): unknown
+{
+    if( typeof expr === 'string' && expr.startsWith( '$' ) && !expr.startsWith( '$$' ) && expr.length > 1 )
+    {
+        const field = expr.slice( 1 );
+        if( substitutions.has( field ))
+        {
+            return substitutions.get( field );
+        }
+
+        return expr;
+    }
+
+    if( Array.isArray( expr ))
+    {
+        return expr.map(( item ) => substituteExpressionFieldRefs( item, substitutions ));
+    }
+
+    if( !isPlainObject( expr ) || '$literal' in expr )
+    {
+        return expr;
+    }
+
+    return Object.fromEntries(
+        Object.entries( expr ).map(([ k, v ]) => [ k, substituteExpressionFieldRefs( v, substitutions ) ])
     );
+}
+
+function tryInlineUpstreamProviders(
+    pipeline      : readonly any[],
+    providerIndex : number,
+    expr          : unknown,
+    dependencies  : ReadonlySet<string>,
+    consumerKeys  : ReadonlySet<string>,
+    context       : GuaranteeContext
+): { expr: unknown; dependencies: Set<string>; earliestIndex: number }
+{
+    const substitutions = new Map<string, unknown>();
+    let earliestIndex = providerIndex;
+
+    for( const dep of dependencies )
+    {
+        if( dep.includes( '.' ) || consumerKeys.has( dep ))
+        {
+            continue;
+        }
+
+        let depProviderIndex = -1;
+
+        for( let i = providerIndex - 1; i >= 0; i-- )
+        {
+            if( isPassThroughProjectField( pipeline[ i ], dep ))
+            {
+                continue;
+            }
+
+            if( stageTouchesPaths( pipeline[ i ], [ dep ] ))
+            {
+                depProviderIndex = i;
+                break;
+            }
+        }
+
+        if( depProviderIndex < 0 )
+        {
+            continue;
+        }
+
+        const depEntry = getSingleStageEntry( pipeline[ depProviderIndex ] );
+        if(
+            !depEntry
+            || ( depEntry[ 0 ] !== '$addFields' && depEntry[ 0 ] !== '$set' )
+            || !isPlainObject( depEntry[ 1 ] )
+            || !Object.prototype.hasOwnProperty.call( depEntry[ 1 ], dep )
+        )
+        {
+            continue;
+        }
+
+        const depExpr = ( depEntry[ 1 ] as Record<string, unknown> )[ dep ];
+        if( !isExpressionCompletelyDeterministic( depExpr, context.strictErrors ))
+        {
+            continue;
+        }
+
+        const depDeps = collectExpressionDependencies( depExpr );
+        if( depDeps.size === 0 )
+        {
+            continue;
+        }
+
+        let touchedBetween = false;
+        for( let j = depProviderIndex + 1; j < providerIndex; j++ )
+        {
+            if( stageTouchesPaths( pipeline[ j ], depDeps ))
+            {
+                touchedBetween = true;
+                break;
+            }
+        }
+
+        if( !touchedBetween )
+        {
+            substitutions.set( dep, depExpr );
+            earliestIndex = Math.min( earliestIndex, depProviderIndex );
+        }
+    }
+
+    if( substitutions.size === 0 )
+    {
+        return { expr, dependencies: new Set( dependencies ), earliestIndex: providerIndex };
+    }
+
+    const inlinedExpr = substituteExpressionFieldRefs( expr, substitutions );
+    return {
+        expr          : inlinedExpr,
+        dependencies  : collectExpressionDependencies( inlinedExpr ),
+        earliestIndex
+    };
 }
 
 /**
@@ -253,11 +377,14 @@ export function resolveShadowProviders(
             return null;
         }
 
+        const rawDeps = collectExpressionDependencies( expr );
+        const inlined = tryInlineUpstreamProviders( pipeline, providerIndex, expr, rawDeps, new Set( keys ), context );
+
         computed.set( key, {
             key,
-            providerIndex,
-            expr,
-            dependencies : collectExpressionDependencies( expr )
+            providerIndex : inlined.earliestIndex,
+            expr          : inlined.expr,
+            dependencies  : inlined.dependencies
         });
     }
 

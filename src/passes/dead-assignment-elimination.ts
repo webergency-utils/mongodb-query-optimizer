@@ -1,6 +1,11 @@
 import { DEFAULT_GUARANTEE_CONTEXT, type GuaranteeContext } from '../guarantees';
 import { PipelinePass } from './types';
-import { proveDeadAssignmentElimination } from './dead-assignment-proofs';
+import
+{
+    proveDeadAssignmentElimination,
+    proveNoOpSelfAssignmentElimination
+}
+from './dead-assignment-proofs';
 
 export class DeadAssignmentEliminationPass implements PipelinePass
 {
@@ -16,6 +21,10 @@ export class DeadAssignmentEliminationPass implements PipelinePass
             const proof = proveDeadAssignmentElimination(
                 result[ index ],
                 result.slice( index + 1 ),
+                context
+            ) ?? proveNoOpSelfAssignmentElimination(
+                result.slice( 0, index ),
+                result[ index ],
                 context
             );
 

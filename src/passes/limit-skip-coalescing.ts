@@ -1,3 +1,4 @@
+import { analyzeStage } from '../analyzer/semantics.js';
 import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
 import { PipelinePass } from './types.js';
 
@@ -162,6 +163,60 @@ export function isZeroSkip(stage: unknown): boolean
     return parsed !== null && parsed.operator === '$skip' && parsed.value === 0;
 }
 
+/**
+ * Proves that a downstream `$limit: L2` is redundant because an earlier
+ * `$limit: L1` (`L2 >= L1 - sum(skips)`) already caps the stream and every
+ * intermediate stage preserves or filters document count without expanding.
+ */
+export function proveRedundantDownstreamLimit(
+    pipeline   : readonly unknown[],
+    limitIndex : number
+): boolean
+{
+    if( limitIndex <= 0 || limitIndex >= pipeline.length )
+    {
+        return false;
+    }
+
+    const target = parseStrictStage( pipeline[ limitIndex ] );
+    if( !target || target.operator !== '$limit' || !isValidOperand( '$limit', target.value ))
+    {
+        return false;
+    }
+
+    let skippedSinceCap = 0;
+
+    for( let i = limitIndex - 1; i >= 0; i-- )
+    {
+        const stage = pipeline[ i ];
+        const parsed = parseStrictStage( stage );
+
+        if( parsed && parsed.operator === '$limit' && isValidOperand( '$limit', parsed.value ))
+        {
+            if( target.value >= parsed.value - skippedSinceCap )
+            {
+                return true;
+            }
+        }
+        else if( parsed && parsed.operator === '$skip' && isValidOperand( '$skip', parsed.value ))
+        {
+            skippedSinceCap += parsed.value;
+        }
+
+        const semantics = analyzeStage( stage );
+        if(
+            semantics.malformed
+            || semantics.unknown
+            || ( semantics.cardinality !== 'preserves' && semantics.cardinality !== 'filters' )
+        )
+        {
+            return false;
+        }
+    }
+
+    return false;
+}
+
 export class LimitSkipCoalescingPass implements PipelinePass
 {
     readonly name       = 'limit-skip-coalescing';
@@ -196,7 +251,7 @@ export class LimitSkipCoalescingPass implements PipelinePass
 
         for (let index = 0; index < result.length; index++)
         {
-            if (isZeroSkip(result[index]))
+            if (isZeroSkip(result[index]) || proveRedundantDownstreamLimit(result, index))
             {
                 result.splice(index, 1);
                 return result;

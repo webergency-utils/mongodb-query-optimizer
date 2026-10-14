@@ -197,6 +197,61 @@ describe('limit and skip coalescing scheduling', () =>
             { $limit: 5 },
             { $skip: 5 },
         ]);
+
+        // Eliminates redundant downstream $limit across non-expanding stages
+        expect(
+            new LimitSkipCoalescingPass().execute([
+                { $limit: 5 },
+                { $match: { status: 'active' } },
+                { $project: { name: 1 } },
+                { $limit: 10 },
+            ]),
+        ).toEqual([
+            { $limit: 5 },
+            { $match: { status: 'active' } },
+            { $project: { name: 1 } },
+        ]);
+
+        // Accounts for intermediate $skip stages when checking downstream $limit redundancy
+        expect(
+            new LimitSkipCoalescingPass().execute([
+                { $limit: 10 },
+                { $match: { status: 'active' } },
+                { $skip: 4 },
+                { $limit: 6 },
+            ]),
+        ).toEqual([
+            { $limit: 10 },
+            { $match: { status: 'active' } },
+            { $skip: 4 },
+        ]);
+
+        // Keeps downstream $limit when strictly tighter than upstream cap minus skips, or across $unwind
+        expect(
+            new LimitSkipCoalescingPass().execute([
+                { $limit: 10 },
+                { $match: { status: 'active' } },
+                { $skip: 4 },
+                { $limit: 5 },
+            ]),
+        ).toEqual([
+            { $limit: 10 },
+            { $match: { status: 'active' } },
+            { $skip: 4 },
+            { $limit: 5 },
+        ]);
+
+        expect(
+            new LimitSkipCoalescingPass().execute([
+                { $limit: 5 },
+                { $unwind: '$items' },
+                { $limit: 10 },
+            ]),
+        ).toEqual([
+            { $limit: 5 },
+            { $unwind: '$items' },
+            { $limit: 10 },
+        ]);
     });
 
     it('preserves every unproved value and the caller input', () =>

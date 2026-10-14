@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+    proveCorrelatedLookupEqualityNormalization,
     proveExprToNativeMatch,
 } from '../src/passes/expr-normalization-proofs.js';
 import {
@@ -256,6 +257,216 @@ describe('ExprMatchNormalizationPass', () =>
             { $match: { a: 1 } },
             { $match: { $expr: { $eq: ['$a', 1] } }, extra: 1 },
         ]);
+    });
+
+    it('normalizes $or, $not ($eq, $ne, $in), and $literal in proveExprToNativeMatch and guards collisions', () =>
+    {
+        // $literal unwrapping in $eq (including operator-shaped literal object) and $in
+        expect(proveExprToNativeMatch({
+            $eq: ['$tag', { $literal: '$admin' }]
+        })).toEqual({ tag: '$admin' });
+
+        expect(proveExprToNativeMatch({
+            $eq: [{ $literal: '$admin' }, '$tag']
+        })).toEqual({ tag: '$admin' });
+
+        expect(proveExprToNativeMatch({
+            $eq: ['$doc', { $literal: { $gt: 5 } }]
+        })).toEqual({ doc: { $eq: { $gt: 5 } } });
+
+        expect(proveExprToNativeMatch({
+            $eq: [{ $literal: { $gt: 5 } }, '$doc']
+        })).toEqual({ doc: { $eq: { $gt: 5 } } });
+
+        expect(proveExprToNativeMatch({
+            $in: ['$tag', [{ $literal: '$a' }, 'b']]
+        })).toEqual({ tag: { $in: ['$a', 'b'] } });
+
+        // $or normalization and rejection
+        expect(proveExprToNativeMatch({
+            $or: [
+                { $eq: ['$status', 'open'] },
+                { $gt: ['$priority', 3] }
+            ]
+        })).toEqual({
+            $or: [
+                { status: 'open' },
+                { priority: { $gt: 3 } }
+            ]
+        });
+
+        expect(proveExprToNativeMatch({ $or: [] })).toBeNull();
+        expect(proveExprToNativeMatch({ $or: 'not-array' })).toBeNull();
+        expect(proveExprToNativeMatch({
+            $or: [
+                { $eq: ['$status', 'open'] },
+                { $eq: ['$a', '$b'] }
+            ]
+        })).toBeNull();
+
+        // $not over $eq, $ne, $in, and rejection cases
+        expect(proveExprToNativeMatch({
+            $not: [{ $eq: ['$status', 'archived'] }]
+        })).toEqual({ status: { $ne: 'archived' } });
+
+        expect(proveExprToNativeMatch({
+            $not: { $ne: ['$status', 'active'] }
+        })).toEqual({ status: 'active' });
+
+        expect(proveExprToNativeMatch({
+            $not: [{ $in: ['$role', ['guest', { $literal: '$bot' }]] }]
+        })).toEqual({ role: { $nin: ['guest', '$bot'] } });
+
+        expect(proveExprToNativeMatch({ $not: 'invalid' })).toBeNull();
+        expect(proveExprToNativeMatch({ $not: [{ $eq: 1, $ne: 2 }] })).toBeNull();
+        expect(proveExprToNativeMatch({ $not: [{ $eq: ['$a'] }] })).toBeNull();
+        expect(proveExprToNativeMatch({ $not: [{ $gt: ['$a', 5] }] })).toBeNull();
+        expect(proveExprToNativeMatch({ $not: [{ $in: ['$a', 'not-array'] }] })).toBeNull();
+        expect(proveExprToNativeMatch({
+            $not: [{ $not: [{ $eq: ['$status', 'open'] }] }]
+        })).toEqual({ status: 'open' });
+        expect(proveExprToNativeMatch({
+            $not: { $not: { $gt: ['$price', 100] } }
+        })).toEqual({ price: { $gt: 100 } });
+        expect(proveExprToNativeMatch({
+            $not: [{ $not: 'invalid' }]
+        })).toBeNull();
+
+        // Collision guard in ExprMatchNormalizationPass when $match already has the normalized key
+        const collidingPipeline = [
+            {
+                $match: {
+                    $or: [{ a: 1 }, { b: 2 }],
+                    $expr: {
+                        $or: [
+                            { $eq: ['$c', 3] },
+                            { $eq: ['$d', 4] }
+                        ]
+                    }
+                }
+            }
+        ];
+        expect(pass.execute(collidingPipeline)).toEqual(collidingPipeline);
+    });
+
+    it('normalizes $nor and $regexMatch in proveExprToNativeMatch', () =>
+    {
+        expect(proveExprToNativeMatch({
+            $nor: [
+                { $eq: ['$status', 'deleted'] },
+                { $lt: ['$score', 0] }
+            ]
+        })).toEqual({
+            $nor: [
+                { status: 'deleted' },
+                { score: { $lt: 0 } }
+            ]
+        });
+
+        expect(proveExprToNativeMatch({ $nor: [] })).toBeNull();
+        expect(proveExprToNativeMatch({ $nor: [{ $eq: ['$a', '$b'] }] })).toBeNull();
+
+        // $regexMatch without and with options, and with RegExp instance
+        expect(proveExprToNativeMatch({
+            $regexMatch: { input: '$email', regex: '^admin@' }
+        })).toEqual({
+            email: { $regex: '^admin@' }
+        });
+
+        expect(proveExprToNativeMatch({
+            $regexMatch: { input: '$email', regex: '^admin@', options: 'i' }
+        })).toEqual({
+            email: { $regex: '^admin@', $options: 'i' }
+        });
+
+        expect(proveExprToNativeMatch({
+            $regexMatch: { input: '$email', regex: /^admin@/i }
+        })).toEqual({
+            email: { $regex: /^admin@/i }
+        });
+
+        // Invalid $regexMatch shapes
+        expect(proveExprToNativeMatch({ $regexMatch: 'invalid' })).toBeNull();
+        expect(proveExprToNativeMatch({ $regexMatch: { input: 'email', regex: 'a' } })).toBeNull();
+        expect(proveExprToNativeMatch({ $regexMatch: { input: '$email' } })).toBeNull();
+        expect(proveExprToNativeMatch({ $regexMatch: { input: '$email', regex: 'a', extra: 1 } })).toBeNull();
+        expect(proveExprToNativeMatch({ $regexMatch: { input: '$email', regex: 123 } })).toBeNull();
+        expect(proveExprToNativeMatch({ $regexMatch: { input: '$email', regex: 'a', options: 123 } })).toBeNull();
+    });
+
+    it('normalizes correlated $lookup with let + pipeline $expr equality into localField / foreignField', () =>
+    {
+        // Full collapse when pipeline only has the correlated $match and let only has the join var
+        expect(pass.execute([
+            {
+                $lookup: {
+                    from: 'orders',
+                    let: { uid: '$userId' },
+                    pipeline: [
+                        { $match: { $expr: { $eq: [ '$customerId', '$$uid' ] } } }
+                    ],
+                    as: 'orders'
+                }
+            }
+        ])).toEqual([
+            {
+                $lookup: {
+                    from: 'orders',
+                    localField: 'userId',
+                    foreignField: 'customerId',
+                    as: 'orders'
+                }
+            }
+        ]);
+
+        // Reversed $eq order ($$uid first) and remaining subpipeline stages + still-used let variable
+        expect(proveCorrelatedLookupEqualityNormalization({
+            $lookup: {
+                from: 'orders',
+                let: { uid: '$userId', minAmt: '$minOrder' },
+                pipeline: [
+                    { $match: { $expr: { $eq: [ '$$uid', '$customerId' ] } } },
+                    { $match: { $expr: { $gte: [ '$amount', '$$minAmt' ] } }, extra: [ 123, '$$uid.sub' ] }
+                ],
+                as: 'orders'
+            }
+        })).toEqual({
+            $lookup: {
+                from: 'orders',
+                localField: 'userId',
+                foreignField: 'customerId',
+                let: { uid: '$userId', minAmt: '$minOrder' },
+                pipeline: [
+                    { $match: { $expr: { $gte: [ '$amount', '$$minAmt' ] } }, extra: [ 123, '$$uid.sub' ] }
+                ],
+                as: 'orders'
+            }
+        });
+
+        // Rejection guards
+        expect(proveCorrelatedLookupEqualityNormalization(null)).toBeNull();
+        expect(proveCorrelatedLookupEqualityNormalization({ $match: {} })).toBeNull();
+        expect(proveCorrelatedLookupEqualityNormalization({
+            $lookup: { from: '', as: 'out', let: { a: '$a' }, pipeline: [] }
+        })).toBeNull();
+        expect(proveCorrelatedLookupEqualityNormalization({
+            $lookup: { from: 'c', as: 'out', localField: 'a', foreignField: 'b', let: { a: '$a' }, pipeline: [ { $match: {} } ] }
+        })).toBeNull();
+        expect(proveCorrelatedLookupEqualityNormalization({
+            $lookup: { from: 'c', as: 'out', let: { a: '$a' }, pipeline: [ { $limit: 1 } ] }
+        })).toBeNull();
+        expect(proveCorrelatedLookupEqualityNormalization({
+            $lookup: { from: 'c', as: 'out', let: { a: '$a' }, pipeline: [ { $match: { $expr: { $gt: [ '$x', '$$a' ] } } } ] }
+        })).toBeNull();
+        expect(proveCorrelatedLookupEqualityNormalization({
+            $lookup: { from: 'c', as: 'out', let: { a: '$a' }, pipeline: [ { $match: { $expr: { $eq: [ '$x', '$y' ] } } } ] }
+        })).toBeNull();
+        expect(proveCorrelatedLookupEqualityNormalization({
+            $lookup: { from: 'c', as: 'out', let: { a: '$a' }, pipeline: [ { $match: { $expr: { $eq: [ '$x', 123 ] } } } ] }
+        })).toBeNull();
+        expect(proveCorrelatedLookupEqualityNormalization({
+            $lookup: { from: 'c', as: 'out', let: { a: 123 }, pipeline: [ { $match: { $expr: { $eq: [ '$x', '$$a' ] } } } ] }
+        })).toBeNull();
     });
 });
 

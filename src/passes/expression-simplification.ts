@@ -1,7 +1,7 @@
 import { analyzeExpression } from '../analyzer/expressions.js';
 import { analyzeFilter } from '../analyzer/filters.js';
 import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
-import { isPlainObject } from '../utils.js';
+import { isPlainObject, structuralFingerprint } from '../utils.js';
 import { getSingleStageEntry } from './helpers.js';
 import { PipelinePass } from './types.js';
 
@@ -205,6 +205,11 @@ function extractPrimitiveConstant(
     return { valid: false };
 }
 
+function isConstantArray( expr: unknown ): expr is unknown[]
+{
+    return Array.isArray( expr ) && expr.every(( item ) => extractPrimitiveConstant( item ).valid );
+}
+
 function isBooleanProducingExpression( expr: unknown ): expr is Record<string, unknown>
 {
     if( !isPlainObject( expr ))
@@ -226,6 +231,31 @@ function isErrorFreeDeterministicCondition( condExpr: unknown ): boolean
         && summary.determinism === 'deterministic'
         && summary.errors === 'none-known'
     );
+}
+
+function deduplicateBooleanOperands( items: readonly unknown[] ): unknown[]
+{
+    const seen = new Set<string>();
+    const result: unknown[] = [];
+
+    for( const item of items )
+    {
+        if( isBooleanProducingExpression( item ) && isErrorFreeDeterministicCondition( item ))
+        {
+            const fp = structuralFingerprint( item );
+
+            if( seen.has( fp ))
+            {
+                continue;
+            }
+
+            seen.add( fp );
+        }
+
+        result.push( item );
+    }
+
+    return result;
 }
 
 function evaluateConstantComparison(
@@ -316,7 +346,9 @@ export function simplifyExpression( expr: unknown ): unknown
                 return true;
             }
 
-            const remaining = simplified.$and.filter(( item ) => !isTruthyConstant( item ));
+            const remaining = deduplicateBooleanOperands(
+                simplified.$and.filter(( item ) => !isTruthyConstant( item ))
+            );
 
             if( remaining.length === 1 && isBooleanProducingExpression( remaining[ 0 ] ))
             {
@@ -340,7 +372,9 @@ export function simplifyExpression( expr: unknown ): unknown
                 return false;
             }
 
-            const remaining = simplified.$or.filter(( item ) => !isFalsyConstant( item ));
+            const remaining = deduplicateBooleanOperands(
+                simplified.$or.filter(( item ) => !isFalsyConstant( item ))
+            );
 
             if( remaining.length === 1 && isBooleanProducingExpression( remaining[ 0 ] ))
             {
@@ -400,10 +434,14 @@ export function simplifyExpression( expr: unknown ): unknown
                 const elsePrim = extractPrimitiveConstant( simplified.$cond[ 2 ] );
 
                 if(
-                    thenPrim.valid
-                    && elsePrim.valid
-                    && thenPrim.value === elsePrim.value
-                    && isErrorFreeDeterministicCondition( simplified.$cond[ 0 ] )
+                    isErrorFreeDeterministicCondition( simplified.$cond[ 0 ] )
+                    && (
+                        ( thenPrim.valid && elsePrim.valid && thenPrim.value === elsePrim.value )
+                        || (
+                            isErrorFreeDeterministicCondition( simplified.$cond[ 1 ] )
+                            && structuralFingerprint( simplified.$cond[ 1 ] ) === structuralFingerprint( simplified.$cond[ 2 ] )
+                        )
+                    )
                 )
                 {
                     return simplified.$cond[ 1 ];
@@ -434,10 +472,14 @@ export function simplifyExpression( expr: unknown ): unknown
                     const elsePrim = extractPrimitiveConstant( condSpec.else );
 
                     if(
-                        thenPrim.valid
-                        && elsePrim.valid
-                        && thenPrim.value === elsePrim.value
-                        && isErrorFreeDeterministicCondition( condSpec.if )
+                        isErrorFreeDeterministicCondition( condSpec.if )
+                        && (
+                            ( thenPrim.valid && elsePrim.valid && thenPrim.value === elsePrim.value )
+                            || (
+                                isErrorFreeDeterministicCondition( condSpec.then )
+                                && structuralFingerprint( condSpec.then ) === structuralFingerprint( condSpec.else )
+                            )
+                        )
                     )
                     {
                         return condSpec.then;
@@ -499,6 +541,16 @@ export function simplifyExpression( expr: unknown ): unknown
                 return args[ 0 ];
             }
 
+            const firstFp = structuralFingerprint( args[ 0 ] );
+
+            if(
+                isErrorFreeDeterministicCondition( args[ 0 ] )
+                && args.every(( arg, idx ) => idx === 0 || structuralFingerprint( arg ) === firstFp )
+            )
+            {
+                return args[ 0 ];
+            }
+
             if( args.length < simplified.$ifNull.length )
             {
                 return { $ifNull: args };
@@ -556,6 +608,57 @@ export function simplifyExpression( expr: unknown ): unknown
                 return raw === 0 ? 0 : raw;
             }
         }
+        else if( op === '$sqrt' )
+        {
+            const unary = extractUnaryOperand( simplified.$sqrt );
+
+            if( unary.valid && isFiniteNumber( unary.value ) && unary.value >= 0 )
+            {
+                const raw = Math.sqrt( unary.value );
+
+                return raw === 0 ? 0 : raw;
+            }
+        }
+        else if( op === '$pow' && Array.isArray( simplified.$pow ) && simplified.$pow.length === 2 )
+        {
+            const [ base, exp ] = simplified.$pow as [ unknown, unknown ];
+
+            if( isFiniteNumber( base ) && isFiniteNumber( exp ))
+            {
+                const raw = Math.pow( base, exp );
+
+                if( Number.isFinite( raw ))
+                {
+                    return raw === 0 ? 0 : raw;
+                }
+            }
+        }
+        else if( op === '$trunc' || op === '$round' )
+        {
+            const arg = simplified[ op ];
+            const unary = extractUnaryOperand( arg );
+
+            if( unary.valid && isFiniteNumber( unary.value ))
+            {
+                const raw = op === '$trunc' ? Math.trunc( unary.value ) : Math.round( unary.value );
+
+                return raw === 0 ? 0 : raw;
+            }
+
+            if(
+                Array.isArray( arg )
+                && arg.length === 2
+                && isFiniteNumber( arg[ 0 ] )
+                && isFiniteNumber( arg[ 1 ] )
+                && Number.isSafeInteger( arg[ 1 ] )
+                && arg[ 1 ] === 0
+            )
+            {
+                const raw = op === '$trunc' ? Math.trunc( arg[ 0 ] ) : Math.round( arg[ 0 ] );
+
+                return raw === 0 ? 0 : raw;
+            }
+        }
         else if( op === '$toLower' || op === '$toUpper' || op === '$strLenBytes' || op === '$strLenCP' )
         {
             const unary = extractUnaryOperand( simplified[ op ] );
@@ -583,6 +686,116 @@ export function simplifyExpression( expr: unknown ): unknown
                         return converted.startsWith( '$' ) ? { $literal: converted } : converted;
                     }
                 }
+            }
+        }
+        else if( ( op === '$trim' || op === '$ltrim' || op === '$rtrim' ) && isPlainObject( simplified[ op ] ))
+        {
+            const trimSpec = simplified[ op ] as Record<string, unknown>;
+            const trimKeys = Object.keys( trimSpec );
+
+            if( trimKeys.length === 1 && trimKeys[ 0 ] === 'input' )
+            {
+                const str = extractStringConstant( trimSpec.input );
+
+                if( str !== null && ASCII_PATTERN.test( str ))
+                {
+                    const trimmed = op === '$trim'
+                        ? str.trim()
+                        : ( op === '$ltrim' ? str.trimStart() : str.trimEnd() );
+
+                    return trimmed.startsWith( '$' ) ? { $literal: trimmed } : trimmed;
+                }
+            }
+        }
+        else if(
+            ( op === '$substrBytes' || op === '$substrCP' )
+            && Array.isArray( simplified[ op ] )
+            && ( simplified[ op ] as unknown[] ).length === 3
+        )
+        {
+            const [ strExpr, startExpr, countExpr ] = simplified[ op ] as [ unknown, unknown, unknown ];
+            const str = extractStringConstant( strExpr );
+
+            if(
+                str !== null
+                && ASCII_PATTERN.test( str )
+                && isFiniteNumber( startExpr )
+                && isFiniteNumber( countExpr )
+                && Number.isSafeInteger( startExpr )
+                && Number.isSafeInteger( countExpr )
+                && startExpr >= 0
+                && countExpr >= 0
+            )
+            {
+                const sliced = str.slice( startExpr, startExpr + countExpr );
+
+                return sliced.startsWith( '$' ) ? { $literal: sliced } : sliced;
+            }
+        }
+        else if( op === '$concatArrays' && Array.isArray( simplified.$concatArrays ) && simplified.$concatArrays.length >= 1 )
+        {
+            if( simplified.$concatArrays.every( isConstantArray ))
+            {
+                return ( simplified.$concatArrays as unknown[][] ).flat( 1 );
+            }
+        }
+        else if( op === '$isArray' )
+        {
+            const unary = extractUnaryOperand( simplified.$isArray );
+
+            if( unary.valid )
+            {
+                if( isConstantArray( unary.value ))
+                {
+                    return true;
+                }
+
+                if( extractPrimitiveConstant( unary.value ).valid )
+                {
+                    return false;
+                }
+            }
+        }
+        else if(
+            op === '$arrayElemAt'
+            && Array.isArray( simplified.$arrayElemAt )
+            && simplified.$arrayElemAt.length === 2
+        )
+        {
+            const [ arrExpr, idxExpr ] = simplified.$arrayElemAt as [ unknown, unknown ];
+
+            if(
+                isConstantArray( arrExpr )
+                && isFiniteNumber( idxExpr )
+                && Number.isSafeInteger( idxExpr )
+            )
+            {
+                const resolvedIdx = idxExpr < 0 ? arrExpr.length + idxExpr : idxExpr;
+
+                if( resolvedIdx >= 0 && resolvedIdx < arrExpr.length )
+                {
+                    return arrExpr[ resolvedIdx ];
+                }
+            }
+        }
+        else if( op === '$first' || op === '$last' )
+        {
+            const unary = extractUnaryOperand( simplified[ op ] );
+
+            if( unary.valid && isConstantArray( unary.value ) && unary.value.length > 0 )
+            {
+                return op === '$first'
+                    ? unary.value[ 0 ]
+                    : unary.value[ unary.value.length - 1 ];
+            }
+        }
+        else if( op === '$reverseArray' )
+        {
+            const unary = extractUnaryOperand( simplified.$reverseArray );
+
+            if( unary.valid && isConstantArray( unary.value ))
+            {
+                return [ ...unary.value ].reverse();
             }
         }
         else if(
@@ -643,24 +856,181 @@ export function simplifyExpression( expr: unknown ): unknown
             {
                 return evaluateConstantComparison( op, leftStr, rightStr );
             }
-        }
-        else if( op === '$size' && isPlainObject( simplified.$size ))
-        {
-            const inner = simplified.$size as Record<string, unknown>;
 
-            if( Object.keys( inner ).length === 1 && '$filter' in inner && isPlainObject( inner.$filter ))
+            if( ( op === '$eq' || op === '$ne' ) && typeof left === 'boolean' && typeof right === 'boolean' )
             {
-                const filterSpec = inner.$filter as Record<string, unknown>;
+                return op === '$eq' ? left === right : left !== right;
+            }
+        }
+        else if( op === '$size' )
+        {
+            const sizeArg = (
+                Array.isArray( simplified.$size )
+                && simplified.$size.length === 1
+                && Array.isArray( simplified.$size[ 0 ] )
+            )
+                ? simplified.$size[ 0 ]
+                : simplified.$size;
 
-                if(
-                    'cond' in filterSpec
-                    && isTruthyConstant( filterSpec.cond )
-                    && !( 'limit' in filterSpec && filterSpec.limit !== undefined )
-                    && 'input' in filterSpec
-                )
+            if( isConstantArray( sizeArg ))
+            {
+                return sizeArg.length;
+            }
+
+            if( isPlainObject( sizeArg ))
+            {
+                const inner = sizeArg as Record<string, unknown>;
+
+                if( Object.keys( inner ).length === 1 && '$filter' in inner && isPlainObject( inner.$filter ))
                 {
-                    return { $size: filterSpec.input };
+                    const filterSpec = inner.$filter as Record<string, unknown>;
+
+                    if(
+                        'cond' in filterSpec
+                        && isTruthyConstant( filterSpec.cond )
+                        && !( 'limit' in filterSpec && filterSpec.limit !== undefined )
+                        && 'input' in filterSpec
+                    )
+                    {
+                        return simplifyExpression({ $size: filterSpec.input });
+                    }
                 }
+            }
+        }
+        else if( op === '$filter' && isPlainObject( simplified.$filter ))
+        {
+            const filterSpec = simplified.$filter as Record<string, unknown>;
+
+            if(
+                isConstantArray( filterSpec.input )
+                && 'cond' in filterSpec
+                && !( 'limit' in filterSpec && filterSpec.limit !== undefined )
+            )
+            {
+                if( isTruthyConstant( filterSpec.cond ))
+                {
+                    return [ ...filterSpec.input ];
+                }
+
+                if( isFalsyConstant( filterSpec.cond ))
+                {
+                    return [];
+                }
+            }
+        }
+        else if( op === '$map' && isPlainObject( simplified.$map ))
+        {
+            const mapSpec = simplified.$map as Record<string, unknown>;
+
+            if( Array.isArray( mapSpec.input ) && mapSpec.input.length === 0 && 'in' in mapSpec )
+            {
+                return [];
+            }
+        }
+        else if( op === '$toString' || op === '$toInt' || op === '$toDouble' || op === '$toBool' || op === '$type' )
+        {
+            const unary = extractUnaryOperand( simplified[ op ] );
+
+            if( unary.valid )
+            {
+                const prim = extractPrimitiveConstant( unary.value );
+
+                if( prim.valid )
+                {
+                    if( op === '$toBool' && prim.value !== null )
+                    {
+                        return Boolean( prim.value );
+                    }
+
+                    if( op === '$toString' && prim.value !== null )
+                    {
+                        const s = String( prim.value );
+                        return s.startsWith( '$' ) ? { $literal: s } : s;
+                    }
+
+                    if( op === '$toInt' )
+                    {
+                        if( typeof prim.value === 'number' && Number.isSafeInteger( Math.trunc( prim.value )))
+                        {
+                            const t = Math.trunc( prim.value );
+                            return t === 0 ? 0 : t;
+                        }
+
+                        if( typeof prim.value === 'boolean' )
+                        {
+                            return prim.value ? 1 : 0;
+                        }
+
+                        if( typeof prim.value === 'string' && /^-?\d+$/.test( prim.value ))
+                        {
+                            const parsed = Number( prim.value );
+                            if( Number.isSafeInteger( parsed ))
+                            {
+                                return parsed === 0 ? 0 : parsed;
+                            }
+                        }
+                    }
+
+                    if( op === '$toDouble' )
+                    {
+                        if( typeof prim.value === 'number' )
+                        {
+                            return prim.value === 0 ? 0 : prim.value;
+                        }
+
+                        if( typeof prim.value === 'boolean' )
+                        {
+                            return prim.value ? 1 : 0;
+                        }
+                    }
+
+                    if( op === '$type' )
+                    {
+                        if( prim.value === null )
+                        {
+                            return 'null';
+                        }
+
+                        if( typeof prim.value === 'boolean' )
+                        {
+                            return 'bool';
+                        }
+
+                        if( typeof prim.value === 'string' )
+                        {
+                            return 'string';
+                        }
+                    }
+                }
+            }
+        }
+        else if( op === '$split' && Array.isArray( simplified.$split ) && simplified.$split.length === 2 )
+        {
+            const str = extractStringConstant( simplified.$split[ 0 ] );
+            const delim = extractStringConstant( simplified.$split[ 1 ] );
+
+            if( str !== null && delim !== null && delim.length > 0 )
+            {
+                const parts = str.split( delim );
+                if( parts.every(( p ) => !p.startsWith( '$' )))
+                {
+                    return parts;
+                }
+            }
+        }
+        else if(
+            ( op === '$indexOfBytes' || op === '$indexOfCP' )
+            && Array.isArray( simplified[ op ] )
+            && ( simplified[ op ] as unknown[] ).length === 2
+        )
+        {
+            const [ strExpr, subExpr ] = simplified[ op ] as [ unknown, unknown ];
+            const str = extractStringConstant( strExpr );
+            const sub = extractStringConstant( subExpr );
+
+            if( str !== null && sub !== null && ASCII_PATTERN.test( str ) && ASCII_PATTERN.test( sub ))
+            {
+                return str.indexOf( sub );
             }
         }
     }
@@ -768,13 +1138,86 @@ function simplifyStage( stage: unknown ): unknown
 {
     const entry = getSingleStageEntry( stage );
 
-    if( !entry || !isPlainObject( entry[ 1 ] ))
+    if( !entry )
     {
         return stage;
     }
 
     const [ op, spec ] = entry;
+
+    if( op === '$sortByCount' || op === '$replaceWith' )
+    {
+        const simplified = simplifyExpression( spec );
+        return simplified !== spec ? { [ op ]: simplified } : stage;
+    }
+
+    if( !isPlainObject( spec ))
+    {
+        return stage;
+    }
+
     const specObj = spec as Record<string, unknown>;
+
+    if( op === '$replaceRoot' && 'newRoot' in specObj )
+    {
+        const simplifiedRoot = simplifyExpression( specObj.newRoot );
+        return simplifiedRoot !== specObj.newRoot
+            ? { $replaceRoot: { ...specObj, newRoot: simplifiedRoot } }
+            : stage;
+    }
+
+    if( op === '$bucket' )
+    {
+        let changed = false;
+        const newBucket: Record<string, unknown> = { ...specObj };
+
+        if( 'groupBy' in specObj )
+        {
+            const simplifiedGroupBy = simplifyExpression( specObj.groupBy );
+            if( simplifiedGroupBy !== specObj.groupBy )
+            {
+                changed = true;
+                newBucket.groupBy = simplifiedGroupBy;
+            }
+        }
+
+        if( isPlainObject( specObj.output ))
+        {
+            let outputChanged = false;
+            const newOutput: Record<string, unknown> = {};
+
+            for( const [ outKey, outVal ] of Object.entries( specObj.output ))
+            {
+                if( isPlainObject( outVal ))
+                {
+                    const accKeys = Object.keys( outVal );
+                    if( accKeys.length === 1 && GROUP_ACCUMULATORS.has( accKeys[ 0 ]! ))
+                    {
+                        const accOp = accKeys[ 0 ]!;
+                        const accArg = ( outVal as Record<string, unknown> )[ accOp ];
+                        const simplifiedArg = simplifyExpression( accArg );
+
+                        if( simplifiedArg !== accArg )
+                        {
+                            outputChanged = true;
+                            newOutput[ outKey ] = { [ accOp ]: simplifiedArg };
+                            continue;
+                        }
+                    }
+                }
+
+                newOutput[ outKey ] = outVal;
+            }
+
+            if( outputChanged )
+            {
+                changed = true;
+                newBucket.output = newOutput;
+            }
+        }
+
+        return changed ? { $bucket: newBucket } : stage;
+    }
 
     if( op === '$addFields' || op === '$set' )
     {
@@ -880,7 +1323,17 @@ function simplifyStage( stage: unknown ): unknown
 export class ExpressionSimplificationPass implements PipelinePass
 {
     readonly name       = 'expression-simplification';
-    readonly stageTypes = [ '$addFields', '$set', '$project', '$group', '$match' ] as const;
+    readonly stageTypes = [
+        '$addFields',
+        '$set',
+        '$project',
+        '$group',
+        '$match',
+        '$bucket',
+        '$sortByCount',
+        '$replaceRoot',
+        '$replaceWith'
+    ] as const;
 
     execute( pipeline: any[], context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {

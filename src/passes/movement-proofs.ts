@@ -6,6 +6,7 @@ import { analyzeStage } from '../analyzer/semantics';
 import {
     canContinuePastStage,
     dependenciesReadAnyPath,
+    hasOnlyKnownDependencyPaths,
     isExactPathDiscardedByFollower,
 } from './projection-proofs';
 import {
@@ -596,7 +597,8 @@ function proveDisjointMatchPushdown(
     modifiedPaths : Iterable<string>,
     matchStage    : { readonly $match: Record<string, unknown> },
     match         : StageSemantics,
-    projectStage? : StageSemantics
+    projectStage? : StageSemantics,
+    aliases       : ReadonlyMap<string, string> = new Map()
 ): MatchPushdownProof | null
 {
     if( !projectStage && arePathsDisjoint( match.dependencies.local, modifiedPaths ))
@@ -610,18 +612,38 @@ function proveDisjointMatchPushdown(
 
     const pushable: Record<string, unknown>[] = [];
     const residual: Record<string, unknown>[] = [];
-    const emptyAliases = new Map<string, string>();
 
     for( const conjunct of conjuncts )
     {
         const conjunctSemantics = analyzeStage( { $match: conjunct } );
         const canPush = projectStage
-            ? proveProjectDependencies( projectStage, conjunctSemantics, emptyAliases )
-            : arePathsDisjoint( conjunctSemantics.dependencies.local, modifiedPaths );
+            ? proveProjectDependencies( projectStage, conjunctSemantics, aliases )
+            : aliases.size > 0
+                ? proveAddFieldsDependencies(
+                    { modifies: new Set( modifiedPaths ) } as unknown as StageSemantics,
+                    conjunctSemantics,
+                    aliases
+                )
+                : arePathsDisjoint( conjunctSemantics.dependencies.local, modifiedPaths );
 
-        if( isSafeMatchSummary( conjunctSemantics ) && canPush )
+        const usesAliases = !arePathsDisjoint( conjunctSemantics.dependencies.local, modifiedPaths );
+
+        if(
+            isSafeMatchSummary( conjunctSemantics )
+            && canPush
+            && ( !usesAliases || !containsGetField( conjunct ))
+        )
         {
-            pushable.push( conjunct );
+            const rewritten = rewriteQueryDocument( conjunct, aliases, false );
+
+            if( rewritten )
+            {
+                pushable.push( rewritten.value );
+            }
+            else
+            {
+                residual.push( conjunct );
+            }
         }
         else
         {
@@ -737,7 +759,8 @@ export function proveMatchPushdownAcrossStage(
             preceding.modifies,
             matchStage,
             match,
-            preceding.operator === '$project' ? preceding : undefined
+            preceding.operator === '$project' ? preceding : undefined,
+            preceding.operator === '$project' ? undefined : aliases
         );
     }
 
@@ -763,6 +786,31 @@ export function proveMatchPushdownAcrossStage(
         $match: rewrittenFilter.value,
     };
     return { matchStage: rewrittenMatchStage };
+}
+
+function isObjectLiteralReplacementStage( preceding: StageSemantics ): boolean
+{
+    if(
+        ( preceding.operator !== '$replaceRoot' && preceding.operator !== '$replaceWith' )
+        || preceding.malformed
+        || preceding.determinism !== 'deterministic'
+        || preceding.observable.determinism !== 'deterministic'
+        || !hasNoChildUncertainty( preceding )
+    )
+    {
+        return false;
+    }
+
+    const rawSpec = ( preceding.stage as Record<string, any> )[ preceding.operator ];
+    const replacementRoot = preceding.operator === '$replaceRoot'
+        ? rawSpec.newRoot
+        : rawSpec;
+
+    return (
+        isPlainObject( replacementRoot )
+        && Object.keys( replacementRoot ).length > 0
+        && Object.keys( replacementRoot ).every(( key ) => !key.startsWith( '$' ))
+    );
 }
 
 /**
@@ -797,10 +845,15 @@ export function proveLimitAdvanceAcrossStage(
     }
 
     const preceding = analyzeStage(precedingStage);
-    return (
+    if(
         PASSIVE_LIMIT_OPERATORS.has(preceding.operator)
         && isSafePassiveSummary(preceding)
-    );
+    )
+    {
+        return true;
+    }
+
+    return !context?.strictErrors && isObjectLiteralReplacementStage( preceding );
 }
 
 const ALLOWED_LOOKUP_KEYS = new Set([
@@ -944,6 +997,40 @@ export function proveLookupDelayAcrossStage(
     return true;
 }
 
+const COLLAPSING_LOOKUP_KILLERS = new Set([
+    '$sortByCount',
+    '$bucket',
+    '$bucketAuto'
+]);
+
+function isCollapsingStageIgnoringPath(
+    stage   : unknown,
+    alias   : string,
+    context : GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT
+): boolean
+{
+    if( context.strictErrors )
+    {
+        return false;
+    }
+
+    const semantics = analyzeStage( stage );
+
+    if(
+        !COLLAPSING_LOOKUP_KILLERS.has( semantics.operator )
+        || semantics.malformed
+        || semantics.unknown
+    )
+    {
+        return false;
+    }
+
+    return (
+        hasOnlyKnownDependencyPaths( semantics )
+        && !dependenciesReadAnyPath( semantics, [ alias ] )
+    );
+}
+
 /**
  * Removes a supported equality or pipeline lookup when the next stage drops the
  * alias from the successful output.
@@ -964,16 +1051,16 @@ export function proveRedundantLookupElimination(
         return false;
     }
 
-    return isExactPathDiscardedByFollower(
-        lookupStage.$lookup.as,
-        followingStage
+    return (
+        isExactPathDiscardedByFollower( lookupStage.$lookup.as, followingStage )
+        || isCollapsingStageIgnoringPath( followingStage, lookupStage.$lookup.as, context )
     );
 }
 
 /**
  * Removes a supported equality or pipeline lookup when a downstream suffix
- * drops the alias via `$unset` or simple `$project` without any intermediate
- * stage reading it.
+ * drops the alias via `$unset`, simple `$project`, or collapsing stage without
+ * any intermediate stage reading it.
  */
 export function proveRedundantLookupEliminationAcrossSuffix(
     lookupStage : unknown,
@@ -996,7 +1083,10 @@ export function proveRedundantLookupEliminationAcrossSuffix(
 
     for( const stage of suffix )
     {
-        if( isExactPathDiscardedByFollower( alias, stage ))
+        if(
+            isExactPathDiscardedByFollower( alias, stage )
+            || isCollapsingStageIgnoringPath( stage, alias, context )
+        )
         {
             return true;
         }
@@ -1263,6 +1353,81 @@ export function proveLookupSubpipelinePushdown(
     };
 }
 
+export interface SubpipelineSuffixPushdownProof
+{
+    readonly lookupStage    : Record<string, unknown>;
+    readonly matchOffset    : number;
+    readonly residualStage? : {
+        readonly $match : Record<string, unknown>;
+    };
+}
+
+export function proveLookupSubpipelinePushdownAcrossSuffix(
+    lookupStage : unknown,
+    suffix      : readonly unknown[],
+    context     : GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT
+): SubpipelineSuffixPushdownProof | null
+{
+    if(
+        !isPlainObject( lookupStage )
+        || Object.keys( lookupStage ).length !== 1
+        || !isPlainObject( lookupStage.$lookup )
+        || typeof lookupStage.$lookup.as !== 'string'
+        || lookupStage.$lookup.as.length === 0
+    )
+    {
+        return null;
+    }
+
+    const alias = lookupStage.$lookup.as;
+    const live = new Set([ alias ]);
+    let unwindStage: unknown = null;
+
+    for( let i = 0; i < suffix.length; i++ )
+    {
+        const stage = suffix[ i ];
+
+        if( unwindStage === null )
+        {
+            if( isUnwindForPath( stage, alias ))
+            {
+                unwindStage = stage;
+                const entry = getSingleStageEntry( stage )!;
+                const spec = entry[ 1 ];
+                if( isPlainObject( spec ) && typeof spec.includeArrayIndex === 'string' )
+                {
+                    live.add( spec.includeArrayIndex );
+                }
+                continue;
+            }
+        }
+        else if( isMatchStage( stage ))
+        {
+            const proof = proveLookupSubpipelinePushdown( lookupStage, unwindStage, stage, context );
+            if( proof )
+            {
+                return {
+                    lookupStage : proof.lookupStage,
+                    matchOffset : i + 1,
+                    ...( proof.residualStage ? { residualStage: proof.residualStage } : {} )
+                };
+            }
+        }
+
+        const semantics = analyzeStage( stage );
+        if(
+            dependenciesReadAnyPath( semantics, live )
+            || !canContinuePastStage( semantics, live )
+            || ( context.strictErrors && !isStageProvenErrorFree( stage ))
+        )
+        {
+            return null;
+        }
+    }
+
+    return null;
+}
+
 function hasTerminalLimitAtMost( pipeline: readonly unknown[], limitVal: number ): boolean
 {
     if( pipeline.length === 0 ){ return false }
@@ -1362,12 +1527,18 @@ function isUnwindForPath( stage: unknown, alias: string ): boolean
     return false;
 }
 
+function isDirectAliasReference( arg: unknown, alias: string ): boolean
+{
+    return (
+        arg === `$${ alias }`
+        || arg === `$$ROOT.${ alias }`
+        || arg === `$$CURRENT.${ alias }`
+    );
+}
+
 function extractHeadLimitExpression( expr: unknown, alias: string ): number | null
 {
     if( !isPlainObject( expr ) ){ return null }
-
-    const targetRef = `$${ alias }`;
-    const rootRef = `$$ROOT.${ alias }`;
 
     const keys = Object.keys( expr );
     if( keys.length !== 1 ){ return null }
@@ -1376,8 +1547,14 @@ function extractHeadLimitExpression( expr: unknown, alias: string ): number | nu
 
     if( op === '$first' )
     {
-        const arg = ( expr as Record<string, unknown> ).$first;
-        return ( arg === targetRef || arg === rootRef ) ? 1 : null;
+        const rawArg = ( expr as Record<string, unknown> ).$first;
+        const arg = Array.isArray( rawArg ) && rawArg.length === 1
+            ? rawArg[ 0 ]
+            : rawArg;
+
+        return isDirectAliasReference( arg, alias )
+            ? 1
+            : null;
     }
 
     if( op === '$arrayElemAt' )
@@ -1385,7 +1562,7 @@ function extractHeadLimitExpression( expr: unknown, alias: string ): number | nu
         const args = ( expr as Record<string, unknown> ).$arrayElemAt;
         if( !Array.isArray( args ) || args.length !== 2 ){ return null }
 
-        return ( args[ 0 ] === targetRef || args[ 0 ] === rootRef ) && args[ 1 ] === 0
+        return isDirectAliasReference( args[ 0 ], alias ) && args[ 1 ] === 0
             ? 1
             : null;
     }
@@ -1393,11 +1570,27 @@ function extractHeadLimitExpression( expr: unknown, alias: string ): number | nu
     if( op === '$slice' )
     {
         const args = ( expr as Record<string, unknown> ).$slice;
-        if( !Array.isArray( args ) || args.length !== 2 ){ return null }
+        if( !Array.isArray( args ) || ( args.length !== 2 && args.length !== 3 )){ return null }
 
-        const [ arrArg, countArg ] = args;
+        if( args.length === 2 )
+        {
+            const [ arrArg, countArg ] = args;
+            if(
+                isDirectAliasReference( arrArg, alias )
+                && typeof countArg === 'number'
+                && Number.isSafeInteger( countArg )
+                && countArg > 0
+            )
+            {
+                return countArg;
+            }
+            return null;
+        }
+
+        const [ arrArg, skipArg, countArg ] = args;
         if(
-            ( arrArg === targetRef || arrArg === rootRef )
+            isDirectAliasReference( arrArg, alias )
+            && skipArg === 0
             && typeof countArg === 'number'
             && Number.isSafeInteger( countArg )
             && countArg > 0
@@ -1418,9 +1611,11 @@ function containsPathReference( value: unknown, alias: string ): boolean
         {
             const path = value.startsWith( '$$ROOT.' )
                 ? value.slice( 7 )
-                : value.startsWith( '$$' )
-                    ? ''
-                    : value.slice( 1 );
+                : value.startsWith( '$$CURRENT.' )
+                    ? value.slice( 10 )
+                    : value.startsWith( '$$' )
+                        ? ''
+                        : value.slice( 1 );
 
             return path === alias || path.startsWith( `${ alias }.` );
         }
@@ -1608,6 +1803,123 @@ export function proveLookupLimitPushdown(
     }
 
     return null;
+}
+
+export function proveLookupSubpipelineFieldPruning(
+    lookupStage     : unknown,
+    followingStages : readonly unknown[],
+    context         : GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT
+): LookupLimitPushdownProof | null
+{
+    if( context.strictFieldOrder || followingStages.length === 0 )
+    {
+        return null;
+    }
+
+    const entry = getSingleStageEntry( lookupStage );
+    if( !entry || entry[ 0 ] !== '$lookup' || !isPlainObject( entry[ 1 ] ))
+    {
+        return null;
+    }
+
+    if( context.strictErrors && !isStageProvenErrorFree( lookupStage ))
+    {
+        return null;
+    }
+
+    const lookupSpec = entry[ 1 ] as Record<string, unknown>;
+    if(
+        typeof lookupSpec.as !== 'string'
+        || lookupSpec.as.length === 0
+        || !Array.isArray( lookupSpec.pipeline )
+    )
+    {
+        return null;
+    }
+
+    const lastSub = lookupSpec.pipeline.length > 0
+        ? getSingleStageEntry( lookupSpec.pipeline[ lookupSpec.pipeline.length - 1 ] )
+        : null;
+    if( lastSub && lastSub[ 0 ] === '$project' )
+    {
+        return null;
+    }
+
+    const alias = lookupSpec.as;
+    const targetStage = isUnwindForPath( followingStages[ 0 ], alias )
+        ? followingStages[ 1 ]
+        : followingStages[ 0 ];
+
+    const targetEntry = getSingleStageEntry( targetStage );
+    if( !targetEntry || targetEntry[ 0 ] !== '$project' || !isPlainObject( targetEntry[ 1 ] ))
+    {
+        return null;
+    }
+
+    const projSpec = targetEntry[ 1 ] as Record<string, unknown>;
+    const projSem = analyzeStage( targetStage );
+    if(
+        projSem.malformed
+        || projSem.unknown
+        || !projSem.projection
+        || projSem.projection.unknown
+        || projSem.projection.mode !== 'inclusion'
+        || !hasOnlyKnownDependencyPaths( projSem )
+        || containsGetField( projSpec )
+        || alias in projSpec
+        || projSem.dependencies.local.has( alias )
+    )
+    {
+        return null;
+    }
+
+    const prefix = `${ alias }.`;
+    const subFields = new Set<string>();
+
+    for( const dep of projSem.dependencies.local )
+    {
+        if( dep.startsWith( prefix ))
+        {
+            subFields.add( dep.slice( prefix.length ).split( '.' )[ 0 ]! );
+        }
+    }
+
+    for( const inc of projSem.projection.includedPaths )
+    {
+        if( inc.startsWith( prefix ))
+        {
+            subFields.add( inc.slice( prefix.length ).split( '.' )[ 0 ]! );
+        }
+    }
+
+    if( subFields.size === 0 )
+    {
+        return null;
+    }
+
+    const subProject: Record<string, unknown> = {};
+    if( !subFields.has( '_id' ))
+    {
+        subProject._id = 0;
+    }
+
+    for( const f of Array.from( subFields ).sort() )
+    {
+        subProject[ f ] = 1;
+    }
+
+    return {
+        lookupStage: {
+            ...( lookupStage as Record<string, unknown> ),
+            $lookup: {
+                ...lookupSpec,
+                pipeline: [
+                    ...( deepClone( lookupSpec.pipeline ) as unknown[] ),
+                    { $project: subProject }
+                ]
+            }
+        }
+    };
 }
 
 /**

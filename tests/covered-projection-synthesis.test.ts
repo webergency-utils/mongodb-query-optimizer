@@ -723,6 +723,16 @@ describe( 'count neutral prefix trim', () =>
             lookup,
             { $count: 'total' }
         ]);
+
+        expect( trimCountNeutralPrefix([
+            { $sort: { price: -1 } },
+            { $project: { price: 1 } },
+            { $unset: 'secret' },
+            { $set: { tag: 'v1' } },
+            { $count: 'total' }
+        ], strict ) ).toEqual([
+            { $count: 'total' }
+        ]);
     });
 
     it( 'keeps a sort that chooses the limited rows', () =>

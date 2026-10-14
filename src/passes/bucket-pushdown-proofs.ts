@@ -1,12 +1,41 @@
 import { GuaranteeContext } from '../guarantees.js';
 import { deepClone, isPlainObject } from '../utils.js';
 import { isStageProvenErrorFree } from './guarantee-guards.js';
-import { getStageSpec } from './helpers.js';
+import
+{
+    combineConjuncts,
+    decomposeFilterIntoConjuncts,
+    getStageSpec
+}
+from './helpers.js';
 
 export interface BucketFilterPushdownProof
 {
     prefilterStage: { $match: Record<string, any> }
     postfilterStage: { $match: Record<string, any> } | null
+}
+
+function isOutsideBoundaryRange(
+    defaultVal : unknown,
+    minBound   : any,
+    maxBound   : any
+): boolean
+{
+    if(
+        typeof defaultVal !== 'string'
+        && typeof defaultVal !== 'number'
+        && typeof defaultVal !== 'boolean'
+    )
+    {
+        return false;
+    }
+
+    if( typeof defaultVal !== typeof minBound )
+    {
+        return true;
+    }
+
+    return ( defaultVal as any ) < minBound || ( defaultVal as any ) >= maxBound;
 }
 
 export function proveBucketFilterPushdown(
@@ -55,14 +84,55 @@ export function proveBucketFilterPushdown(
         }
     }
 
-    if( !('_id' in matchSpec ))
+    const conjuncts = decomposeFilterIntoConjuncts( matchSpec );
+    const idConjunctIndex = conjuncts.findIndex(( c ) => '_id' in c && Object.keys( c ).length === 1 );
+
+    if( idConjunctIndex === -1 )
     {
-        return null;
+        const orConjunctIndex = conjuncts.findIndex(
+            ( c ) => '$or' in c && Object.keys( c ).length === 1 && Array.isArray( c.$or ) && c.$or.length > 0
+        );
+
+        if( orConjunctIndex === -1 )
+        {
+            return null;
+        }
+
+        const orBranches = conjuncts[ orConjunctIndex ]!.$or as unknown[];
+        const pushedBranches: Record<string, any>[] = [];
+
+        for( const branch of orBranches )
+        {
+            if( !isPlainObject( branch ))
+            {
+                return null;
+            }
+
+            const branchProof = proveBucketFilterPushdown( bucketStage, { $match: branch }, context );
+            if( !branchProof || branchProof.postfilterStage !== null )
+            {
+                return null;
+            }
+
+            pushedBranches.push( branchProof.prefilterStage.$match );
+        }
+
+        const remainingOrConjuncts = conjuncts
+            .filter(( _c, idx ) => idx !== orConjunctIndex )
+            .map(( c ) => deepClone( c ));
+
+        return {
+            prefilterStage: { $match: { $or: pushedBranches } },
+            postfilterStage: remainingOrConjuncts.length > 0
+                ? { $match: combineConjuncts( remainingOrConjuncts ) }
+                : null
+        };
     }
 
-    const idCondition = matchSpec._id;
+    const idCondition = conjuncts[ idConjunctIndex ]!._id;
     let prefilterCondition: Record<string, any> | null = null;
     let prefilterDisjunction: Array<Record<string, any>> | null = null;
+    let retainIdInPostfilter = false;
 
     if(
         typeof idCondition === 'number'
@@ -97,6 +167,44 @@ export function proveBucketFilterPushdown(
             $gte: boundaries[k],
             $lt: boundaries[k + 1]
         };
+    }
+    else if(
+        isPlainObject( idCondition )
+        && '$ne' in idCondition
+        && Object.keys( idCondition ).length === 1
+        && bucketSpec.default !== undefined
+        && idCondition.$ne === bucketSpec.default
+        && isOutsideBoundaryRange( bucketSpec.default, boundaries[ 0 ], boundaries[ boundaries.length - 1 ] )
+    )
+    {
+        prefilterCondition = {
+            $gte: boundaries[ 0 ],
+            $lt: boundaries[ boundaries.length - 1 ]
+        };
+    }
+    else if(
+        isPlainObject( idCondition )
+        && '$nin' in idCondition
+        && Array.isArray( idCondition.$nin )
+        && idCondition.$nin.length > 0
+        && Object.keys( idCondition ).length === 1
+        && bucketSpec.default !== undefined
+        && idCondition.$nin.includes( bucketSpec.default )
+        && isOutsideBoundaryRange( bucketSpec.default, boundaries[ 0 ], boundaries[ boundaries.length - 1 ] )
+    )
+    {
+        prefilterCondition = {
+            $gte: boundaries[ 0 ],
+            $lt: boundaries[ boundaries.length - 1 ]
+        };
+
+        const hasValidBoundaryInNin = idCondition.$nin.some(( item: unknown ) =>
+        {
+            const k = boundaries.indexOf( item );
+            return k !== -1 && k < boundaries.length - 1;
+        });
+
+        retainIdInPostfilter = hasValidBoundaryInNin;
     }
     else if(
         isPlainObject( idCondition )
@@ -202,21 +310,13 @@ export function proveBucketFilterPushdown(
         prefilter.$or = prefilterDisjunction;
     }
 
-    const postfilter: Record<string, any> = {};
-
-    for( const [ key, val ] of Object.entries( matchSpec ))
-    {
-        if( key === '_id' )
-        {
-            continue;
-        }
-
-        postfilter[key] = deepClone( val );
-    }
+    const remainingConjuncts = conjuncts
+        .filter(( _c, idx ) => retainIdInPostfilter || idx !== idConjunctIndex )
+        .map(( c ) => deepClone( c ));
 
     const postfilterStage = (
-        Object.keys( postfilter ).length > 0
-            ? { $match: postfilter }
+        remainingConjuncts.length > 0
+            ? { $match: combineConjuncts( remainingConjuncts ) }
             : null
     );
 

@@ -3,7 +3,7 @@ import {
     getActiveFilterRules,
     withCandidateFilterRuleProfile,
 } from './filter-rule-registry';
-import { isFilterRewriteSafe } from './analyzer/filters';
+import { isFilterContradiction, isFilterRewriteSafe } from './analyzer/filters';
 import
 {
     GuaranteeContext,
@@ -12,6 +12,7 @@ import
 }
 from './guarantees';
 import {
+    isEmptyObject,
     isPlainObject,
     isOperatorSubdocument,
     structuralFingerprint,
@@ -133,6 +134,16 @@ function simplifyFieldIntervals(
         }
     }
 
+    if( Array.isArray( operatorDocument.$all ) && operatorDocument.$all.length >= 2 )
+    {
+        const dedupedAll = deduplicateOperatorArray( operatorDocument.$all );
+
+        if( dedupedAll )
+        {
+            operatorDocument = { ...operatorDocument, $all: dedupedAll };
+        }
+    }
+
     const forbidden = new Set<string>();
 
     if( Array.isArray( operatorDocument.$nin ))
@@ -157,6 +168,16 @@ function simplifyFieldIntervals(
             '$eq' in operatorDocument
             && !isRegexLike( operatorDocument.$eq )
             && forbidden.has( structuralFingerprint( operatorDocument.$eq ))
+        )
+        {
+            return { $in: [] };
+        }
+
+        if(
+            Array.isArray( operatorDocument.$all )
+            && operatorDocument.$all.some(
+                ( item: unknown ) => !isRegexLike( item ) && forbidden.has( structuralFingerprint( item ))
+            )
         )
         {
             return { $in: [] };
@@ -281,6 +302,45 @@ function simplifyFieldIntervals(
         return rest;
     }
 
+    if( Array.isArray( operatorDocument.$in ) && operatorDocument.$in.length > 0 )
+    {
+        const filteredIn = operatorDocument.$in.filter(( item: unknown ) =>
+        {
+            const itemVal = extractComparableBound( item, isDateMode );
+
+            if( itemVal === undefined )
+            {
+                return true;
+            }
+
+            if( finalLower !== undefined )
+            {
+                const belowLower = finalLower.strict ? itemVal <= finalLower.val : itemVal < finalLower.val;
+
+                if( belowLower ){ return false }
+            }
+
+            if( finalUpper !== undefined )
+            {
+                const aboveUpper = finalUpper.strict ? itemVal >= finalUpper.val : itemVal > finalUpper.val;
+
+                if( aboveUpper ){ return false }
+            }
+
+            return true;
+        });
+
+        if( filteredIn.length === 0 )
+        {
+            return { $in: [] };
+        }
+
+        if( filteredIn.length < operatorDocument.$in.length )
+        {
+            operatorDocument = { ...operatorDocument, $in: filteredIn };
+        }
+    }
+
     let changed = false;
     const result: Record<string, any> = { ...operatorDocument };
 
@@ -311,12 +371,434 @@ function simplifyFieldIntervals(
     return changed ? result : operatorDocument;
 }
 
+function isConsolidatableScalar( val: unknown ): boolean
+{
+    if( val === null || typeof val === 'string' || typeof val === 'boolean' || val instanceof Date )
+    {
+        return true;
+    }
+
+    return typeof val === 'number' && Number.isFinite( val );
+}
+
+function extractBranchScalarOrInValues( branch: unknown ): { field: string; values: any[] } | null
+{
+    if( !isPlainObject( branch ))
+    {
+        return null;
+    }
+
+    const entries = Object.entries( branch );
+    if( entries.length !== 1 )
+    {
+        return null;
+    }
+
+    const [ field, cond ] = entries[ 0 ]!;
+    if( field.startsWith( '$' ))
+    {
+        return null;
+    }
+
+    if( isConsolidatableScalar( cond ))
+    {
+        return { field, values: [ cond ] };
+    }
+
+    if( !isPlainObject( cond ) || Object.keys( cond ).length !== 1 )
+    {
+        return null;
+    }
+
+    if( '$eq' in cond && isConsolidatableScalar( cond.$eq ))
+    {
+        return { field, values: [ cond.$eq ] };
+    }
+
+    if(
+        '$in' in cond
+        && Array.isArray( cond.$in )
+        && cond.$in.length > 0
+        && cond.$in.every( isConsolidatableScalar )
+    )
+    {
+        return { field, values: cond.$in };
+    }
+
+    return null;
+}
+
+function consolidateOrSameFieldDocument(
+    filter: Record<string, any>
+): Record<string, any>
+{
+    if( !Array.isArray( filter.$or ) || filter.$or.length < 2 )
+    {
+        return filter;
+    }
+
+    const branches = filter.$or;
+    let commonField: string | null = null;
+    const values: any[] = [];
+    const seen = new Set<string>();
+
+    for( const branch of branches )
+    {
+        const extracted = extractBranchScalarOrInValues( branch );
+        if( !extracted )
+        {
+            return filter;
+        }
+
+        if( commonField === null )
+        {
+            commonField = extracted.field;
+        }
+        else if( extracted.field !== commonField )
+        {
+            return filter;
+        }
+
+        for( const v of extracted.values )
+        {
+            const fp = structuralFingerprint( v );
+            if( !seen.has( fp ))
+            {
+                seen.add( fp );
+                values.push( v );
+            }
+        }
+    }
+
+    if( commonField === null || commonField in filter )
+    {
+        return filter;
+    }
+
+    const result: Record<string, any> = {};
+    for( const [ k, v ] of Object.entries( filter ))
+    {
+        if( k === '$or' )
+        {
+            result[ commonField ] = values.length === 1
+                ? values[ 0 ]
+                : { $in: values };
+        }
+        else
+        {
+            result[ k ] = v;
+        }
+    }
+
+    return result;
+}
+
+function extractCommonOrFactors(
+    filter: Record<string, any>
+): Record<string, any>
+{
+    if( !Array.isArray( filter.$or ) || filter.$or.length < 2 )
+    {
+        return filter;
+    }
+
+    const branches = filter.$or;
+    for( const b of branches )
+    {
+        if( !isPlainObject( b ) || Object.keys( b ).length < 2 )
+        {
+            return filter;
+        }
+    }
+
+    const firstBranch = branches[ 0 ] as Record<string, any>;
+    const commonKeys: string[] = [];
+
+    for( const [ key, val ] of Object.entries( firstBranch ))
+    {
+        if( key.startsWith( '$' ) || key in filter )
+        {
+            continue;
+        }
+
+        const targetFp = structuralFingerprint( val );
+        const presentInAll = branches.every(( b: Record<string, any> ) =>
+            key in b
+            && Object.keys( b ).length >= 2
+            && structuralFingerprint( b[ key ] ) === targetFp
+        );
+
+        if( presentInAll && Object.keys( firstBranch ).length - ( commonKeys.length + 1 ) >= 1 )
+        {
+            commonKeys.push( key );
+        }
+    }
+
+    if( commonKeys.length === 0 )
+    {
+        return filter;
+    }
+
+    const commonSet = new Set( commonKeys );
+    const updatedBranches = branches.map(( b: Record<string, any> ) =>
+    {
+        const nextBranch: Record<string, any> = {};
+        for( const [ k, v ] of Object.entries( b ))
+        {
+            if( !commonSet.has( k ))
+            {
+                nextBranch[ k ] = v;
+            }
+        }
+        return nextBranch;
+    });
+
+    const result: Record<string, any> = {};
+    for( const k of commonKeys )
+    {
+        result[ k ] = firstBranch[ k ];
+    }
+
+    for( const [ k, v ] of Object.entries( filter ))
+    {
+        result[ k ] = k === '$or' ? updatedBranches : v;
+    }
+
+    return result;
+}
+
+function normalizeSpecialFilterOperators(
+    filter  : Record<string, any>,
+    rules   : readonly FilterRule[],
+    context : GuaranteeContext
+): Record<string, any> | null
+{
+    if( '$expr' in filter )
+    {
+        const exprVal = filter.$expr;
+        const { $expr: _removedExpr, ...rest } = filter;
+
+        if( isFilterRewriteSafe( rest ))
+        {
+            if( exprVal === false || exprVal === 0 || exprVal === null )
+            {
+                return { _id: { $in: [] } };
+            }
+
+            if( exprVal === true || ( typeof exprVal === 'number' && Number.isFinite( exprVal )))
+            {
+                return rest;
+            }
+        }
+    }
+
+    if( Array.isArray( filter.$nor ) && filter.$nor.length > 0 )
+    {
+        const norBranches = filter.$nor as unknown[];
+        const { $nor: _removedNor, ...rest } = filter;
+
+        if(
+            isFilterRewriteSafe( rest )
+            && norBranches.every(( b ) => isPlainObject( b ) && isFilterRewriteSafe( b ))
+        )
+        {
+            const sweptBranches = norBranches.map(( b ) => applyFilterSweep( b, rules, context ));
+            const uniqueBranches = deduplicateOperatorArray( sweptBranches ) ?? sweptBranches;
+
+            if( uniqueBranches.some(( b ) => isEmptyObject( b )))
+            {
+                return { _id: { $in: [] } };
+            }
+
+            const liveBranches = uniqueBranches.filter(( b ) => !isFilterContradiction( b ));
+
+            if( liveBranches.length === 0 )
+            {
+                return rest;
+            }
+
+            if( liveBranches.length === 1 )
+            {
+                const single = liveBranches[ 0 ] as Record<string, any>;
+                const entries = Object.entries( single );
+
+                if( entries.length === 1 )
+                {
+                    const [ field, cond ] = entries[ 0 ]!;
+
+                    if( !field.startsWith( '$' ) && !( field in rest ))
+                    {
+                        if(
+                            isConsolidatableScalar( cond )
+                            || (
+                                isPlainObject( cond )
+                                && Object.keys( cond ).length === 1
+                                && '$eq' in cond
+                                && isConsolidatableScalar( cond.$eq )
+                            )
+                        )
+                        {
+                            const eqVal = isConsolidatableScalar( cond ) ? cond : cond.$eq;
+                            return { ...rest, [ field ]: { $ne: eqVal } };
+                        }
+
+                        if(
+                            isPlainObject( cond )
+                            && Object.keys( cond ).length === 1
+                            && '$in' in cond
+                            && Array.isArray( cond.$in )
+                        )
+                        {
+                            return { ...rest, [ field ]: { $nin: cond.$in } };
+                        }
+                    }
+                }
+            }
+
+            if(
+                liveBranches.length < norBranches.length
+                || liveBranches.some(( b, idx ) => b !== norBranches[ idx ] )
+            )
+            {
+                return { ...rest, $nor: liveBranches };
+            }
+        }
+    }
+
+    return null;
+}
+
+function simplifyBooleanAbsorption(
+    filter: Record<string, any>
+): Record<string, any>
+{
+    let current = filter;
+
+    if( Array.isArray( current.$or ) && current.$or.length >= 2 )
+    {
+        const absorbedByTopLevel = current.$or.some(( branch: unknown ) =>
+        {
+            if( !isPlainObject( branch ) || Object.keys( branch ).length !== 1 )
+            {
+                return false;
+            }
+
+            const [ k, v ] = Object.entries( branch )[ 0 ]!;
+
+            return (
+                !k.startsWith( '$' )
+                && k in current
+                && structuralFingerprint( current[ k ] ) === structuralFingerprint( v )
+            );
+        });
+
+        if( absorbedByTopLevel )
+        {
+            const { $or: _removedOr, ...rest } = current;
+            current = rest;
+        }
+    }
+
+    if( Array.isArray( current.$or ) && current.$or.length >= 2 )
+    {
+        const singleKeyMap = new Map<string, Set<string>>();
+        const branchFingerprints = new Set<string>();
+
+        for( const branch of current.$or )
+        {
+            branchFingerprints.add( structuralFingerprint( branch ));
+
+            if( isPlainObject( branch ) && Object.keys( branch ).length === 1 )
+            {
+                const [ k, v ] = Object.entries( branch )[ 0 ]!;
+                if( !k.startsWith( '$' ))
+                {
+                    let set = singleKeyMap.get( k );
+                    if( !set )
+                    {
+                        set = new Set<string>();
+                        singleKeyMap.set( k, set );
+                    }
+                    set.add( structuralFingerprint( v ));
+                }
+            }
+        }
+
+        const filteredOr = current.$or.filter(( branch: unknown ) =>
+        {
+            if( !isPlainObject( branch ))
+            {
+                return true;
+            }
+
+            const keys = Object.keys( branch );
+
+            if(
+                keys.length >= 2
+                && Object.entries( branch ).some(
+                    ([ k, v ]) => singleKeyMap.get( k )?.has( structuralFingerprint( v )) === true
+                )
+            )
+            {
+                return false;
+            }
+
+            if(
+                keys.length === 1
+                && Array.isArray( branch.$and )
+                && branch.$and.some(( item: unknown ) => branchFingerprints.has( structuralFingerprint( item )))
+            )
+            {
+                return false;
+            }
+
+            return true;
+        });
+
+        if( filteredOr.length < current.$or.length )
+        {
+            current = ( filteredOr.length === 1 && Object.keys( current ).length === 1 )
+                ? filteredOr[ 0 ]
+                : { ...current, $or: filteredOr };
+        }
+    }
+
+    if( isPlainObject( current ) && Array.isArray( current.$and ) && current.$and.length >= 2 )
+    {
+        const andFingerprints = new Set<string>(
+            current.$and.map(( b: unknown ) => structuralFingerprint( b ))
+        );
+
+        const filteredAnd = current.$and.filter(( branch: unknown ) =>
+            !(
+                isPlainObject( branch )
+                && Object.keys( branch ).length === 1
+                && Array.isArray( branch.$or )
+                && branch.$or.some(( item: unknown ) => andFingerprints.has( structuralFingerprint( item )))
+            )
+        );
+
+        if( filteredAnd.length < current.$and.length )
+        {
+            current = { ...current, $and: filteredAnd };
+        }
+    }
+
+    return current;
+}
+
 function applyFilterDocumentSweep(
     filter: Record<string, any>,
     rules: readonly FilterRule[],
     context: GuaranteeContext,
 ): any
 {
+    const specialNormalized = normalizeSpecialFilterOperators( filter, rules, context );
+    if( specialNormalized !== null )
+    {
+        return specialNormalized;
+    }
+
     if (!isFilterRewriteSafe(filter))
     {
         return filter;
@@ -364,6 +846,16 @@ function applyFilterDocumentSweep(
         }
 
         current = rule.apply(current, context);
+    }
+
+    if (isPlainObject(current))
+    {
+        current = simplifyBooleanAbsorption(current);
+
+        if (Array.isArray(current.$or))
+        {
+            current = extractCommonOrFactors(current);
+        }
     }
 
     return current;
@@ -440,7 +932,11 @@ function optimizeFilterWithRules(
 
         for (let sweep = 0; sweep < sweepBudget; sweep++)
         {
-            const next = applyFilterSweep(current, rules, context);
+            let next = applyFilterSweep(current, rules, context);
+            if (isPlainObject(next) && Array.isArray(next.$or))
+            {
+                next = consolidateOrSameFieldDocument(next);
+            }
             const nextFingerprint = structuralFingerprint(next);
 
             if (nextFingerprint === currentFingerprint)

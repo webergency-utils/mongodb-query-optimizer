@@ -6,10 +6,12 @@ import
     isDeadSortBeforeBucket,
     isDeadSortBeforeCount, 
     isDeadSortBeforeGroup, 
+    isDeadSortBeforeSample,
     isDeadSortBeforeSortByCount, 
     isEmptySort, 
     isOrderAgnosticBucket,
     isOrderAgnosticGroup, 
+    proveRedundantDownstreamSortInPipeline,
     proveRedundantSortElimination,
     proveRedundantSortEliminationInPipeline
 } 
@@ -337,5 +339,101 @@ describe( 'RedundantSortEliminationPass execution and parity', () =>
             [ { $sort: { a: 1 } }, { $unwind: '$items' }, { $sort: { 'items.price': 1 } } ],
             0
         )).toBe( false );
+
+        // Eliminates dead sort before $sample (directly and across $unwind)
+        expect( isDeadSortBeforeSample( null, { $sample: { size: 5 } } )).toBe( false );
+        expect( isDeadSortBeforeSample( { $sort: { a: 1 } }, null )).toBe( false );
+        expect( isDeadSortBeforeSample( { $sort: { a: 1 } }, { $sample: { size: -1 } } )).toBe( false );
+        expect( isDeadSortBeforeSample( { $sort: { a: 1 } }, { $sample: { size: 5 } } )).toBe( true );
+        expect( proveRedundantSortElimination( { $sort: { a: 1 } }, { $sample: { size: 5 } } )).toBe( true );
+        expect( proveRedundantSortEliminationInPipeline(
+            [ { $sort: { a: 1 } }, { $unwind: '$items' }, { $sample: { size: 3 } } ],
+            0
+        )).toBe( true );
+    });
+
+    it( 'eliminates redundant downstream sorts subsumed by an earlier sort', () =>
+    {
+        const pass = new RedundantSortEliminationPass();
+
+        // Identical or prefix-subsumed downstream sort across order-preserving stages
+        const pipeline = [
+            { $sort: { a: 1, b: -1 } },
+            { $limit: 10 },
+            { $match: { status: 'active' } },
+            { $project: { a: 1, b: 1, status: 1 } },
+            { $sort: { a: 1 } }
+        ];
+        expect( pass.execute( pipeline )).toEqual( pipeline.slice( 0, 4 ));
+
+        // Rejects when downstream sort is invalid or cannot be removed under strictErrors
+        expect( proveRedundantDownstreamSortInPipeline(
+            [ { $sort: { a: 1 } }, { $sort: 'invalid' } ],
+            1,
+            { strictFieldOrder: false, strictErrors: true }
+        )).toBe( false );
+        expect( proveRedundantDownstreamSortInPipeline(
+            [ { $sort: { a: 1 } }, { $sort: { a: { $meta: 'textScore' } } } ],
+            1
+        )).toBe( false );
+
+        // Rejects when earlier sort has fewer keys or different direction
+        expect( proveRedundantDownstreamSortInPipeline(
+            [ { $sort: { a: 1 } }, { $limit: 5 }, { $sort: { a: 1, b: 1 } } ],
+            2
+        )).toBe( false );
+        expect( proveRedundantDownstreamSortInPipeline(
+            [ { $sort: { a: 1, b: -1 } }, { $limit: 5 }, { $sort: { a: -1 } } ],
+            2
+        )).toBe( false );
+
+        // Rejects when intermediate stage drops or modifies sort field, or is $unwind / order-destroying
+        expect( proveRedundantDownstreamSortInPipeline(
+            [ { $sort: { a: 1 } }, { $project: { b: 1 } }, { $sort: { a: 1 } } ],
+            2
+        )).toBe( false );
+        expect( proveRedundantDownstreamSortInPipeline(
+            [ { $sort: { a: 1 } }, { $set: { a: 2 } }, { $sort: { a: 1 } } ],
+            2
+        )).toBe( false );
+        expect( proveRedundantDownstreamSortInPipeline(
+            [ { $sort: { a: 1 } }, { $unwind: '$items' }, { $sort: { a: 1 } } ],
+            2
+        )).toBe( false );
+
+        // Preserves earlier richer sort and eliminates downstream prefix sort across order-insensitive stage
+        expect( pass.execute([
+            { $sort: { a: 1, b: -1 } },
+            { $match: { status: 'active' } },
+            { $sort: { a: 1 } }
+        ])).toEqual([
+            { $sort: { a: 1, b: -1 } },
+            { $match: { status: 'active' } }
+        ]);
+
+        expect( proveRedundantDownstreamSortInPipeline(
+            [ { $sort: {} }, { $sort: { a: 1 } } ],
+            1
+        )).toBe( false );
+
+        // Implicit _id inclusion in intermediate $project preserves _id sort
+        expect( proveRedundantDownstreamSortInPipeline(
+            [ { $sort: { _id: 1, a: 1 } }, { $project: { a: 1 } }, { $sort: { _id: 1 } } ],
+            2
+        )).toBe( true );
+
+        // Dotted sort key modified by parent or sub-path assignment
+        expect( proveRedundantDownstreamSortInPipeline(
+            [ { $sort: { 'user.name': 1 } }, { $set: { user: { name: 'Bob' } } }, { $sort: { 'user.name': 1 } } ],
+            2
+        )).toBe( false );
+        expect( proveRedundantDownstreamSortInPipeline(
+            [ { $sort: { user: 1 } }, { $set: { 'user.name': 'Bob' } }, { $sort: { user: 1 } } ],
+            2
+        )).toBe( false );
+        expect( proveRedundantDownstreamSortInPipeline(
+            [ { $sort: { a: 1 } }, { $set: { b: 2 } }, { $sort: { a: 1 } } ],
+            2
+        )).toBe( true );
     });
 });

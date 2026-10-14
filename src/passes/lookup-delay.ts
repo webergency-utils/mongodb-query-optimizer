@@ -5,7 +5,9 @@ import
     proveLookupDelayAcrossStage,
     proveLookupLimitPushdown,
     proveLookupMatchSplit,
+    proveLookupSubpipelineFieldPruning,
     proveLookupSubpipelinePushdown,
+    proveLookupSubpipelinePushdownAcrossSuffix,
 }
 from './movement-proofs.js';
 
@@ -109,9 +111,37 @@ export class LookupDelayPass implements PipelinePass
                         changed = true;
                         continue;
                     }
+
+                    const suffixSubProof = proveLookupSubpipelinePushdownAcrossSuffix(
+                        result[ currentIndex ],
+                        result.slice( currentIndex + 1 ),
+                        context
+                    );
+
+                    if( suffixSubProof )
+                    {
+                        result[ currentIndex ] = suffixSubProof.lookupStage;
+                        const matchIdx = currentIndex + suffixSubProof.matchOffset;
+
+                        if( suffixSubProof.residualStage )
+                        {
+                            result[ matchIdx ] = suffixSubProof.residualStage;
+                        }
+                        else
+                        {
+                            result.splice( matchIdx, 1 );
+                        }
+
+                        changed = true;
+                        continue;
+                    }
                 }
 
                 const limitProof = proveLookupLimitPushdown(
+                    result[ currentIndex ],
+                    result.slice( currentIndex + 1 ),
+                    context
+                ) ?? proveLookupSubpipelineFieldPruning(
                     result[ currentIndex ],
                     result.slice( currentIndex + 1 ),
                     context

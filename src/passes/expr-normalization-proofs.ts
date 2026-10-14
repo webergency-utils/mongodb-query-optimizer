@@ -10,11 +10,27 @@ function isFieldPath(value: unknown): value is string
     );
 }
 
+function unwrapLiteral( value: unknown ): unknown
+{
+    if( isPlainObject( value ) && Object.keys( value ).length === 1 && '$literal' in value )
+    {
+        return value.$literal;
+    }
+
+    return value;
+}
+
 function isLiteral(value: unknown): boolean
 {
     if (value === undefined || typeof value === 'function' || typeof value === 'symbol')
     {
         return false;
+    }
+
+    if (isPlainObject(value) && Object.keys(value).length === 1 && '$literal' in value)
+    {
+        const lit = value.$literal;
+        return lit !== undefined && typeof lit !== 'function' && typeof lit !== 'symbol';
     }
 
     if (typeof value === 'string')
@@ -65,22 +81,27 @@ function normalizeBinaryComparison(
     if (arg0IsPath && isLiteral(arg1))
     {
         const field = arg0.slice(1);
+        const lit1 = unwrapLiteral(arg1);
         switch (operator)
         {
             case '$eq':
-                return { [field]: deepClone(arg1) };
+                return isPlainObject(lit1) && Object.keys(lit1).some((k) => k.startsWith('$'))
+                    ? { [field]: { $eq: deepClone(lit1) } }
+                    : { [field]: deepClone(lit1) };
             case '$ne':
-                return { [field]: { $ne: deepClone(arg1) } };
+                return { [field]: { $ne: deepClone(lit1) } };
             case '$gt':
-                return { [field]: { $gt: deepClone(arg1) } };
+                return { [field]: { $gt: deepClone(lit1) } };
             case '$gte':
-                return { [field]: { $gte: deepClone(arg1) } };
+                return { [field]: { $gte: deepClone(lit1) } };
             case '$lt':
-                return { [field]: { $lt: deepClone(arg1) } };
+                return { [field]: { $lt: deepClone(lit1) } };
             case '$lte':
-                return { [field]: { $lte: deepClone(arg1) } };
+                return { [field]: { $lte: deepClone(lit1) } };
             case '$in':
-                return Array.isArray(arg1) ? { [field]: { $in: deepClone(arg1) } } : null;
+                return Array.isArray(lit1)
+                    ? { [field]: { $in: deepClone(lit1.map(unwrapLiteral)) } }
+                    : null;
             default:
                 return null;
         }
@@ -89,24 +110,27 @@ function normalizeBinaryComparison(
     if (arg1IsPath && isLiteral(arg0))
     {
         const field = arg1.slice(1);
+        const lit0 = unwrapLiteral(arg0);
         switch (operator)
         {
             case '$eq':
-                return { [field]: deepClone(arg0) };
+                return isPlainObject(lit0) && Object.keys(lit0).some((k) => k.startsWith('$'))
+                    ? { [field]: { $eq: deepClone(lit0) } }
+                    : { [field]: deepClone(lit0) };
             case '$ne':
-                return { [field]: { $ne: deepClone(arg0) } };
+                return { [field]: { $ne: deepClone(lit0) } };
             case '$gt':
                 // arg0 > field <=> field < arg0
-                return { [field]: { $lt: deepClone(arg0) } };
+                return { [field]: { $lt: deepClone(lit0) } };
             case '$gte':
                 // arg0 >= field <=> field <= arg0
-                return { [field]: { $lte: deepClone(arg0) } };
+                return { [field]: { $lte: deepClone(lit0) } };
             case '$lt':
                 // arg0 < field <=> field > arg0
-                return { [field]: { $gt: deepClone(arg0) } };
+                return { [field]: { $gt: deepClone(lit0) } };
             case '$lte':
                 // arg0 <= field <=> field >= arg0
-                return { [field]: { $gte: deepClone(arg0) } };
+                return { [field]: { $gte: deepClone(lit0) } };
             default:
                 return null;
         }
@@ -160,7 +184,8 @@ export function proveExprToNativeMatch(
                 {
                     const existing = merged[field];
                     if (
-                        isPlainObject(existing)
+                        !field.startsWith('$')
+                        && isPlainObject(existing)
                         && isPlainObject(condition)
                         && Object.keys(existing).every((k) => k.startsWith('$'))
                         && Object.keys(condition).every((k) => k.startsWith('$'))
@@ -179,5 +204,259 @@ export function proveExprToNativeMatch(
         return merged;
     }
 
+    if (operator === '$or' || operator === '$nor')
+    {
+        if (!Array.isArray(value) || value.length === 0)
+        {
+            return null;
+        }
+
+        const branches: Record<string, any>[] = [];
+        for (const item of value)
+        {
+            const normalizedBranch = proveExprToNativeMatch(item);
+            if (!normalizedBranch)
+            {
+                return null;
+            }
+
+            branches.push(normalizedBranch);
+        }
+
+        return { [operator]: branches };
+    }
+
+    if (operator === '$regexMatch')
+    {
+        if (!isPlainObject(value))
+        {
+            return null;
+        }
+
+        const specKeys = Object.keys(value);
+        if (
+            !isFieldPath(value.input)
+            || !('regex' in value)
+            || specKeys.some((k) => k !== 'input' && k !== 'regex' && k !== 'options')
+        )
+        {
+            return null;
+        }
+
+        const rawRegex = unwrapLiteral(value.regex);
+        if (typeof rawRegex !== 'string' && !(rawRegex instanceof RegExp))
+        {
+            return null;
+        }
+
+        if ('options' in value)
+        {
+            const rawOptions = unwrapLiteral(value.options);
+            if (typeof rawOptions !== 'string')
+            {
+                return null;
+            }
+
+            return {
+                [value.input.slice(1)]: {
+                    $regex: deepClone(rawRegex),
+                    $options: rawOptions,
+                },
+            };
+        }
+
+        return {
+            [value.input.slice(1)]: {
+                $regex: deepClone(rawRegex),
+            },
+        };
+    }
+
+    if (operator === '$not')
+    {
+        const inner = Array.isArray(value) && value.length === 1 ? value[0] : value;
+        if (!isPlainObject(inner))
+        {
+            return null;
+        }
+
+        const innerKeys = Object.keys(inner);
+        if (innerKeys.length !== 1)
+        {
+            return null;
+        }
+
+        const innerOp = innerKeys[0]!;
+        const innerArgs = inner[innerOp];
+
+        if (innerOp === '$not')
+        {
+            const nestedOperand = Array.isArray(innerArgs) && innerArgs.length === 1
+                ? innerArgs[0]
+                : innerArgs;
+
+            if (isPlainObject(nestedOperand))
+            {
+                return proveExprToNativeMatch(nestedOperand);
+            }
+
+            return null;
+        }
+
+        if (!Array.isArray(innerArgs) || innerArgs.length !== 2)
+        {
+            return null;
+        }
+
+        if (innerOp === '$eq')
+        {
+            return normalizeBinaryComparison('$ne', innerArgs);
+        }
+
+        if (innerOp === '$ne')
+        {
+            return normalizeBinaryComparison('$eq', innerArgs);
+        }
+
+        if (innerOp === '$in')
+        {
+            const [arg0, arg1] = innerArgs;
+            const lit1 = unwrapLiteral(arg1);
+            if (isFieldPath(arg0) && isLiteral(arg1) && Array.isArray(lit1))
+            {
+                return {
+                    [arg0.slice(1)]: {
+                        $nin: deepClone(lit1.map(unwrapLiteral)),
+                    },
+                };
+            }
+        }
+
+        return null;
+    }
+
     return normalizeBinaryComparison(operator, value);
+}
+
+function containsVariableReference( value: unknown, varToken: string ): boolean
+{
+    if( typeof value === 'string' )
+    {
+        return value === varToken || value.startsWith( `${ varToken }.` );
+    }
+
+    if( Array.isArray( value ))
+    {
+        return value.some(( item ) => containsVariableReference( item, varToken ));
+    }
+
+    if( isPlainObject( value ))
+    {
+        return Object.values( value ).some(( item ) => containsVariableReference( item, varToken ));
+    }
+
+    return false;
+}
+
+export function proveCorrelatedLookupEqualityNormalization(
+    stage: unknown
+): Record<string, any> | null
+{
+    if(
+        !isPlainObject( stage )
+        || Object.keys( stage ).length !== 1
+        || !isPlainObject( stage.$lookup )
+    )
+    {
+        return null;
+    }
+
+    const spec = stage.$lookup as Record<string, any>;
+    if(
+        typeof spec.from !== 'string'
+        || spec.from.length === 0
+        || typeof spec.as !== 'string'
+        || spec.as.length === 0
+        || 'localField' in spec
+        || 'foreignField' in spec
+        || !isPlainObject( spec.let )
+        || !Array.isArray( spec.pipeline )
+        || spec.pipeline.length === 0
+    )
+    {
+        return null;
+    }
+
+    const firstStage = spec.pipeline[ 0 ];
+    if(
+        !isPlainObject( firstStage )
+        || Object.keys( firstStage ).length !== 1
+        || !isPlainObject( firstStage.$match )
+        || Object.keys( firstStage.$match ).length !== 1
+        || !isPlainObject( firstStage.$match.$expr )
+    )
+    {
+        return null;
+    }
+
+    const exprObj = firstStage.$match.$expr as Record<string, any>;
+    if(
+        Object.keys( exprObj ).length !== 1
+        || !Array.isArray( exprObj.$eq )
+        || exprObj.$eq.length !== 2
+    )
+    {
+        return null;
+    }
+
+    const [ left, right ] = exprObj.$eq;
+    const leftIsField = isFieldPath( left );
+    const rightIsField = isFieldPath( right );
+
+    if( leftIsField === rightIsField )
+    {
+        return null;
+    }
+
+    const foreignOperand = ( leftIsField ? left : right ) as string;
+    const varOperand = leftIsField ? right : left;
+
+    if( typeof varOperand !== 'string' || !varOperand.startsWith( '$$' ) || varOperand.length <= 2 )
+    {
+        return null;
+    }
+
+    const varName = varOperand.slice( 2 );
+    const letBinding = ( spec.let as Record<string, unknown> )[ varName ];
+
+    if( !isFieldPath( letBinding ))
+    {
+        return null;
+    }
+
+    const localField = letBinding.slice( 1 );
+    const foreignField = foreignOperand.slice( 1 );
+    const remainingPipeline = deepClone( spec.pipeline.slice( 1 )) as unknown[];
+    const varStillUsed = containsVariableReference( remainingPipeline, varOperand );
+
+    const nextLet: Record<string, unknown> = {};
+    for( const [ k, v ] of Object.entries( spec.let ))
+    {
+        if( k !== varName || varStillUsed )
+        {
+            nextLet[ k ] = deepClone( v );
+        }
+    }
+
+    const hasRemainingLet = Object.keys( nextLet ).length > 0;
+    const nextLookup: Record<string, any> = {
+        from: spec.from,
+        localField,
+        foreignField,
+        ...( hasRemainingLet ? { let: nextLet } : {} ),
+        ...( remainingPipeline.length > 0 || hasRemainingLet ? { pipeline: remainingPipeline } : {} ),
+        as: spec.as
+    };
+
+    return { $lookup: nextLookup };
 }

@@ -184,4 +184,25 @@ describe( 'SortByCountSimplificationPass execution and parity', () =>
             { $sortByCount: '$tag' }
         ]);
     });
+
+    it( 'simplifies separated $group + $match + $sort: { count: -1 } to $sortByCount + $match', () =>
+    {
+        const pipeline = [
+            { $group: { _id: '$tag', count: { $sum: 1 } } },
+            { $match: { count: { $gte: 5 } } },
+            { $sort: { count: -1 } }
+        ];
+
+        expect( pass.execute( pipeline )).toEqual([
+            { $sortByCount: '$tag' },
+            { $match: { count: { $gte: 5 } } }
+        ]);
+
+        const nonMatchSeparated = [
+            { $group: { _id: '$tag', count: { $sum: 1 } } },
+            { $limit: 5 },
+            { $sort: { count: -1 } }
+        ];
+        expect( pass.execute( nonMatchSeparated )).toEqual( nonMatchSeparated );
+    });
 });

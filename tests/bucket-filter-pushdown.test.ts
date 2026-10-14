@@ -411,4 +411,137 @@ describe( 'BucketFilterPushdownPass execution and parity', () =>
         const result = pass.execute( pipeline, { strictFieldOrder: false, strictErrors: true } );
         expect( result ).toEqual( pipeline );
     });
+
+    it( 'pushes default-bucket exclusion and decomposes multi-key post-bucket $match', () =>
+    {
+        const bucketWithStringDefault = {
+            $bucket: {
+                groupBy: '$year',
+                boundaries: [ 1990, 2000, 2010 ],
+                default: 'other',
+                output: { count: { $sum: 1 } }
+            }
+        };
+
+        // { _id: { $ne: 'other' } } where 'other' is different type from numeric boundaries
+        expect( proveBucketFilterPushdown(
+            bucketWithStringDefault,
+            { $match: { _id: { $ne: 'other' }, count: { $gte: 2 } } }
+        )).toEqual({
+            prefilterStage: { $match: { year: { $gte: 1990, $lt: 2010 } } },
+            postfilterStage: { $match: { count: { $gte: 2 } } }
+        });
+
+        // Same-type default below minBound or >= maxBound
+        const bucketWithNumericDefault = {
+            $bucket: {
+                groupBy: '$year',
+                boundaries: [ 1990, 2000, 2010 ],
+                default: 9999
+            }
+        };
+        expect( proveBucketFilterPushdown(
+            bucketWithNumericDefault,
+            { $match: { _id: { $ne: 9999 } } }
+        )).toEqual({
+            prefilterStage: { $match: { year: { $gte: 1990, $lt: 2010 } } },
+            postfilterStage: null
+        });
+
+        const bucketWithLowNumericDefault = {
+            $bucket: {
+                groupBy: '$year',
+                boundaries: [ 1990, 2000, 2010 ],
+                default: 1800
+            }
+        };
+        expect( proveBucketFilterPushdown(
+            bucketWithLowNumericDefault,
+            { $match: { _id: { $ne: 1800 } } }
+        )).toEqual({
+            prefilterStage: { $match: { year: { $gte: 1990, $lt: 2010 } } },
+            postfilterStage: null
+        });
+
+        // Rejects when default is null or inside boundary range
+        expect( proveBucketFilterPushdown(
+            {
+                $bucket: {
+                    groupBy: '$year',
+                    boundaries: [ 1990, 2000, 2010 ],
+                    default: null
+                }
+            },
+            { $match: { _id: { $ne: null } } }
+        )).toBeNull();
+
+        expect( proveBucketFilterPushdown(
+            {
+                $bucket: {
+                    groupBy: '$year',
+                    boundaries: [ 1990, 2000, 2010 ],
+                    default: 1995
+                }
+            },
+            { $match: { _id: { $ne: 1995 } } }
+        )).toBeNull();
+
+        // $nin containing default value (only default vs default + boundary)
+        expect( proveBucketFilterPushdown(
+            bucketWithStringDefault,
+            { $match: { _id: { $nin: [ 'other', 'unused' ] } } }
+        )).toEqual({
+            prefilterStage: { $match: { year: { $gte: 1990, $lt: 2010 } } },
+            postfilterStage: null
+        });
+
+        expect( proveBucketFilterPushdown(
+            bucketWithStringDefault,
+            { $match: { _id: { $nin: [ 'other', 1990 ] } } }
+        )).toEqual({
+            prefilterStage: { $match: { year: { $gte: 1990, $lt: 2010 } } },
+            postfilterStage: { $match: { _id: { $nin: [ 'other', 1990 ] } } }
+        });
+
+        // $or over _id branches
+        expect( proveBucketFilterPushdown(
+            bucketWithStringDefault,
+            { $match: { $or: [ { _id: 1990 }, { _id: 2000 } ], count: { $gt: 1 } } }
+        )).toEqual({
+            prefilterStage: {
+                $match: {
+                    $or: [
+                        { year: { $gte: 1990, $lt: 2000 } },
+                        { year: { $gte: 2000, $lt: 2010 } }
+                    ]
+                }
+            },
+            postfilterStage: { $match: { count: { $gt: 1 } } }
+        });
+
+        expect( proveBucketFilterPushdown(
+            bucketWithStringDefault,
+            { $match: { $or: [ { _id: 1990 }, { _id: 2000 } ] } }
+        )).toEqual({
+            prefilterStage: {
+                $match: {
+                    $or: [
+                        { year: { $gte: 1990, $lt: 2000 } },
+                        { year: { $gte: 2000, $lt: 2010 } }
+                    ]
+                }
+            },
+            postfilterStage: null
+        });
+
+        expect( proveBucketFilterPushdown(
+            bucketWithStringDefault,
+            { $match: { $or: [ { _id: 1990 }, 'invalid' ] } }
+        )).toBeNull();
+
+        expect( proveBucketFilterPushdown(
+            bucketWithStringDefault,
+            { $match: { $or: [ { _id: 1990 }, { _id: 2000, count: 5 } ] } }
+        )).toBeNull();
+    });
 });

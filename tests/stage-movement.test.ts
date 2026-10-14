@@ -617,12 +617,45 @@ describe('match pushdown proofs', () =>
             { $project: { _id: 0, status: 1, computed: { $add: ['$a', 1] } } },
             { $match: { computed: { $gt: 5 } } },
         ]);
+
+        // Partial conjunct alias rewriting across $addFields / $set (#10)
+        expect(optimizeMatches([
+            { $addFields: { aliasField: '$sourceField', computed: { $add: ['$x', 1] } } },
+            { $match: { aliasField: 'ok', computed: { $gt: 10 } } },
+        ])).toEqual([
+            { $match: { sourceField: 'ok' } },
+            { $addFields: { aliasField: '$sourceField', computed: { $add: ['$x', 1] } } },
+            { $match: { computed: { $gt: 10 } } },
+        ]);
+
+        // Retains alias conjunct in residual when rewriteQueryDocument declines (key collision inside $or branch)
+        expect(optimizeMatches([
+            { $addFields: { aliasField: '$sourceField', computed: { $add: ['$x', 1] } } },
+            {
+                $match: {
+                    $and: [
+                        { tenant: 'acme' },
+                        { $or: [{ aliasField: 1, sourceField: 2 }] },
+                        { computed: { $gt: 10 } },
+                    ],
+                },
+            },
+        ])).toEqual([
+            { $match: { tenant: 'acme' } },
+            { $addFields: { aliasField: '$sourceField', computed: { $add: ['$x', 1] } } },
+            {
+                $match: {
+                    $or: [{ aliasField: 1, sourceField: 2 }],
+                    computed: { $gt: 10 },
+                },
+            },
+        ]);
     });
 });
 
 describe('limit and skip advancement proofs', () =>
 {
-    it('advances limit and skip across deterministic passive stages', () =>
+    it('advances limit and skip across deterministic passive stages and object-literal $replaceRoot/$replaceWith', () =>
     {
         for (const terminalStage of [
             { $limit: 2 },
@@ -634,6 +667,8 @@ describe('limit and skip advancement proofs', () =>
                 { $addFields: { label: 'stable' } },
                 { $set: { copy: '$score' } },
                 { $unset: 'secret' },
+                { $replaceRoot: { newRoot: { score: '$copy', label: '$label' } } },
+                { $replaceWith: { score: '$score' } },
                 terminalStage,
             ];
 
@@ -643,8 +678,26 @@ describe('limit and skip advancement proofs', () =>
                 { $addFields: { label: 'stable' } },
                 { $set: { copy: '$score' } },
                 { $unset: 'secret' },
+                { $replaceRoot: { newRoot: { score: '$copy', label: '$label' } } },
+                { $replaceWith: { score: '$score' } },
             ]);
         }
+
+        // Blocks $replaceRoot / $replaceWith when root is a path string or operator expression
+        expect(optimizeLimits([
+            { $replaceWith: '$subdoc' },
+            { $limit: 1 },
+        ])).toEqual([
+            { $replaceWith: '$subdoc' },
+            { $limit: 1 },
+        ]);
+        expect(optimizeLimits([
+            { $replaceRoot: { newRoot: { $mergeObjects: ['$a', '$b'] } } },
+            { $limit: 1 },
+        ])).toEqual([
+            { $replaceRoot: { newRoot: { $mergeObjects: ['$a', '$b'] } } },
+            { $limit: 1 },
+        ]);
     });
 
     it('blocks volatile, malformed, whole-document, and colliding passive stages', () =>

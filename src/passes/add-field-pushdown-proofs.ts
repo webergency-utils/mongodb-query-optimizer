@@ -20,12 +20,14 @@ const PASSIVE_PRECEDING_OPERATORS = new Set([
     '$unset',
     '$addFields',
     '$set',
-    '$project'
+    '$project',
+    '$unwind'
 ]);
 
 const TARGET_PRECEDING_OPERATORS = new Set([
     '$lookup',
-    '$unset'
+    '$unset',
+    '$unwind'
 ]);
 
 export function canPushFieldAcrossStage(
@@ -55,6 +57,7 @@ export function canPushFieldAcrossStage(
 
     if(
         precedingSemantics.malformed
+        || precedingSemantics.determinism !== 'deterministic'
         || ( isExclusionProject && precedingSemantics.projection?.mode !== 'exclusion' )
     )
     {

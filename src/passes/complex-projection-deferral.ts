@@ -5,7 +5,8 @@ import { PipelinePass } from './types.js';
 import
 {
     proveAddFieldDeferralAcrossSort,
-    proveAddFieldSplitAcrossSort
+    proveAddFieldSplitAcrossSort,
+    proveProjectSplitAcrossSort
 }
 from './projection-proofs.js';
 
@@ -33,7 +34,7 @@ function isPositiveLimitOrSkipStage( stage: unknown ): boolean
 export class ComplexProjectionDeferralPass implements PipelinePass
 {
     readonly name       = 'complex-projection-deferral';
-    readonly stageTypes = [ '$addFields', '$set' ] as const;
+    readonly stageTypes = [ '$addFields', '$set', '$project' ] as const;
 
     execute( pipeline: any[], context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {
@@ -70,7 +71,8 @@ export class ComplexProjectionDeferralPass implements PipelinePass
                 && canSplitFieldAddingStage( result[ index + 1 ], context, downstream )
             )
             {
-                const splitProof = proveAddFieldSplitAcrossSort( result[ index ], result[ index + 1 ] );
+                const splitProof = proveAddFieldSplitAcrossSort( result[ index ], result[ index + 1 ] )
+                    ?? proveProjectSplitAcrossSort( result[ index ], result[ index + 1 ] );
                 if(
                     splitProof
                     && canMoveStageAcrossStage(

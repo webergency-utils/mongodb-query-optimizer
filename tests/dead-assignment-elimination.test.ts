@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { optimizePipeline } from '../src/index.js';
 import { DeadAssignmentEliminationPass } from '../src/passes/dead-assignment-elimination';
-import { proveDeadAssignmentElimination } from '../src/passes/dead-assignment-proofs';
+import
+{
+    proveDeadAssignmentElimination,
+    proveNoOpSelfAssignmentElimination
+}
+from '../src/passes/dead-assignment-proofs';
 import { optimizePipelineWithCandidateProfile } from '../src/passes/registry';
 import { runMockPipeline } from './helpers/mock-engine';
 
@@ -522,6 +527,20 @@ describe( 'DeadAssignmentEliminationPass execution and parity', () =>
             { $unset: 'a' },
             [ { $project: { a: 1 } } ]
         )).toBeNull();
+
+        // Eliminates dotted $unset when parent path is discarded downstream
+        expect( proveDeadAssignmentElimination(
+            { $unset: [ 'profile.secret', 'kept.field' ] },
+            [ { $project: { kept: 1 } } ]
+        )).toEqual({
+            replacementStage: { $unset: 'kept.field' },
+            eliminatedFields: [ 'profile.secret' ]
+        });
+
+        expect( proveDeadAssignmentElimination(
+            { $unset: [] },
+            [ { $project: { b: 1 } } ]
+        )).toBeNull();
     });
 
     it( 'prunes unused computed fields in inclusion $project while keeping required or only-field projections', () =>
@@ -558,6 +577,66 @@ describe( 'DeadAssignmentEliminationPass execution and parity', () =>
         expect( proveDeadAssignmentElimination(
             { $project: { a: 1, bad: '$$unboundVar' } },
             [ { $project: { a: 1 } } ]
+        )).toBeNull();
+    });
+
+    it( 'eliminates no-op self-assignments when field is guaranteed present by upstream stage', () =>
+    {
+        const pass = new DeadAssignmentEliminationPass();
+
+        // Direct $x, $$ROOT.x, $$CURRENT.x self-assignments after upstream $set
+        expect( proveNoOpSelfAssignmentElimination(
+            [ { $set: { a: 1, b: 2, c: 3 } } ],
+            { $set: { a: '$a', b: '$$ROOT.b', c: '$$CURRENT.c' } }
+        )).toEqual({
+            replacementStage: null,
+            eliminatedFields: [ 'a', 'b', 'c' ]
+        });
+
+        // Partial self-assignment elimination keeps non-self fields
+        expect( proveNoOpSelfAssignmentElimination(
+            [ { $addFields: { a: 1, 'nested.x': 2 } }, { $match: { active: true } } ],
+            { $addFields: { a: '$a', d: 4 } }
+        )).toEqual({
+            replacementStage: { $addFields: { d: 4 } },
+            eliminatedFields: [ 'a' ]
+        });
+
+        // End-to-end pass execution removes full self-assignment stage
+        expect( pass.execute([
+            { $set: { a: 10 } },
+            { $set: { a: '$a' } }
+        ])).toEqual([
+            { $set: { a: 10 } }
+        ]);
+
+        // Unset or projection clears guaranteed fields
+        expect( proveNoOpSelfAssignmentElimination(
+            [ { $set: { a: 1 } }, { $unset: 'a' } ],
+            { $set: { a: '$a' } }
+        )).toBeNull();
+        expect( proveNoOpSelfAssignmentElimination(
+            [ { $set: { a: 1 } }, { $project: { b: 1 } } ],
+            { $set: { a: '$a' } }
+        )).toBeNull();
+
+        // Rejects under strictFieldOrder, empty prefix, or non-addFields source
+        expect( proveNoOpSelfAssignmentElimination(
+            [ { $set: { a: 1 } } ],
+            { $set: { a: '$a' } },
+            { strictFieldOrder: true, strictErrors: false }
+        )).toBeNull();
+        expect( proveNoOpSelfAssignmentElimination(
+            [],
+            { $set: { a: '$a' } }
+        )).toBeNull();
+        expect( proveNoOpSelfAssignmentElimination(
+            [ { $set: { a: 1 } } ],
+            { $match: { a: 1 } }
+        )).toBeNull();
+        expect( proveNoOpSelfAssignmentElimination(
+            [ { $set: { a: 1 } } ],
+            { $set: { a: '$b' } }
         )).toBeNull();
     });
 });

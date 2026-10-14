@@ -17,6 +17,7 @@ import {
 } from '../src/passes/complex-projection-deferral.js';
 import {
     proveAddFieldSplitAcrossSort,
+    proveUnusedFieldPruningThroughSuffix,
 } from '../src/passes/projection-proofs.js';
 import {
     candidateSemanticCases,
@@ -208,6 +209,49 @@ describe('adjacent add-field merging proofs', () =>
         ], ADD_FIELD_MERGING)).toEqual([
             { $addFields: { malformed: { $eq: ['$value'] }, stable: 1 } },
         ]);
+    });
+
+    it('inlines same-field overwrite when second stage only reads first field to overwrite it', () =>
+    {
+        // Inlines scalar and nested expression references, preserving $literal and non-matching strings
+        expect(optimizeWith([
+            { $addFields: { x: { $add: ['$a', 1] }, untouched: 10 } },
+            {
+                $set: {
+                    x: { $concat: [{ $toString: { $multiply: ['$x', 2] } }, '$y', { $literal: '$x' }] },
+                    other: { $concat: ['$name', { $literal: '$x' }] },
+                },
+            },
+        ], ADD_FIELD_MERGING)).toEqual([
+            {
+                $addFields: {
+                    x: { $concat: [{ $toString: { $multiply: [{ $add: ['$a', 1] }, 2] } }, '$y', { $literal: '$x' }] },
+                    untouched: 10,
+                    other: { $concat: ['$name', { $literal: '$x' }] },
+                },
+            },
+        ]);
+
+        // Rejects when second stage reads both the first field and a nested sub-path of the first field
+        const subPathRead = [
+            { $addFields: { x: { nested: 1 } } },
+            { $set: { x: { $add: ['$x', '$x.nested'] } } },
+        ];
+        expect(optimizeWith(subPathRead, ADD_FIELD_MERGING)).toEqual(subPathRead);
+
+        // Rejects when another field in the second stage also reads the first field
+        const otherFieldRead = [
+            { $addFields: { x: { $add: ['$a', 1] } } },
+            { $set: { x: { $multiply: ['$x', 2] }, y: '$x' } },
+        ];
+        expect(optimizeWith(otherFieldRead, ADD_FIELD_MERGING)).toEqual(otherFieldRead);
+
+        // Rejects when second stage uses document variables ($$CURRENT / $$ROOT)
+        const variableRead = [
+            { $addFields: { x: 1 } },
+            { $set: { x: { $add: ['$x', '$$CURRENT.x'] } } },
+        ];
+        expect(optimizeWith(variableRead, ADD_FIELD_MERGING)).toEqual(variableRead);
     });
 });
 
@@ -496,6 +540,55 @@ describe('adjacent simple project merging proofs', () =>
             { $unset: 'a' },
             { $project: { a: 1, b: 1 } },
         ]);
+
+        // Merges simple $project followed by computed inclusion $project (#8)
+        expect(optimizeWith([
+            { $project: { a: 1, b: 1, c: 1 } },
+            { $project: { a: 1, total: { $add: ['$b', 1] } } },
+        ], PROJECT_MERGING)).toEqual([
+            { $project: { a: 1, total: { $add: ['$b', 1] } } },
+        ]);
+
+        // Propagates _id: 0 from first simple $project into merged computed inclusion $project
+        expect(optimizeWith([
+            { $project: { _id: 0, a: 1, b: 1 } },
+            { $project: { a: 1, total: { $add: ['$b', 1] } } },
+        ], PROJECT_MERGING)).toEqual([
+            { $project: { _id: 0, a: 1, total: { $add: ['$b', 1] } } },
+        ]);
+
+        // Rejects computed inclusion $project when it reads a field hidden by the first $project
+        const hiddenDepPipeline = [
+            { $project: { a: 1 } },
+            { $project: { a: 1, total: { $add: ['$b', 1] } } },
+        ];
+        expect(optimizeWith(hiddenDepPipeline, PROJECT_MERGING)).toEqual(hiddenDepPipeline);
+
+        // Rejects computed inclusion $project when it resurrects _id hidden by the first $project
+        const resurrectIdPipeline = [
+            { $project: { _id: 0, a: 1, b: 1 } },
+            { $project: { _id: 1, a: 1, total: { $add: ['$b', 1] } } },
+        ];
+        expect(optimizeWith(resurrectIdPipeline, PROJECT_MERGING)).toEqual(resurrectIdPipeline);
+
+        // Rejects computed inclusion $project with dotted output path or $getField
+        const dottedComputedPipeline = [
+            { $project: { a: 1, b: 1 } },
+            { $project: { 'nested.total': { $add: ['$b', 1] } } },
+        ];
+        expect(optimizeWith(dottedComputedPipeline, PROJECT_MERGING)).toEqual(dottedComputedPipeline);
+
+        const getFieldComputedPipeline = [
+            { $project: { a: 1, b: 1 } },
+            { $project: { total: { $getField: 'b' } } },
+        ];
+        expect(optimizeWith(getFieldComputedPipeline, PROJECT_MERGING)).toEqual(getFieldComputedPipeline);
+
+        const volatileComputedPipeline = [
+            { $project: { a: 1, b: 1 } },
+            { $project: { a: 1, rnd: { $add: ['$b', { $rand: {} }] } } },
+        ];
+        expect(optimizeWith(volatileComputedPipeline, PROJECT_MERGING)).toEqual(volatileComputedPipeline);
     });
 });
 
@@ -1121,6 +1214,63 @@ describe('contained projection families', () =>
             { $limit: 5 },
             { $addFields: { label: '$name' } },
         ]);
+
+        // Advances computed inclusion $project across $sort when sort keys are visible and disjoint from computed fields
+        expect(optimizePipeline([
+            { $sort: { score: -1 } },
+            { $project: { score: 1, name: 1, label: { $ifNull: ['$name', 'anon'] } } },
+        ])).toEqual([
+            { $project: { score: 1, name: 1, label: { $ifNull: ['$name', 'anon'] } } },
+            { $sort: { score: -1 } },
+        ]);
+
+        // Splits inclusion $project across $sort when followed by $limit / $skip
+        expect(deferralPass.execute([
+            { $project: { rank: { $ifNull: ['$score', 0] }, isTop: { $eq: ['$tier', 1] }, tier: 1, name: 1, _id: 0 } },
+            { $sort: { rank: -1 } },
+            { $limit: 5 },
+        ])).toEqual([
+            { $project: { rank: { $ifNull: ['$score', 0] }, tier: 1, name: 1, _id: 0 } },
+            { $sort: { rank: -1 } },
+            { $addFields: { isTop: { $eq: ['$tier', 1] } } },
+            { $limit: 5 },
+        ]);
+
+        // Rejects computed $project advance or split when dotted paths, missing sort keys, or unpreserved dependencies are present
+        expect(optimizePipeline([
+            { $sort: { score: -1 } },
+            { $project: { score: 1, 'nested.label': { $ifNull: ['$name', 'anon'] }, name: 1 } },
+        ])).toEqual([
+            { $sort: { score: -1 } },
+            { $project: { score: 1, 'nested.label': { $ifNull: ['$name', 'anon'] }, name: 1 } },
+        ]);
+        expect(deferralPass.execute([
+            { $project: { 'nested.rank': { $ifNull: ['$score', 0] }, isTop: { $eq: ['$tier', 1] }, tier: 1 } },
+            { $sort: { 'nested.rank': -1 } },
+            { $limit: 5 },
+        ])).toEqual([
+            { $project: { 'nested.rank': { $ifNull: ['$score', 0] }, isTop: { $eq: ['$tier', 1] }, tier: 1 } },
+            { $sort: { 'nested.rank': -1 } },
+            { $limit: 5 },
+        ]);
+        expect(deferralPass.execute([
+            { $project: { a: { $ifNull: ['$score', 0] }, isTop: { $eq: ['$tier', 1] }, rank: 1, tier: 1 } },
+            { $sort: { rank: -1 } },
+            { $limit: 5 },
+        ])).toEqual([
+            { $project: { a: { $ifNull: ['$score', 0] }, isTop: { $eq: ['$tier', 1] }, rank: 1, tier: 1 } },
+            { $sort: { rank: -1 } },
+            { $limit: 5 },
+        ]);
+        expect(deferralPass.execute([
+            { $project: { rank: { $ifNull: ['$score', 0] }, isTop: { $eq: ['$tier', 1] } } },
+            { $sort: { rank: -1 } },
+            { $limit: 5 },
+        ])).toEqual([
+            { $project: { rank: { $ifNull: ['$score', 0] }, isTop: { $eq: ['$tier', 1] } } },
+            { $sort: { rank: -1 } },
+            { $limit: 5 },
+        ]);
     });
 
     it('keeps redundant projection elimination conservative for unsafe duplicates', () =>
@@ -1440,5 +1590,55 @@ describe('projection production integration and scheduling', () =>
         {
             expect(optimizePipeline(pipeline)).toEqual(pipeline);
         }
+    });
+
+    it('prunes unused $group accumulators discarded downstream while preserving _id and read accumulators', () =>
+    {
+        const pass = new UnusedFieldPruningPass();
+
+        expect(pass.execute([
+            {
+                $group: {
+                    _id: '$dept',
+                    totalSalary: { $sum: '$salary' },
+                    unusedAvg: { $avg: '$salary' },
+                    unusedMax: { $max: '$bonus' },
+                },
+            },
+            { $match: { totalSalary: { $gt: 1000 } } },
+            { $project: { totalSalary: 1 } },
+        ])).toEqual([
+            {
+                $group: {
+                    _id: '$dept',
+                    totalSalary: { $sum: '$salary' },
+                },
+            },
+            { $match: { totalSalary: { $gt: 1000 } } },
+            { $project: { totalSalary: 1 } },
+        ]);
+
+        // Rejection guards for $group accumulator pruning
+        expect(proveUnusedFieldPruningThroughSuffix(
+            { $group: { _id: '$dept' } },
+            [ { $project: { _id: 1 } } ]
+        )).toBeNull();
+        expect(proveUnusedFieldPruningThroughSuffix(
+            { $group: { _id: '$dept', a: { $sum: '$$unbound' } } },
+            [ { $project: { _id: 1 } } ]
+        )).toBeNull();
+        expect(proveUnusedFieldPruningThroughSuffix(
+            { $group: { _id: '$dept', a: { $sum: { $divide: [ '$x', '$y' ] } } } },
+            [ { $project: { _id: 1 } } ],
+            true
+        )).toBeNull();
+        expect(proveUnusedFieldPruningThroughSuffix(
+            { $group: { _id: '$dept', a: { $sum: '$x' } } },
+            [ { $match: { a: { $gt: 0 } } }, { $project: { _id: 1 } } ]
+        )).toBeNull();
+        expect(proveUnusedFieldPruningThroughSuffix(
+            { $group: { _id: '$dept', a: { $sum: '$x' } } },
+            [ { $limit: 5 } ]
+        )).toBeNull();
     });
 });

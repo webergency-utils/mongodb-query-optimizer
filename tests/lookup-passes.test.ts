@@ -5,8 +5,10 @@ import {
     proveLookupDelayAcrossStage,
     proveLookupLimitPushdown,
     proveLookupMatchSplit,
+    proveLookupSubpipelineFieldPruning,
     proveLookupSubpipelinePushdown,
     proveMatchPushdownAcrossStage,
+    proveRedundantLookupElimination,
     proveRedundantLookupEliminationAcrossSuffix,
 } from '../src/passes/movement-proofs.js';
 import { LookupDelayPass } from '../src/passes/lookup-delay.js';
@@ -1895,6 +1897,15 @@ describe('proveLookupLimitPushdown and LookupDelayPass limit pushdown', () =>
         });
         expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $slice: ['$user', -2] } } }])).toBeNull();
         expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $slice: ['$user', 1, 5] } } }])).toBeNull();
+        expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $slice: ['$$CURRENT.user', 0, 4] } } }])).toEqual({
+            lookupStage: {
+                $lookup: {
+                    from: 'users',
+                    as: 'user',
+                    pipeline: [{ $limit: 4 }]
+                }
+            }
+        });
         expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $slice: '$user' } } }])).toBeNull();
         expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $slice: ['$other', 5] } } }])).toBeNull();
     });
@@ -2062,5 +2073,172 @@ describe('movement sort question', () =>
         {
             expect(proveMatchPushdownAcrossStage(stage, match)).toBeNull();
         }
+    });
+
+    it('pushes subpipeline $match across intermediate stages after $unwind and handles array-form $first and collapsing lookup killers', () =>
+    {
+        const pass = new LookupDelayPass();
+        const pipelineLookup = {
+            $lookup: {
+                from: 'orders',
+                as: 'orders',
+                pipeline: []
+            }
+        };
+
+        // Array-form $first: ['$user'] in proveLookupLimitPushdown
+        expect(proveLookupLimitPushdown(
+            { $lookup: { from: 'users', as: 'user', pipeline: [] } },
+            [{ $set: { user: { $first: ['$user'] } } }]
+        )).toEqual({
+            lookupStage: {
+                $lookup: {
+                    from: 'users',
+                    as: 'user',
+                    pipeline: [{ $limit: 1 }]
+                }
+            }
+        });
+
+        // Subpipeline $match pushdown across $unwind + intermediate stage + $match (full & partial)
+        const fullSuffixPipeline = [
+            pipelineLookup,
+            { $unwind: { path: '$orders', includeArrayIndex: 'orderIdx' } },
+            { $addFields: { localFlag: true } },
+            { $match: { 'orders.status': 'paid' } }
+        ];
+        expect(pass.execute(fullSuffixPipeline)).toEqual([
+            {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [{ $match: { status: 'paid' } }]
+                }
+            },
+            { $unwind: { path: '$orders', includeArrayIndex: 'orderIdx' } },
+            { $addFields: { localFlag: true } }
+        ]);
+
+        const residualSuffixPipeline = [
+            pipelineLookup,
+            { $unwind: '$orders' },
+            { $addFields: { localFlag: true } },
+            { $match: { 'orders.status': 'paid', localFlag: true } }
+        ];
+        expect(pass.execute(residualSuffixPipeline)).toEqual([
+            {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [{ $match: { status: 'paid' } }]
+                }
+            },
+            { $unwind: '$orders' },
+            { $addFields: { localFlag: true } },
+            { $match: { localFlag: true } }
+        ]);
+
+        // Collapsing lookup elimination ($sortByCount, $bucket, $bucketAuto)
+        expect(proveRedundantLookupElimination(
+            makeLookup(),
+            { $sortByCount: '$status' }
+        )).toBe(true);
+
+        expect(proveRedundantLookupElimination(
+            makeLookup(),
+            { $sortByCount: '$orders' }
+        )).toBe(false);
+
+        expect(proveRedundantLookupElimination(
+            makeLookup(),
+            { $sortByCount: '$status' },
+            { strictFieldOrder: false, strictErrors: true }
+        )).toBe(false);
+
+        expect(proveRedundantLookupElimination(
+            makeLookup(),
+            { $bucket: null }
+        )).toBe(false);
+
+        // Lookup subpipeline unused field pruning from downstream inclusion $project
+        expect(pass.execute([
+            pipelineLookup,
+            { $unwind: '$orders' },
+            { $project: { 'orders.total': 1, orderRef: '$orders.meta.ref', userId: 1 } }
+        ])).toEqual([
+            {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [
+                        { $project: { _id: 0, meta: 1, total: 1 } }
+                    ]
+                }
+            },
+            { $unwind: '$orders' },
+            { $project: { 'orders.total': 1, orderRef: '$orders.meta.ref', userId: 1 } }
+        ]);
+
+        // Preserves _id in subproject when orders._id is referenced
+        expect(proveLookupSubpipelineFieldPruning(
+            pipelineLookup,
+            [ { $project: { 'orders._id': 1, 'orders.total': 1 } } ]
+        )).toEqual({
+            lookupStage: {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [
+                        { $project: { _id: 1, total: 1 } }
+                    ]
+                }
+            }
+        });
+
+        // Rejection guards for proveLookupSubpipelineFieldPruning
+        expect(proveLookupSubpipelineFieldPruning(
+            pipelineLookup,
+            [ { $project: { 'orders.total': 1 } } ],
+            { strictFieldOrder: true, strictErrors: false }
+        )).toBeNull();
+        expect(proveLookupSubpipelineFieldPruning(pipelineLookup, [])).toBeNull();
+        expect(proveLookupSubpipelineFieldPruning({ $match: {} }, [ { $project: { a: 1 } } ])).toBeNull();
+        expect(proveLookupSubpipelineFieldPruning(
+            {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [ { $addFields: { x: { $divide: [ '$a', 0 ] } } } ]
+                }
+            },
+            [ { $project: { 'orders.total': 1 } } ],
+            { strictFieldOrder: false, strictErrors: true }
+        )).toBeNull();
+        expect(proveLookupSubpipelineFieldPruning(
+            makeLookup(),
+            [ { $project: { 'orders.total': 1 } } ]
+        )).toBeNull();
+        expect(proveLookupSubpipelineFieldPruning(
+            {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [ { $project: { total: 1 } } ]
+                }
+            },
+            [ { $project: { 'orders.total': 1 } } ]
+        )).toBeNull();
+        expect(proveLookupSubpipelineFieldPruning(
+            pipelineLookup,
+            [ { $match: { a: 1 } } ]
+        )).toBeNull();
+        expect(proveLookupSubpipelineFieldPruning(
+            pipelineLookup,
+            [ { $project: { orders: 1 } } ]
+        )).toBeNull();
+        expect(proveLookupSubpipelineFieldPruning(
+            pipelineLookup,
+            [ { $project: { userId: 1 } } ]
+        )).toBeNull();
     });
 });
