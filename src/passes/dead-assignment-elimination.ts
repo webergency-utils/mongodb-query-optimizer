@@ -14,21 +14,21 @@ export class DeadAssignmentEliminationPass implements PipelinePass
 
     execute( pipeline: any[], context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {
-        const result = [ ...pipeline ];
-
-        for( let index = 0; index < result.length; index++ )
+        for( let index = 0; index < pipeline.length; index++ )
         {
             const proof = proveDeadAssignmentElimination(
-                result[ index ],
-                result.slice( index + 1 ),
+                pipeline[ index ],
+                pipeline.slice( index + 1 ),
                 context
             ) ?? proveNoOpSelfAssignmentElimination(
-                result.slice( 0, index ),
-                result[ index ],
+                pipeline.slice( 0, index ),
+                pipeline[ index ],
                 context
             );
 
             if( !proof ){ continue }
+
+            const result = [ ...pipeline ];
 
             if( proof.replacementStage )
             {
@@ -42,6 +42,6 @@ export class DeadAssignmentEliminationPass implements PipelinePass
             return result;
         }
 
-        return result;
+        return pipeline;
     }
 }

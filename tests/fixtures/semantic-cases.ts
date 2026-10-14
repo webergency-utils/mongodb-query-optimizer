@@ -193,7 +193,7 @@ export const productionSemanticCases: readonly SemanticCase[] = [
                 $eq: new ObjectId('000000000000000000000001'),
             },
         },
-        observation: 'structural-barrier',
+        observation: 'ordered-bson',
         affectedTransformationIds: ['simplify-equality'],
         expectedEquivalent: true,
     },

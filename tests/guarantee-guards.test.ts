@@ -157,6 +157,9 @@ describe( 'stageReadsFieldOrder & pipelineReadsFieldOrder', () =>
         expect( stageReadsFieldOrder( { $match: { $and: [ { x: 1 } ] } } )).toBe( false );
         expect( stageReadsFieldOrder( { $match: { $and: [ { sub: { a: 1, b: 2 } } ] } } )).toBe( true );
         expect( stageReadsFieldOrder( { $match: null } )).toBe( false );
+        expect( stageReadsFieldOrder( { $match: { tag: { $in: [ { $objectToArray: '$$ROOT' }, new Date() ] } } } )).toBe( false );
+        expect( stageReadsFieldOrder( { $match: { tag: { $nin: [ { $objectToArray: '$$ROOT' }, /abc/ ] } } } )).toBe( false );
+        expect( stageReadsFieldOrder( { $project: { lit: { $literal: { $objectToArray: '$$ROOT' } }, dt: new Date() } } )).toBe( false );
     });
 
     it( 'detects $$ROOT or $$CURRENT in $group and $sort', () =>

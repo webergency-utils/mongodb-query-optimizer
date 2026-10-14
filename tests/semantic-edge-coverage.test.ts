@@ -426,6 +426,8 @@ describe('filter rewrite-safety edge behavior', () =>
                 literal: 2,
             },
         })).toBe(false);
+        expect(isFilterRewriteSafe({ values: { $elemMatch: [1] } })).toBe(false);
+        expect(isFilterRewriteSafe({ value: new Date('invalid') })).toBe(true);
         expect(isFilterRewriteSafe({ $nor: [{ value: 1 }] })).toBe(false);
     });
 

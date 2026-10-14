@@ -1,5 +1,6 @@
 import { analyzeStage } from '../analyzer/semantics.js';
 import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
+import { getSingleStageEntry } from './helpers.js';
 import { PipelinePass } from './types.js';
 
 type LimitSkipOperator = '$limit' | '$skip';
@@ -21,34 +22,23 @@ export interface LimitSkipCoalescingProof
         | Readonly<{ $skip: number }>;
 }
 
-function parseStrictStage(stage: unknown): ParsedLimitSkipStage | null
+function parseStrictStage( stage: unknown ): ParsedLimitSkipStage | null
 {
-    if (stage === null || typeof stage !== 'object' || Array.isArray(stage))
+    const entry = getSingleStageEntry( stage );
+    if( !entry )
     {
         return null;
     }
 
-    const prototype = Object.getPrototypeOf(stage);
-    if (prototype !== Object.prototype && prototype !== null)
-    {
-        return null;
-    }
-
-    const entries = Object.entries(stage);
-    if (entries.length !== 1)
-    {
-        return null;
-    }
-
-    const [operator, value] = entries[0]!;
-    if (operator !== '$limit' && operator !== '$skip')
+    const [ operator, value ] = entry;
+    if( operator !== '$limit' && operator !== '$skip' )
     {
         return null;
     }
 
     return {
         operator,
-        value,
+        value
     };
 }
 
@@ -224,40 +214,41 @@ export class LimitSkipCoalescingPass implements PipelinePass
 
     execute( pipeline: any[], _context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {
-        const result = [...pipeline];
-
-        for (let index = 0; index + 1 < result.length; index++)
+        for( let index = 0; index + 1 < pipeline.length; index++ )
         {
             const proof = proveLimitSkipCoalescing(
-                result[index],
-                result[index + 1],
+                pipeline[ index ],
+                pipeline[ index + 1 ]
             );
-            if (proof)
+            if( proof )
             {
-                result.splice(index, 2, proof.replacementStage);
+                const result = [ ...pipeline ];
+                result.splice( index, 2, proof.replacementStage );
                 return result;
             }
 
             const normProof = proveLimitBeforeSkipNormalization(
-                result[index],
-                result[index + 1],
+                pipeline[ index ],
+                pipeline[ index + 1 ]
             );
-            if (normProof)
+            if( normProof )
             {
-                result.splice(index, 2, normProof.skipStage, normProof.limitStage);
+                const result = [ ...pipeline ];
+                result.splice( index, 2, normProof.skipStage, normProof.limitStage );
                 return result;
             }
         }
 
-        for (let index = 0; index < result.length; index++)
+        for( let index = 0; index < pipeline.length; index++ )
         {
-            if (isZeroSkip(result[index]) || proveRedundantDownstreamLimit(result, index))
+            if( isZeroSkip( pipeline[ index ] ) || proveRedundantDownstreamLimit( pipeline, index ))
             {
-                result.splice(index, 1);
+                const result = [ ...pipeline ];
+                result.splice( index, 1 );
                 return result;
             }
         }
 
-        return result;
+        return pipeline;
     }
 }

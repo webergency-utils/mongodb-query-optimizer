@@ -11,7 +11,7 @@ import {
     type PipelineTransformationId
 } from '../src/passes/registry.js';
 import { optimizePipeline as optimizePipelineProduction } from '../src/index.js';
-import { structuralFingerprint } from '../src/utils.js';
+import { isEqual } from '../src/utils.js';
 import { MIXED_SHAPE_CATALOG } from './fixtures/mixed-shapes.js';
 import {
     buildRealWorldDataset,
@@ -49,7 +49,7 @@ describe( 'Real-world corpus fixtures and dependencies', () =>
         const data1 = buildRealWorldDataset( { count: 20, seed: REAL_WORLD_DATASET_SEED } );
         const data2 = buildRealWorldDataset( { count: 20, seed: REAL_WORLD_DATASET_SEED } );
 
-        expect( structuralFingerprint( data1 ) ).toBe( structuralFingerprint( data2 ) );
+        expect( isEqual( data1, data2 ) ).toBe( true );
 
         expect( data1.jobs.length ).toBe( 20 );
         expect( data1.briefings.length ).toBe( 20 );
@@ -112,7 +112,6 @@ describe( 'Real-world corpus fixtures and dependencies', () =>
         );
 
         const baseline = optimizePipelineWithCandidateProfile( fixtureTestQuery );
-        const baselineFingerprint = structuralFingerprint( baseline );
 
         const affectingPasses: PipelineTransformationId[] = [];
 
@@ -121,7 +120,7 @@ describe( 'Real-world corpus fixtures and dependencies', () =>
             const profileWithoutPass = PRE_GATE_PIPELINE_TRANSFORMATION_IDS.filter( ( candidateId ) => candidateId !== passId );
             const variant = optimizePipelineWithCandidateProfile( fixtureTestQuery, profileWithoutPass );
 
-            if( structuralFingerprint( variant ) !== baselineFingerprint )
+            if( !isEqual( variant, baseline ) )
             {
                 affectingPasses.push( passId );
             }
@@ -142,7 +141,6 @@ describe( 'Real-world corpus fixtures and dependencies', () =>
         );
 
         const baseline = optimizePipelineWithCandidateProfile( fixtureTestFullQuery );
-        const baselineFingerprint = structuralFingerprint( baseline );
 
         const affectingPasses: PipelineTransformationId[] = [];
 
@@ -151,7 +149,7 @@ describe( 'Real-world corpus fixtures and dependencies', () =>
             const profileWithoutPass = PRE_GATE_PIPELINE_TRANSFORMATION_IDS.filter( ( candidateId ) => candidateId !== passId );
             const variant = optimizePipelineWithCandidateProfile( fixtureTestFullQuery, profileWithoutPass );
 
-            if( structuralFingerprint( variant ) !== baselineFingerprint )
+            if( !isEqual( variant, baseline ) )
             {
                 affectingPasses.push( passId );
             }
@@ -243,9 +241,8 @@ describe( 'Real-world corpus fixtures and dependencies', () =>
                 }
             }
         };
-        expectedStrictOrder[ 4 ].$addFields.activeApplicationsCount.$sum.$map.in.$size.$filter.cond = {
-            $and: [ '$$application.active' ]
-        };
+        expectedStrictOrder[ 4 ].$addFields.activeApplicationsCount.$sum.$map.in.$size.$filter.cond =
+            '$$application.active';
 
         expect( defaultOptimized.length ).toBe( 9 );
         expect( Object.keys( defaultOptimized[ 1 ].$addFields )[ 0 ] ).toBe( '__heuristic_furthestStage' );

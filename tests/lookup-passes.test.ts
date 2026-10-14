@@ -1970,6 +1970,88 @@ describe('proveLookupLimitPushdown and LookupDelayPass limit pushdown', () =>
         ]);
     });
 
+    it('does not push limit 1 into lookup subpipeline when downstream uses both $first and $last of lookup array', () =>
+    {
+        const pipelineWithBoth = [
+            {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [{ $match: { status: 'completed' } }]
+                }
+            },
+            {
+                $project: {
+                    _id: 1,
+                    firstOrder: { $first: '$orders' },
+                    lastOrder: { $last: '$orders' }
+                }
+            }
+        ];
+
+        // 1. LookupDelayPass must NOT push $limit: 1 into the subpipeline
+        const passResult = pass.execute(pipelineWithBoth);
+        expect(passResult[0]).toEqual({
+            $lookup: {
+                from: 'orders',
+                as: 'orders',
+                pipeline: [{ $match: { status: 'completed' } }]
+            }
+        });
+
+        // 2. Full optimizePipeline must NOT push $limit: 1 into the subpipeline
+        const optimized = optimizePipeline(pipelineWithBoth);
+        expect((optimized[0] as any).$lookup.pipeline).toEqual([
+            { $match: { status: 'completed' } }
+        ]);
+
+        // 3. Same safety check when using $set / $unset
+        const pipelineWithSetBoth = [
+            {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [{ $match: { status: 'completed' } }]
+                }
+            },
+            {
+                $set: {
+                    firstOrder: { $first: '$orders' },
+                    lastOrder: { $last: '$orders' }
+                }
+            },
+            { $unset: 'orders' }
+        ];
+
+        const optimizedSetBoth = optimizePipeline(pipelineWithSetBoth);
+        expect((optimizedSetBoth[0] as any).$lookup.pipeline).toEqual([
+            { $match: { status: 'completed' } }
+        ]);
+
+        // 4. Contrast: when ONLY $first is used, $limit: 1 IS safely pushed down
+        const pipelineWithFirstOnly = [
+            {
+                $lookup: {
+                    from: 'orders',
+                    as: 'orders',
+                    pipeline: [{ $match: { status: 'completed' } }]
+                }
+            },
+            {
+                $project: {
+                    _id: 1,
+                    firstOrder: { $first: '$orders' }
+                }
+            }
+        ];
+
+        const optimizedFirstOnly = optimizePipeline(pipelineWithFirstOnly);
+        expect((optimizedFirstOnly[0] as any).$lookup.pipeline).toEqual([
+            { $match: { status: 'completed' } },
+            { $limit: 1 }
+        ]);
+    });
+
     it('composes subpipeline filter pushdown and limit pushdown in full optimizePipeline', () =>
     {
         const pipeline = [
@@ -2239,6 +2321,10 @@ describe('movement sort question', () =>
         expect(proveLookupSubpipelineFieldPruning(
             pipelineLookup,
             [ { $project: { userId: 1 } } ]
+        )).toBeNull();
+        expect( proveLookupSubpipelineFieldPruning(
+            pipelineLookup,
+            [ { $project: { 'orders.total': 1, x: { $in: [ { $getField: 'orders.a' }, [ 1, 2 ] ] } } } ]
         )).toBeNull();
     });
 });

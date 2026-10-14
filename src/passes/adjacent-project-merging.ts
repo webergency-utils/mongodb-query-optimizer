@@ -11,23 +11,24 @@ export class AdjacentProjectMergingPass implements PipelinePass
 
     execute( pipeline: any[], _context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {
-        const result = [ ...pipeline ];
-
-        for( let index = 1; index < result.length; index++ )
+        for( let index = 1; index < pipeline.length; index++ )
         {
             const proof = proveAdjacentProjectMerge(
-                result[index - 1],
-                result[index]
+                pipeline[ index - 1 ],
+                pipeline[ index ]
             );
+
             if( !proof )
             {
                 continue;
             }
 
+            const result = [ ...pipeline ];
             result.splice( index - 1, 2, proof.mergedStage );
+
             return result;
         }
 
-        return result;
+        return pipeline;
     }
 }

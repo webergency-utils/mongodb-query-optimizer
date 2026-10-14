@@ -22,8 +22,6 @@ export interface GuaranteeContext
     readonly strictErrors       : boolean
 }
 
-const WRITE_STAGES: ReadonlySet<string> = new Set([ '$out', '$merge' ]);
-
 export const DEFAULT_GUARANTEE_CONTEXT: GuaranteeContext = Object.freeze(
 {
     strictFieldOrder    : false,
@@ -43,7 +41,7 @@ export function hasWriteStage( pipeline: unknown ): boolean
 {
     if( !Array.isArray( pipeline )){ return false }
 
-    return pipeline.some(( stage ) => isPlainStage( stage ) && Object.keys( stage ).some(( key ) => WRITE_STAGES.has( key )));
+    return pipeline.some(( stage ) => isPlainStage( stage ) && ( Object.hasOwn( stage, '$out' ) || Object.hasOwn( stage, '$merge' )));
 }
 
 function createContext( strictFieldOrder: boolean, strictErrors: boolean ): GuaranteeContext

@@ -12,18 +12,16 @@ export class UnusedFieldPruningPass implements PipelinePass
 
     execute( pipeline: any[], context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {
-        const result = [ ...pipeline ];
-
-        for( let index = 0; index + 1 < result.length; index++ )
+        for( let index = 0; index + 1 < pipeline.length; index++ )
         {
-            if( !canRemoveStage( result[index], context ))
+            if( !canRemoveStage( pipeline[ index ], context ))
             {
                 continue;
             }
 
             const proof = proveUnusedFieldPruningThroughSuffix(
-                result[index],
-                result.slice( index + 1 ),
+                pipeline[ index ],
+                pipeline.slice( index + 1 ),
                 context.strictErrors
             );
             if( !proof )
@@ -31,9 +29,10 @@ export class UnusedFieldPruningPass implements PipelinePass
                 continue;
             }
 
+            const result = [ ...pipeline ];
             if( proof.replacementStage )
             {
-                result[index] = proof.replacementStage;
+                result[ index ] = proof.replacementStage;
             }
             else
             {
@@ -43,6 +42,6 @@ export class UnusedFieldPruningPass implements PipelinePass
             return result;
         }
 
-        return result;
+        return pipeline;
     }
 }

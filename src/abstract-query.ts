@@ -65,7 +65,7 @@ function isBsonType( val: unknown, typeName: string ): boolean
     return Boolean( val && typeof val === 'object' && ( val as any )._bsontype === typeName );
 }
 
-function getTypeTag( val: unknown ): string
+function getScalarTypeTag( val: unknown ): string | null
 {
     if( val === null )
     {
@@ -92,6 +92,11 @@ function getTypeTag( val: unknown ): string
         return '<string>';
     }
 
+    if( typeof val !== 'object' )
+    {
+        return '<unknown>';
+    }
+
     if( val instanceof Date )
     {
         return '<Date>';
@@ -112,7 +117,12 @@ function getTypeTag( val: unknown ): string
         return '<ObjectId>';
     }
 
-    if( isBsonType( val, 'Decimal128' ) || isBsonType( val, 'Long' ) || isBsonType( val, 'Int32' ) || isBsonType( val, 'Double' ))
+    if(
+        isBsonType( val, 'Decimal128' )
+        || isBsonType( val, 'Long' )
+        || isBsonType( val, 'Int32' )
+        || isBsonType( val, 'Double' )
+    )
     {
         return '<number>';
     }
@@ -132,32 +142,12 @@ function getTypeTag( val: unknown ): string
         return '<Timestamp>';
     }
 
-    return '<unknown>';
-}
-
-function isScalarLiteral( val: unknown ): boolean
-{
-    if( val === null || val === undefined )
-    {
-        return true;
-    }
-
-    if( typeof val !== 'object' )
-    {
-        return true;
-    }
-
-    if( val instanceof Date || val instanceof RegExp || isBinary( val ) || isObjectId( val ))
-    {
-        return true;
-    }
-
     if( ( val as any )._bsontype )
     {
-        return true;
+        return '<unknown>';
     }
 
-    return false;
+    return null;
 }
 
 function isAggregationPipeline( val: unknown ): val is Array<Record<string, any>>
@@ -175,20 +165,21 @@ function isAggregationPipeline( val: unknown ): val is Array<Record<string, any>
         }
 
         const keys = Object.keys( item );
+
         return keys.length > 0 && keys.every(( key ) => key.startsWith( '$' ));
     });
 }
 
 interface AbstractionContext
 {
-    readonly isExpression?: boolean;
-    readonly inPipeline?: boolean;
-    readonly isIdentifier?: boolean;
-    readonly isIndex?: boolean;
-    readonly isSortSpec?: boolean;
-    readonly isProjectionSpec?: boolean;
-    readonly parentOperator?: string;
-    readonly parentStage?: string;
+    readonly isExpression?      : boolean
+    readonly inPipeline?        : boolean
+    readonly isIdentifier?      : boolean
+    readonly isIndex?           : boolean
+    readonly isSortSpec?        : boolean
+    readonly isProjectionSpec?  : boolean
+    readonly parentOperator?    : string
+    readonly parentStage?       : string
 }
 
 function toAbstractQueryInternal( query: unknown, context: AbstractionContext = {}): string
@@ -225,6 +216,7 @@ function toAbstractQueryInternal( query: unknown, context: AbstractionContext = 
         {
             return String( query );
         }
+
         return '<boolean>';
     }
 
@@ -238,12 +230,15 @@ function toAbstractQueryInternal( query: unknown, context: AbstractionContext = 
         {
             return String( query );
         }
+
         return '<number>';
     }
 
-    if( isScalarLiteral( query ))
+    const scalarTag = getScalarTypeTag( query );
+
+    if( scalarTag !== null )
     {
-        return getTypeTag( query );
+        return scalarTag;
     }
 
     if( Array.isArray( query ))
@@ -259,15 +254,19 @@ function toAbstractQueryInternal( query: unknown, context: AbstractionContext = 
             {
                 return toAbstractQueryInternal( stage, { inPipeline: true });
             });
+
             return `[${ stages.join( ',' ) }]`;
         }
 
-        const elementShapes = query.map(( elem ) =>
-        {
-            return toAbstractQueryInternal( elem, context );
-        });
+        const shapeSet = new Set<string>();
 
-        const uniqueShapes = Array.from( new Set( elementShapes )).sort(( a, b ) => a.localeCompare( b ));
+        for( let i = 0; i < query.length; i++ )
+        {
+            shapeSet.add( toAbstractQueryInternal( query[ i ], context ));
+        }
+
+        const uniqueShapes = Array.from( shapeSet ).sort(( a, b ) => a.localeCompare( b ));
+
         return `[${ uniqueShapes.join( ',' ) }]`;
     }
 

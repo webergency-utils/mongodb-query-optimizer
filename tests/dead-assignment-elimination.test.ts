@@ -202,13 +202,13 @@ describe( 'DeadAssignmentEliminationPass execution and parity', () =>
         expect( pass.stageTypes ).toEqual([ '$addFields', '$set', '$project', '$unset' ]);
     });
 
-    it( 'returns cloned pipeline if no optimizations apply', () =>
+    it( 'returns pipeline unchanged if no optimizations apply', () =>
     {
         const pipeline = [ { $match: { a: 1 } } ];
         const result = pass.execute( pipeline );
 
         expect( result ).toEqual( pipeline );
-        expect( result ).not.toBe( pipeline );
+        expect( result ).toBe( pipeline );
     });
 
     it( 'replaces partial dead assignments in place', () =>

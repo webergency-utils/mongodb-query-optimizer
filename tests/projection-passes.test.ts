@@ -23,7 +23,7 @@ import {
     candidateSemanticCases,
     productionSemanticCases,
 } from './fixtures/semantic-cases.js';
-import { structuralFingerprint } from '../src/utils.js';
+import { isEqual } from '../src/utils.js';
 
 const ADD_FIELD_MERGING = ['adjacent-add-field-merging'] as const;
 const PROJECT_MERGING = ['adjacent-project-merging'] as const;
@@ -1371,8 +1371,7 @@ describe('projection production integration and scheduling', () =>
                     );
                     return [
                         testCase.id,
-                        structuralFingerprint(optimized)
-                            === structuralFingerprint(testCase.pipeline)
+                        isEqual( optimized, testCase.pipeline )
                             ? 'barrier'
                             : 'rewrite',
                     ];

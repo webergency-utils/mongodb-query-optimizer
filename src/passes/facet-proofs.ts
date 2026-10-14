@@ -1,6 +1,6 @@
 import { analyzePipeline, analyzeStage } from '../analyzer/semantics.js';
 import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
-import { deepClone, isPlainObject, structuralFingerprint } from '../utils.js';
+import { isEqual, isPlainObject } from '../utils.js';
 import { stageReadsFieldOrder } from './guarantee-guards.js';
 import { getSingleStageEntry, getStageSpec, isMatchStage } from './helpers.js';
 import { isSafeMatchSummary } from './movement-proofs.js';
@@ -91,85 +91,84 @@ export function proveFacetPrefixHoisting(
         return null;
     }
 
-    const branchNames = Object.keys(facetSpec);
-    if (branchNames.length < 2)
+    const branchNames = Object.keys( facetSpec );
+    if( branchNames.length < 2 )
     {
         return null;
     }
 
-    for (const name of branchNames)
+    for( const name of branchNames )
     {
-        if (!Array.isArray(facetSpec[name]))
+        if( !Array.isArray( facetSpec[ name ] ))
         {
             return null;
         }
     }
 
-    // Clone branch arrays so we can pop hoisted stages cleanly
+    // Copy branch array spines so we can pop hoisted stages cleanly
     const branches: Record<string, any[]> = {};
-    for (const name of branchNames)
+    for( const name of branchNames )
     {
-        branches[name] = deepClone(facetSpec[name]);
+        branches[ name ] = [ ...facetSpec[ name ] ];
     }
 
     const hoistedStages: any[] = [];
 
-    while (true)
+    while( true )
     {
         // Check if every branch has at least one stage remaining
-        for (const name of branchNames)
+        for( const name of branchNames )
         {
-            if (branches[name]!.length === 0)
+            if( branches[ name ]!.length === 0 )
             {
                 return hoistedStages.length > 0
                     ? {
                         hoistedStages,
-                        simplifiedFacet: { $facet: branches },
+                        simplifiedFacet: { $facet: branches }
                     }
                     : null;
             }
         }
 
-        const firstBranchLeadingStage = branches[branchNames[0]!]![0];
-        if (!isEligibleHoistStage(firstBranchLeadingStage, context))
+        const candidate = branches[ branchNames[ 0 ]! ]![ 0 ];
+        if( !isEligibleHoistStage( candidate, context ))
         {
             break;
         }
 
-        const targetFingerprint = structuralFingerprint(firstBranchLeadingStage);
         let allAgree = true;
 
-        for (let i = 1; i < branchNames.length; i++)
+        for( let i = 1; i < branchNames.length; i++ )
         {
-            const currentBranchLeadingStage = branches[branchNames[i]!]![0];
-            if (structuralFingerprint(currentBranchLeadingStage) !== targetFingerprint)
+            const stages = branches[ branchNames[ i ]! ]!;
+            if( !isEqual( stages[ 0 ], candidate ))
             {
                 allAgree = false;
                 break;
             }
         }
 
-        if (!allAgree)
+        if( !allAgree )
         {
             break;
         }
 
         // Shift the common stage from all branches
-        hoistedStages.push(firstBranchLeadingStage);
-        for (const name of branchNames)
+        hoistedStages.push( candidate );
+        for( const name of branchNames )
         {
-            branches[name]!.shift();
+            branches[ name ]!.shift();
         }
     }
 
-    if (hoistedStages.length === 0)
+    if( hoistedStages.length === 0 )
     {
         return null;
     }
 
     return {
         hoistedStages,
-        simplifiedFacet: { $facet: branches },
+        simplifiedFacet: { $facet: branches }
     };
 }
 
@@ -228,7 +227,7 @@ export function proveFacetDeadBranchPruning(
             {
                 if( !deadSet.has( name ))
                 {
-                    prunedFacet[ name ] = deepClone( facetSpec[ name ] );
+                    prunedFacet[ name ] = facetSpec[ name ];
                 }
             }
 
@@ -340,12 +339,12 @@ export function proveUnionWithPushdown(
         )
         {
             return {
-                hoistedMatch      : deepClone( firstFollower ),
+                hoistedMatch      : firstFollower,
                 updatedUnionStage : {
                     $unionWith: {
                         ...extraProps,
                         coll     : collName,
-                        pipeline : [ ...deepClone( subPipeline ), deepClone( firstFollower ) ]
+                        pipeline : [ ...subPipeline, firstFollower ]
                     }
                 }
             };
@@ -369,7 +368,7 @@ export function proveUnionWithPushdown(
             return null;
         }
 
-        const nextSub = deepClone( subPipeline ) as unknown[];
+        const nextSub = [ ...subPipeline ] as unknown[];
         if( lastSub && lastSub[ 0 ] === '$limit' )
         {
             nextSub[ nextSub.length - 1 ] = { $limit: cap };

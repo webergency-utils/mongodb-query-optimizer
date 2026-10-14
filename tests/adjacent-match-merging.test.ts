@@ -31,7 +31,7 @@ describe( 'AdjacentMatchMergingPass', () =>
         expect( pass.execute( pipeline, DEFAULT_GUARANTEE_CONTEXT ) ).toEqual( pipeline );
     } );
 
-    it( 'merges consecutive adjacent match stages into an $and conjunction', () =>
+    it( 'merges consecutive adjacent match stages into a single match document', () =>
     {
         const pipeline = [
             { $match: { status: 'active' } },
@@ -41,10 +41,8 @@ describe( 'AdjacentMatchMergingPass', () =>
         expect( pass.execute( pipeline, DEFAULT_GUARANTEE_CONTEXT ) ).toEqual( [
             {
                 $match: {
-                    $and: [
-                        { status: 'active' },
-                        { score: { $gt: 10 } }
-                    ]
+                    status: 'active',
+                    score: { $gt: 10 }
                 }
             }
         ] );
@@ -73,12 +71,10 @@ describe( 'AdjacentMatchMergingPass', () =>
         expect( pass.execute( pipeline, DEFAULT_GUARANTEE_CONTEXT ) ).toEqual( [
             {
                 $match: {
-                    $and: [
-                        { a: 1 },
-                        { b: 2 },
-                        { c: 3 },
-                        { d: 4 }
-                    ]
+                    a: 1,
+                    b: 2,
+                    c: 3,
+                    d: 4
                 }
             }
         ] );
@@ -122,8 +118,8 @@ describe( 'AdjacentMatchMergingPass', () =>
         expect( pass.execute( pipeline, DEFAULT_GUARANTEE_CONTEXT ) ).toEqual( [
             {
                 $match: {
+                    tags: { $gt: 5 },
                     $and: [
-                        { tags: { $gt: 5 } },
                         { tags: { $lt: 10 } }
                     ]
                 }

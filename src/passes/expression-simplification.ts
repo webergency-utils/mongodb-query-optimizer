@@ -1,7 +1,7 @@
 import { analyzeExpression } from '../analyzer/expressions.js';
-import { analyzeFilter } from '../analyzer/filters.js';
+import { analyzeFilter, isFilterRewriteSafe } from '../analyzer/filters.js';
 import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
-import { isPlainObject, structuralFingerprint } from '../utils.js';
+import { containsValue, hasSingleKey, isEqual, isPlainObject, MAX_ANALYZED_ARRAY_LENGTH } from '../utils.js';
 import { getSingleStageEntry } from './helpers.js';
 import { PipelinePass } from './types.js';
 
@@ -235,21 +235,24 @@ function isErrorFreeDeterministicCondition( condExpr: unknown ): boolean
 
 function deduplicateBooleanOperands( items: readonly unknown[] ): unknown[]
 {
-    const seen = new Set<string>();
+    if( items.length <= 1 || items.length > MAX_ANALYZED_ARRAY_LENGTH )
+    {
+        return items as unknown[];
+    }
+
+    const seen: Record<string, unknown>[] = [];
     const result: unknown[] = [];
 
     for( const item of items )
     {
         if( isBooleanProducingExpression( item ) && isErrorFreeDeterministicCondition( item ))
         {
-            const fp = structuralFingerprint( item );
-
-            if( seen.has( fp ))
+            if( containsValue( seen, item ))
             {
                 continue;
             }
 
-            seen.add( fp );
+            seen.push( item );
         }
 
         result.push( item );
@@ -287,20 +290,21 @@ export function simplifyExpression( expr: unknown ): unknown
 {
     if( Array.isArray( expr ))
     {
-        let arrayChanged = false;
-        const mapped = expr.map(( item ) =>
+        let mapped: unknown[] | null = null;
+
+        for( let i = 0; i < expr.length; i++ )
         {
+            const item = expr[ i ];
             const next = simplifyExpression( item );
 
             if( next !== item )
             {
-                arrayChanged = true;
+                mapped ??= [ ...expr ];
+                mapped[ i ] = next;
             }
+        }
 
-            return next;
-        });
-
-        return arrayChanged ? mapped : expr;
+        return mapped ?? expr;
     }
 
     if( !isPlainObject( expr ))
@@ -313,26 +317,33 @@ export function simplifyExpression( expr: unknown ): unknown
         return expr;
     }
 
-    let childChanged = false;
-    const simplified: Record<string, unknown> = {};
+    let changedObj: Record<string, unknown> | null = null;
+    let firstKey: string | undefined;
+    let keyCount = 0;
 
-    for( const [ key, val ] of Object.entries( expr ))
+    for( const key in expr )
     {
+        if( keyCount === 0 )
+        {
+            firstKey = key;
+        }
+
+        keyCount++;
+        const val = expr[ key ];
         const next = simplifyExpression( val );
 
         if( next !== val )
         {
-            childChanged = true;
+            changedObj ??= { ...expr };
+            changedObj[ key ] = next;
         }
-
-        simplified[ key ] = next;
     }
 
-    const keys = Object.keys( simplified );
+    const simplified = changedObj ?? expr;
 
-    if( keys.length === 1 )
+    if( keyCount === 1 )
     {
-        const op = keys[ 0 ]!;
+        const op = firstKey!;
 
         if( op === '$and' && Array.isArray( simplified.$and ) && simplified.$and.length >= 1 )
         {
@@ -439,7 +450,7 @@ export function simplifyExpression( expr: unknown ): unknown
                         ( thenPrim.valid && elsePrim.valid && thenPrim.value === elsePrim.value )
                         || (
                             isErrorFreeDeterministicCondition( simplified.$cond[ 1 ] )
-                            && structuralFingerprint( simplified.$cond[ 1 ] ) === structuralFingerprint( simplified.$cond[ 2 ] )
+                            && isEqual( simplified.$cond[ 1 ], simplified.$cond[ 2 ] )
                         )
                     )
                 )
@@ -477,7 +488,7 @@ export function simplifyExpression( expr: unknown ): unknown
                             ( thenPrim.valid && elsePrim.valid && thenPrim.value === elsePrim.value )
                             || (
                                 isErrorFreeDeterministicCondition( condSpec.then )
-                                && structuralFingerprint( condSpec.then ) === structuralFingerprint( condSpec.else )
+                                && isEqual( condSpec.then, condSpec.else )
                             )
                         )
                     )
@@ -541,11 +552,9 @@ export function simplifyExpression( expr: unknown ): unknown
                 return args[ 0 ];
             }
 
-            const firstFp = structuralFingerprint( args[ 0 ] );
-
             if(
                 isErrorFreeDeterministicCondition( args[ 0 ] )
-                && args.every(( arg, idx ) => idx === 0 || structuralFingerprint( arg ) === firstFp )
+                && args.every(( arg, idx ) => idx === 0 || isEqual( arg, args[ 0 ] ))
             )
             {
                 return args[ 0 ];
@@ -917,6 +926,24 @@ export function simplifyExpression( expr: unknown ): unknown
                     return [];
                 }
             }
+
+            if( isPlainObject( filterSpec.cond ))
+            {
+                const condObj = filterSpec.cond as Record<string, unknown>;
+                const condItems = Array.isArray( condObj.$and )
+                    ? condObj.$and
+                    : ( Array.isArray( condObj.$or ) ? condObj.$or : null );
+
+                if( condItems !== null && condItems.length === 1 && Object.keys( condObj ).length === 1 )
+                {
+                    return {
+                        $filter: {
+                            ...filterSpec,
+                            cond: condItems[ 0 ]
+                        }
+                    };
+                }
+            }
         }
         else if( op === '$map' && isPlainObject( simplified.$map ))
         {
@@ -1035,13 +1062,26 @@ export function simplifyExpression( expr: unknown ): unknown
         }
     }
 
-    return childChanged ? simplified : expr;
+    return simplified;
 }
 
 function simplifyMatchFilterExpressions(
     filter: Record<string, unknown>
 ): Record<string, unknown>
 {
+    if(
+        isFilterRewriteSafe( filter )
+        || (
+            !( '$expr' in filter )
+            && !( '$and' in filter )
+            && !( '$or' in filter )
+            && !( '$nor' in filter )
+        )
+    )
+    {
+        return filter;
+    }
+
     const summary = analyzeFilter( filter );
 
     if( summary.unknown || summary.malformed )
@@ -1049,9 +1089,7 @@ function simplifyMatchFilterExpressions(
         return filter;
     }
 
-    const keys = Object.keys( filter );
-
-    if( keys.length === 1 && keys[ 0 ] === '$expr' )
+    if( hasSingleKey( filter ) && '$expr' in filter )
     {
         const simplifiedExpr = simplifyExpression( filter.$expr );
 
@@ -1107,25 +1145,18 @@ function simplifyMatchFilterExpressions(
             && Array.isArray( val )
         )
         {
-            let branchChanged = false;
-            const mapped = ( val as Record<string, unknown>[] ).map(( item ) =>
+            nextFilter[ key ] = ( val as Record<string, unknown>[] ).map(( item ) =>
             {
                 const nextItem = simplifyMatchFilterExpressions( item );
 
                 if( nextItem !== item )
                 {
-                    branchChanged = true;
+                    changed = true;
                 }
 
                 return nextItem;
             });
-
-            if( branchChanged )
-            {
-                changed = true;
-                nextFilter[ key ] = mapped;
-                continue;
-            }
+            continue;
         }
 
         nextFilter[ key ] = val;
@@ -1221,34 +1252,32 @@ function simplifyStage( stage: unknown ): unknown
 
     if( op === '$addFields' || op === '$set' )
     {
-        let changed = false;
-        const newSpec: Record<string, unknown> = {};
+        let newSpec: Record<string, unknown> | null = null;
 
-        for( const [ key, val ] of Object.entries( specObj ))
+        for( const key in specObj )
         {
+            const val = specObj[ key ];
             const simplified = simplifyExpression( val );
 
             if( simplified !== val )
             {
-                changed = true;
+                newSpec ??= { ...specObj };
+                newSpec[ key ] = simplified;
             }
-
-            newSpec[ key ] = simplified;
         }
 
-        return changed ? { [ op ]: newSpec } : stage;
+        return newSpec !== null ? { [ op ]: newSpec } : stage;
     }
 
     if( op === '$project' )
     {
-        let changed = false;
-        const newSpec: Record<string, unknown> = {};
+        let newSpec: Record<string, unknown> | null = null;
 
-        for( const [ key, val ] of Object.entries( specObj ))
+        for( const key in specObj )
         {
+            const val = specObj[ key ];
             if( typeof val === 'number' || typeof val === 'boolean' )
             {
-                newSpec[ key ] = val;
                 continue;
             }
 
@@ -1256,32 +1285,31 @@ function simplifyStage( stage: unknown ): unknown
 
             if( simplified !== val )
             {
-                changed = true;
+                newSpec ??= { ...specObj };
+                newSpec[ key ] = simplified;
             }
-
-            newSpec[ key ] = simplified;
         }
 
-        return changed ? { [ op ]: newSpec } : stage;
+        return newSpec !== null ? { [ op ]: newSpec } : stage;
     }
 
     if( op === '$group' )
     {
-        let changed = false;
-        const newSpec: Record<string, unknown> = {};
+        let newSpec: Record<string, unknown> | null = null;
 
-        for( const [ key, val ] of Object.entries( specObj ))
+        for( const key in specObj )
         {
+            const val = specObj[ key ];
             if( key === '_id' )
             {
                 const simplified = val === null ? null : simplifyExpression( val );
 
                 if( simplified !== val )
                 {
-                    changed = true;
+                    newSpec ??= { ...specObj };
+                    newSpec[ key ] = simplified;
                 }
 
-                newSpec[ key ] = simplified;
                 continue;
             }
 
@@ -1297,17 +1325,14 @@ function simplifyStage( stage: unknown ): unknown
 
                     if( simplifiedArg !== accArg )
                     {
-                        changed = true;
+                        newSpec ??= { ...specObj };
                         newSpec[ key ] = { [ accOp ]: simplifiedArg };
-                        continue;
                     }
                 }
             }
-
-            newSpec[ key ] = val;
         }
 
-        return changed ? { $group: newSpec } : stage;
+        return newSpec !== null ? { $group: newSpec } : stage;
     }
 
     if( op === '$match' )
@@ -1342,19 +1367,20 @@ export class ExpressionSimplificationPass implements PipelinePass
             return pipeline;
         }
 
-        let changed = false;
-        const result = pipeline.map(( stage ) =>
+        let result: any[] | null = null;
+
+        for( let i = 0; i < pipeline.length; i++ )
         {
+            const stage = pipeline[ i ];
             const simplified = simplifyStage( stage );
 
             if( simplified !== stage )
             {
-                changed = true;
+                result ??= [ ...pipeline ];
+                result[ i ] = simplified;
             }
+        }
 
-            return simplified;
-        });
-
-        return changed ? result : pipeline;
+        return result ?? pipeline;
     }
 }

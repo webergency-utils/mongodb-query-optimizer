@@ -806,4 +806,34 @@ describe( 'optimizePipeline execution parity for unwind prefilter', () =>
 
         expect( opt ).toEqual( orig );
     } );
+
+    it( 'skips synthesizing a redundant prefilter when an upstream $match already satisfies primaryFilter', () =>
+    {
+        const pipelineAlreadySatisfied =
+        [
+            { $match: { tenant: 'org-1', 'items.status': 'active' } },
+            { $unwind: '$items' },
+            { $match: { 'items.status': 'active', 'items.qty': { $ne: 0 } } }
+        ];
+
+        expect( optimizePipeline( pipelineAlreadySatisfied ) ).toEqual( pipelineAlreadySatisfied );
+
+        const pipelineDifferentValueOnKey =
+        [
+            { $match: { 'items.status': { $ne: 'deleted' } } },
+            { $unwind: '$items' },
+            { $match: { 'items.status': 'active' } }
+        ];
+
+        const optimizedDiff = optimizePipeline( pipelineDifferentValueOnKey );
+        expect( optimizedDiff[ 0 ] ).toEqual({
+            $match: {
+                'items.status': { $ne: 'deleted' },
+                $or: [
+                    { 'items.status': 'active' },
+                    { items: { $elemMatch: { $type: 'array' } } }
+                ]
+            }
+        });
+    } );
 } );

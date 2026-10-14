@@ -1,7 +1,7 @@
 import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
 import { PipelinePass } from './types.js';
 import { proveUnwindPrefilter } from './unwind-proofs.js';
-import { structuralFingerprint } from '../utils.js';
+import { isEqual } from '../utils.js';
 
 function hasPrefilter(
     matchSpec           : any,
@@ -13,7 +13,29 @@ function hasPrefilter(
         return false;
     }
 
-    if( structuralFingerprint( matchSpec ) === structuralFingerprint( prefilterMatchSpec ))
+    if( isEqual( matchSpec, prefilterMatchSpec ))
+    {
+        return true;
+    }
+
+    const [ primaryFilter, escapeBranch ] = prefilterMatchSpec.$or;
+
+    if(
+        Array.isArray( matchSpec.$or )
+        && matchSpec.$or.some(( branch: any ) => isEqual( branch, escapeBranch ))
+    )
+    {
+        return true;
+    }
+
+    if(
+        Object.entries( primaryFilter ).every(
+            ([ k, v ]) =>
+                !k.startsWith( '$' )
+                && k in matchSpec
+                && isEqual( matchSpec[ k ], v )
+        )
+    )
     {
         return true;
     }

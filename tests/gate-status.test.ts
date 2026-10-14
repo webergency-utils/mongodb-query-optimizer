@@ -37,21 +37,21 @@ describe( 'Activation gate status and guard invariants', () =>
 
         expect( optimized ).toEqual( pipeline );
         expect( optimized ).not.toBe( pipeline );
-        expect( optimized[0] ).not.toBe( pipeline[0] );
+        expect( optimized[0] ).toBe( pipeline[0] );
 
         // Production optimizePipeline does not apply inactive passes like expr-match-normalization
         const inactivePipeline = [ { $match: { $expr: { $eq: [ '$a', 1 ] } } } ];
         expect( optimizePipeline( inactivePipeline ) ).toEqual( inactivePipeline );
     } );
 
-    it( 'returns a clone equal to input for optimizeFilter when inactive candidate rules are bypassed', () =>
+    it( 'returns a clone equal to input for optimizeFilter when rules are at fixed point', () =>
     {
         const filter =
         {
+            a: { $eq: /^test/i },
             $and:
             [
-                { a: { $eq: 10 } },
-                { b: { $in: [ 'active' ] } }
+                { a: { $in: [ /^test/i ] } }
             ]
         };
 

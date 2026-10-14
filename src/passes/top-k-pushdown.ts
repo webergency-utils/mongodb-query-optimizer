@@ -9,14 +9,13 @@ export class TopKPushdownPass implements PipelinePass
 
     execute( pipeline: any[], context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {
-        const result = [ ...pipeline ];
-
-        for( let i = 0; i < result.length; i++ )
+        for( let i = 0; i < pipeline.length; i++ )
         {
-            const proof = proveTopKPushdown( result, i, context );
+            const proof = proveTopKPushdown( pipeline, i, context );
 
             if( proof )
             {
+                const result = [ ...pipeline ];
                 const slice = result.splice( proof.sortIndex, proof.sliceLength );
 
                 result.splice( proof.targetIndex, 0, ...slice );
@@ -24,10 +23,11 @@ export class TopKPushdownPass implements PipelinePass
                 return result;
             }
 
-            const heuristicProof = proveHeuristicTopKPushdown( result, i, context );
+            const heuristicProof = proveHeuristicTopKPushdown( pipeline, i, context );
 
             if( heuristicProof )
             {
+                const result = [ ...pipeline ];
                 const followerSlice = result.slice(
                     heuristicProof.sortIndex + 1,
                     heuristicProof.sortIndex + heuristicProof.sliceLength
@@ -54,6 +54,6 @@ export class TopKPushdownPass implements PipelinePass
             }
         }
 
-        return result;
+        return pipeline;
     }
 }

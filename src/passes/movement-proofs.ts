@@ -13,7 +13,7 @@ import {
     ScopedDependencies,
     StageSemantics,
 } from '../analyzer/types';
-import { deepClone, isPlainObject } from '../utils.js';
+import { isPlainObject } from '../utils.js';
 import {
     combineConjuncts,
     decomposeFilterIntoConjuncts,
@@ -659,11 +659,11 @@ function proveDisjointMatchPushdown(
     };
 }
 
-export function containsGetField( value: unknown ): boolean
+export function containsGetField( value: unknown, inExpr: boolean = false ): boolean
 {
     if( Array.isArray( value ))
     {
-        return value.some( containsGetField );
+        return value.some(( item ) => containsGetField( item, inExpr ));
     }
 
     if( !isPlainObject( value ))
@@ -673,7 +673,11 @@ export function containsGetField( value: unknown ): boolean
 
     for( const [ key, child ] of Object.entries( value ))
     {
-        if( key === '$getField' || containsGetField( child ))
+        if( key === '$getField' ){ return true }
+
+        if( key === '$literal' || ( !inExpr && ( key === '$in' || key === '$nin' ))){ continue }
+
+        if( containsGetField( child, inExpr || key === '$expr' ))
         {
             return true;
         }
@@ -1313,12 +1317,12 @@ export function proveLookupSubpipelinePushdown(
         if( key.startsWith( prefix ))
         {
             const innerKey = key.slice( prefix.length );
-            pushableToSub.push( { [ innerKey ]: deepClone( val ) } );
+            pushableToSub.push( { [ innerKey ]: val } );
         }
         else if( key === lookupSpec.as && isPlainObject( val ) && isPlainObject( val.$elemMatch ))
         {
             const elemConjuncts = decomposeFilterIntoConjuncts( val.$elemMatch as Record<string, unknown> );
-            pushableToSub.push( ...elemConjuncts.map(( c ) => deepClone( c )));
+            pushableToSub.push( ...elemConjuncts );
         }
         else
         {
@@ -1447,7 +1451,7 @@ function hasTerminalLimitAtMost( pipeline: readonly unknown[], limitVal: number 
 
 function pushLimitToSubpipeline( pipeline: readonly unknown[], limitVal: number ): unknown[]
 {
-    const copy = deepClone( pipeline ) as unknown[];
+    const copy = [ ...pipeline ];
 
     if( copy.length > 0 )
     {
@@ -1865,7 +1869,7 @@ export function proveLookupSubpipelineFieldPruning(
         || projSem.projection.unknown
         || projSem.projection.mode !== 'inclusion'
         || !hasOnlyKnownDependencyPaths( projSem )
-        || containsGetField( projSpec )
+        || containsGetField( projSpec, true )
         || alias in projSpec
         || projSem.dependencies.local.has( alias )
     )
@@ -1914,7 +1918,7 @@ export function proveLookupSubpipelineFieldPruning(
             $lookup: {
                 ...lookupSpec,
                 pipeline: [
-                    ...( deepClone( lookupSpec.pipeline ) as unknown[] ),
+                    ...lookupSpec.pipeline,
                     { $project: subProject }
                 ]
             }

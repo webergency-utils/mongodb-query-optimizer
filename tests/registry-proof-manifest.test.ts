@@ -100,9 +100,12 @@ describe('explicit immutable transformation registries', () =>
         const status = getFilterRuleRegistryStatus();
 
         expect(status.active).toEqual([
+            'simplify-equality',
+            'simplify-singleton-in',
             'flatten-conjunctions',
             'flatten-disjunctions',
             'deduplicate-conjunctions',
+            'merge-conjunctions',
             'simplify-conjunction-identities',
             'simplify-disjunction-identities'
         ]);

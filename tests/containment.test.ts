@@ -178,16 +178,14 @@ describe('production registries', () =>
         const optimizedPipeline = optimizePipeline(pipeline);
 
         expect(optimizedPipeline).not.toBe(pipeline);
-        expect(optimizedPipeline[0]).not.toBe(pipeline[0]);
-        expect(optimizedPipeline[0].$match).not.toBe(filter);
-        expect(optimizedPipeline[0].$match.createdAt).not.toBe(date);
-        expect(optimizedPipeline[0].$match.createdAt).toEqual(date);
-        expect(optimizedPipeline[0].$match.payload).not.toBe(buffer);
-        expect(optimizedPipeline[0].$match.payload).toEqual(buffer);
-        expect(optimizedPipeline[0].$match.status).not.toBe(regexp);
-        expect(optimizedPipeline[0].$match.status).toEqual(regexp);
+        expect(optimizedPipeline[0]).toBe(pipeline[0]);
+        expect(optimizedPipeline[0].$match).toBe(filter);
+        expect(optimizedPipeline[0].$match.createdAt).toBe(date);
+        expect(optimizedPipeline[0].$match.payload).toBe(buffer);
+        expect(optimizedPipeline[0].$match.status).toBe(regexp);
         expect(optimizedPipeline[0].$match._id).toBe(bson);
         expect(optimizedPipeline[0].$match.$expr.$function.body).toBe(functionBody);
+        expect(optimizedPipeline[1]).toBe(pipeline[1]);
         expect(optimizedPipeline[1].$unknown.token).toBe(bson);
     });
 
