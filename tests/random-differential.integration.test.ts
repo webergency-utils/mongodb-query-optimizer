@@ -58,7 +58,7 @@ function materializeRandomCase(
     };
 }
 
-describe.sequential( 'MongoDB 8 seeded random differential run (U12)', () =>
+describe( 'MongoDB 8 seeded random differential run (U12)', { concurrent: false }, () =>
 {
     let oracle: MongoDifferentialOracle;
     const successfulPasses = new Set<string>();

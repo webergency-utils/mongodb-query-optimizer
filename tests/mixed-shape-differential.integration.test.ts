@@ -45,7 +45,7 @@ function materializeMixedShapeCase(
     };
 }
 
-describe.sequential( 'MongoDB 8 mixed-shape differential matrix', () =>
+describe( 'MongoDB 8 mixed-shape differential matrix', { concurrent: false }, () =>
 {
     let oracle: MongoDifferentialOracle;
 

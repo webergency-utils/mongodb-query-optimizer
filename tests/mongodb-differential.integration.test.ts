@@ -97,7 +97,7 @@ function materializeCase( testCase: SemanticCase ): MongoDifferentialCase
     };
 }
 
-describe.sequential('MongoDB 8 differential oracle', () =>
+describe( 'MongoDB 8 differential oracle', { concurrent: false }, () =>
 {
     let oracle: MongoDifferentialOracle;
 

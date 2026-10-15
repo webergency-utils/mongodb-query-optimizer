@@ -11,7 +11,7 @@ import {
     validateMongoOracleEnvironment
 } from './helpers/mongodb-oracle.js';
 
-describe.sequential( 'MongoDB 8 real-world differential matrix', () =>
+describe( 'MongoDB 8 real-world differential matrix', { concurrent: false }, () =>
 {
     let oracle: MongoDifferentialOracle;
 
