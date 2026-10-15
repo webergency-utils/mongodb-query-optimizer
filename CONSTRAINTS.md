@@ -68,6 +68,7 @@ Unlike unconstrained generic query rewrites:
   2. The join alias is not required for document ordering.
   3. Under `strictErrors: true`, the lookup subpipeline is proven error-free.
   4. Under `strictFieldOrder: true`, delaying the lookup does not alter the relative order of fields in the resulting document.
+- **Subpipeline Head Limit Pushdown**: Safely injects `$limit: N` into a `$lookup` subpipeline across `$unwind` + `$limit: N`, `$skip: S` + `$limit: L`, `$first`, `$arrayElemAt: [arr, 0]`, or positive `$slice: [arr, N]`. If any downstream expression references the lookup alias via non-head operators (e.g. `$last`, negative `$slice`, or arbitrary element indices), limit pushdown is strictly rejected to preserve accurate array evaluation.
 - **`redundant-lookup-elimination`**: Eliminates a `$lookup` stage only when downstream stages (`$project`, `$unset`) definitively discard the join alias without any intermediate stage reading it, and the lookup subpipeline cannot throw errors under the active error policy.
 
 ---

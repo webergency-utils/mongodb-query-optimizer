@@ -110,7 +110,7 @@ The optimizer evaluates queries and aggregation pipelines purely as Abstract Syn
 2. `filter-optimization`: Recursively applies provably safe boolean filter normalization rules (`flatten-conjunctions`, `flatten-disjunctions`, `deduplicate-conjunctions`, `simplify-conjunction-identities`, `simplify-disjunction-identities`), numeric and `Date` interval bound tightening, `$not` normalization over `$in`/`$nin`/`$eq`/`$ne`, set-difference and equality-negation algebra (`$in`/`$eq` vs `$nin`/`$ne`), contradiction detection, `$nin` array deduplication, and elimination of no-op `{ $match: {} }` stages.
 3. `add-field-pushdown`: Decomposes `$addFields`/`$set` and safely pushes sort/match-dependent expressions across `$lookup`, `$unset`, and intermediate disjoint `$addFields`/`$set` or exclusion `$project` stages.
 4. `top-k-pushdown`: Advances `$sort` and `$limit` slices ahead of 1:1 compute and lookup stages (including stepping across simple and computed sort-key-preserving `$project` stages and deterministic shadow-field hoisting from `$addFields`, `$set`, and computed `$project` stages) while respecting error guards.
-5. `lookup-delay`: Delays equality and pipeline-form `$lookup` joins past non-dependent filter, sort, limit, and skip stages, splits post-lookup `$match` conjuncts, and pushes filters and head limits (`$unwind` + `$limit: N` or `$skip: S` + `$limit: L`, `$first`, `$arrayElemAt: [..., 0]`, `$slice: [..., N]`) into lookup subpipelines.
+5. `lookup-delay`: Delays equality and pipeline-form `$lookup` joins past non-dependent filter, sort, limit, and skip stages, splits post-lookup `$match` conjuncts, and pushes filters and head limits (`$unwind` + `$limit: N` or `$skip: S` + `$limit: L`, `$first`, `$arrayElemAt: [..., 0]`, `$slice: [..., N]`) into lookup subpipelines when downstream consumers only reference prefix elements (strictly inhibiting limit pushdown when operators like `$last` are used).
 6. `unwind-prefilter`: Injects shape-safe `$or` prefilters before `$unwind` (for both dotted subfields and direct array-element predicates, including across `$and` conjunctions) to discard non-matching documents without dropping polymorphic types or nested arrays.
 7. `redundant-sort-elimination`: Eliminates empty `$sort` stages and dead `$sort` stages before adjacent or order-insensitive-separated `$sort`, `$count`, `$sortByCount`, and order-agnostic `$group`, `$bucket`, and `$bucketAuto` stages (including across `$unwind` before order-agnostic collapsing stages).
 8. `sort-by-count-simplification`: Converts verbose `$group` + `$sort` count patterns into canonical `$sortByCount`.
@@ -128,7 +128,7 @@ The optimizer evaluates queries and aggregation pipelines purely as Abstract Syn
 20. `sort-project-commute`: Commutes `$project` and exact top-level `$unset` stages ahead of `$sort` when all sort keys remain visible.
 21. `complex-projection-deferral`: Pushes complex computed fields downstream past selective filters and sorts, and splits non-sort fields past `$sort` when followed by `$limit` or `$skip`.
 22. `facet-prefix-hoisting`: Extracts identical deterministic prefix stages (`$match`, `$project`, `$addFields`, `$set`, `$unset`, `$unwind`, `$lookup`, numeric `$sort`, `$limit`, `$skip`) shared across all branches of a `$facet`.
-23. `covered-projection-synthesis`: Inserts an inclusion projection in front of a collapsing stage (`$group`, `$bucket`, `$bucketAuto`, `$sortByCount`), keeping only the fields that stage reads, and trims row-count-neutral prefixes before `$count` and zero-dependency `$group` stages.
+23. `covered-projection-synthesis`: Inserts an index-only inclusion projection in front of a collapsing stage (`$group`, `$bucket`, `$bucketAuto`, `$sortByCount`) to enable covered index execution, keeping only the fields that stage reads, and trims row-count-neutral prefixes before `$count` and zero-dependency `$group` stages.
 24. `dead-assignment-elimination`: Removes top-level (and root-discarded dotted) `$addFields`/`$set` assignments, computed inclusion `$project` fields, and redundant `$unset` specifications whose paths are dropped downstream (by `$unset`, `$project`, `$group`, `$count`, `$sortByCount`, `$bucket`, or `$bucketAuto`) without intermediate reads.
 
 ### Inactive & Contained Passes
@@ -142,15 +142,15 @@ Every pass is designed for high-throughput query proxy gateways, query compilers
 
 | Pipeline Pattern | Mean Latency | Throughput | Primary Transformations Applied |
 | :--- | :--- | :--- | :--- |
-| **Match-Sort-Limit Fast Path** | **11.86 µs** | **>84,300 ops/sec** | Single-pass match fuse & index path preservation |
-| **Multi-Hop Movement** | **23.68 µs** | **>42,200 ops/sec** | Topological hoist past lookups and projections |
-| **Contradiction Short-Circuit** | **21.35 µs** | **~46,800 ops/sec** | Fast SAT contradiction reduction |
-| **Standard 8-Stage Complex Pipeline** | **37.77 µs** | **~26,500 ops/sec** | Full fixed-point convergence across 19 passes |
-| **Complex Boolean Filter Normalization** | **20.38 µs** | **~49,000 ops/sec** | De Morgan reduction & multikey `$and` merging |
-| **5-Stage 3,121-Element `ObjectId` `$in` Pipeline** | **~216 µs** | **>4,600 ops/sec** | Bounded array analysis (`<= 64`) & copy-on-write preservation |
+| **Match-Sort-Limit Fast Path** | **~15.5 µs** | **>64,000 ops/sec** | Single-pass match fuse & index path preservation |
+| **Multi-Hop Movement** | **~19.3 µs** | **>51,000 ops/sec** | Topological hoist past lookups and projections |
+| **Contradiction Short-Circuit** | **~6.1 µs** | **>163,000 ops/sec** | Fast SAT contradiction reduction |
+| **Standard 8-Stage Complex Pipeline** | **~98.3 µs** | **>10,000 ops/sec** | Full fixed-point convergence across 24 passes |
+| **Complex Boolean Filter Normalization** | **~18.7 µs** | **>53,000 ops/sec** | De Morgan reduction & multikey `$and` merging |
+| **5-Stage 3,121-Element `ObjectId` `$in` Pipeline** | **~24.1 µs** | **>41,500 ops/sec** | Linear array deduplication & copy-on-write preservation |
 
 - **0 Runtime Dependencies**: Pure TypeScript with zero runtime overhead (`dependencies: {}`).
-- **Compact Footprint**: ~153 KB ESM bundle with complete tree-shaking support.
+- **Compact Footprint**: 364 KB ESM bundle (64 KB gzip) with complete tree-shaking support.
 - **Copy-on-Write Reference Sharing**: `optimizePipeline` and `optimizeFilter` return a new root array or object without mutating caller inputs, while sharing unmodified stage, sub-filter, operator-array, and BSON leaf references (`===`) via copy-on-write to avoid upfront deep cloning and intermediate heap churn.
 - **BSON-Aware `isEqual` Convergence & Deduplication**: Fixed-point convergence, cycle detection, and clause deduplication use a short-circuiting, key-order-sensitive, cycle-safe BSON `isEqual` comparator paired with `O(1)` primitive `Set` fast paths rather than string serialization.
 - **High-Performance Linear Array Deduplication & Analysis**: Value arrays (`$in`/`$nin`/`$all`) are deduplicated and cross-pruned in linear $O(N)$ time with zero string allocations using direct 32-bit integer BSON tables and native `Set` routers (handling 3,000+ `ObjectId`s or scalars in microseconds). The optimizer uses an allocation-free copy-on-write strategy (allocating a shallow clone only upon encountering the first duplicate, and setting `.length` in-place). A 64-element safety cap is maintained specifically for complex arbitrary subdocuments (`MAX_COMPLEX_ARRAY_LENGTH = 64`) and logical AST branch trees (`$and`/`$or`/`$nor`) to guard against $O(N^2)$ deep structural recursion.
