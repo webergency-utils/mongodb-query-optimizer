@@ -199,7 +199,7 @@ describe( 'DeadAssignmentEliminationPass execution and parity', () =>
     it( 'has correct pass metadata', () =>
     {
         expect( pass.name ).toBe( 'dead-assignment-elimination' );
-        expect( pass.stageTypes ).toEqual([ '$addFields', '$set', '$project', '$unset' ]);
+        expect( pass.stageTypes ).toEqual([ '$addFields', '$set', '$project', '$unset', '$replaceRoot', '$replaceWith' ]);
     });
 
     it( 'returns pipeline unchanged if no optimizations apply', () =>
@@ -637,6 +637,286 @@ describe( 'DeadAssignmentEliminationPass execution and parity', () =>
         expect( proveNoOpSelfAssignmentElimination(
             [ { $set: { a: 1 } } ],
             { $set: { a: '$b' } }
+        )).toBeNull();
+    });
+
+    it( 'prunes dead fields on object-literal $replaceWith and $replaceRoot and eliminates upstream assignments killed by $replaceWith', () =>
+    {
+        const pass = new DeadAssignmentEliminationPass();
+
+        // Eliminates upstream $addFields whose field is not read by object-literal $replaceWith, then prunes dead fields in $replaceWith
+        const afterFirstStep = pass.execute([
+            { $addFields: { unusedField: '$source', usedField: '$kept' } },
+            {
+                $replaceWith: {
+                    id: '$_id',
+                    used: '$usedField',
+                    deadInReplace: '$title'
+                }
+            },
+            { $group: { _id: '$id', total: { $sum: '$used' } } }
+        ]);
+        expect( pass.execute( afterFirstStep ) ).toEqual([
+            { $addFields: { usedField: '$kept' } },
+            {
+                $replaceWith: {
+                    id: '$_id',
+                    used: '$usedField'
+                }
+            },
+            { $group: { _id: '$id', total: { $sum: '$used' } } }
+        ]);
+
+        // Also supports $replaceRoot with { newRoot: { ... } } and keeps at least 1 field when all fields are dead
+        expect( proveDeadAssignmentElimination(
+            {
+                $replaceRoot: {
+                    newRoot: {
+                        a: '$x',
+                        b: '$y'
+                    }
+                }
+            },
+            [ { $count: 'total' } ]
+        )).toEqual({
+            replacementStage: {
+                $replaceRoot: {
+                    newRoot: {
+                        a: '$x'
+                    }
+                }
+            },
+            eliminatedFields: [ 'b' ]
+        });
+
+        // Under strictErrors: true, preserves error-capable fields inside $replaceWith while pruning safe fields
+        expect( proveDeadAssignmentElimination(
+            {
+                $replaceWith: {
+                    kept: '$id',
+                    safeDead: '$title',
+                    unsafeDead: { $divide: [ '$a', '$b' ] }
+                }
+            },
+            [ { $project: { kept: 1 } } ],
+            { strictFieldOrder: false, strictErrors: true }
+        )).toEqual({
+            replacementStage: {
+                $replaceWith: {
+                    kept: '$id',
+                    unsafeDead: { $divide: [ '$a', '$b' ] }
+                }
+            },
+            eliminatedFields: [ 'safeDead' ]
+        });
+
+        // Crosses safe $lookup when killed by a downstream discarding/collapsing stage, but blocks $set overwrite across $lookup
+        const safeLookup = {
+            $lookup: {
+                from: 'locations',
+                localField: 'locationID',
+                foreignField: '_id',
+                as: 'location'
+            }
+        };
+        expect( proveDeadAssignmentElimination(
+            { $addFields: { temp: '$x', kept: '$y' } },
+            [
+                safeLookup,
+                { $group: { _id: '$location._id', total: { $sum: '$kept' } } }
+            ]
+        )).toEqual({
+            replacementStage: { $addFields: { kept: '$y' } },
+            eliminatedFields: [ 'temp' ]
+        });
+
+        expect( proveDeadAssignmentElimination(
+            { $addFields: { temp: '$x' } },
+            [
+                safeLookup,
+                { $set: { temp: 2 } }
+            ]
+        )).toBeNull();
+
+        // Prunes dead flag inclusions in an upstream inclusion $project across $lookup when killed by a computed inclusion $project
+        expect( proveDeadAssignmentElimination(
+            {
+                $project: {
+                    jobID: 1,
+                    recruiterID: 1,
+                    locationID: 1,
+                    employment: 1,
+                    fees: 1
+                }
+            },
+            [
+                safeLookup,
+                {
+                    $project: {
+                        engagementFee: { $arrayElemAt: [ '$fee.markup', 0 ] },
+                        country: 1,
+                        placementFees: '$fees',
+                        employment: 1
+                    }
+                }
+            ]
+        )).toEqual({
+            replacementStage: {
+                $project: {
+                    locationID: 1,
+                    employment: 1,
+                    fees: 1
+                }
+            },
+            eliminatedFields: [ 'jobID', 'recruiterID' ]
+        });
+
+        // Does not prune flag inclusions when no $lookup is crossed
+        expect( proveDeadAssignmentElimination(
+            {
+                $project: {
+                    jobID: 1,
+                    recruiterID: 1,
+                    employment: 1
+                }
+            },
+            [
+                {
+                    $project: {
+                        employment: 1,
+                        placementFees: '$fees'
+                    }
+                }
+            ]
+        )).toBeNull();
+
+        // Returns false in canCrossLookupInDeadSuffix when lookup child outerDependencies reads path
+        const lookupWithOuterDep = {
+            $lookup: {
+                from: 'jobs',
+                let: { jobId: '$jobID' },
+                pipeline: [
+                    { $match: { $expr: { $eq: [ '$id', '$$jobId' ] } } }
+                ],
+                as: 'job'
+            }
+        };
+        expect( proveDeadAssignmentElimination(
+            { $project: { jobID: 1, unused: 1, kept: 1 } },
+            [
+                lookupWithOuterDep,
+                { $project: { kept: 1, jobFee: '$job.fee' } }
+            ]
+        )).toEqual({
+            replacementStage: { $project: { jobID: 1, kept: 1 } },
+            eliminatedFields: [ 'unused' ]
+        });
+
+        // Computed inclusion project does NOT discard path if related to included path or reads path
+        expect( proveDeadAssignmentElimination(
+            { $project: { 'user.name': 1, unused: 1 } },
+            [
+                safeLookup,
+                { $project: { user: 1, fee: '$safeLookup.fee' } }
+            ]
+        )).toEqual({
+            replacementStage: { $project: { 'user.name': 1 } },
+            eliminatedFields: [ 'unused' ]
+        });
+
+        // Computed inclusion project discards _id assignment only when _id is explicitly excluded
+        expect( proveDeadAssignmentElimination(
+            { $addFields: { _id: '$customId', unused: '$u' } },
+            [
+                safeLookup,
+                { $project: { kept: 1, computed: '$x' } }
+            ]
+        )).toEqual({
+            replacementStage: { $addFields: { _id: '$customId' } },
+            eliminatedFields: [ 'unused' ]
+        });
+
+        expect( proveDeadAssignmentElimination(
+            { $addFields: { _id: '$customId', unused: '$u' } },
+            [
+                safeLookup,
+                { $project: { _id: 0, kept: 1, computed: '$x' } }
+            ]
+        )).toEqual({
+            replacementStage: null,
+            eliminatedFields: [ '_id', 'unused' ]
+        });
+
+        // Non-inclusion or malformed project does not qualify as computed inclusion discarder
+        expect( proveDeadAssignmentElimination(
+            { $project: { jobID: 1, kept: 1 } },
+            [
+                safeLookup,
+                { $project: { secret: 0 } }
+            ]
+        )).toBeNull();
+
+        // Lookup with child outerDependency reading ROOT cannot be crossed
+        expect( proveDeadAssignmentElimination(
+            { $project: { jobID: 1, kept: 1 } },
+            [
+                {
+                    $lookup: {
+                        from: 'jobs',
+                        let: { r: '$$ROOT' },
+                        pipeline: [ { $project: { x: '$$r' } } ],
+                        as: 'job'
+                    }
+                },
+                { $project: { kept: 1 } }
+            ]
+        )).toBeNull();
+
+        // Project with path collision does not qualify as computed inclusion discarder
+        expect( proveDeadAssignmentElimination(
+            { $project: { jobID: 1, kept: 1 } },
+            [
+                safeLookup,
+                { $project: { a: 1, 'a.b': 1, computed: '$x' } }
+            ]
+        )).toBeNull();
+
+        // When path is a subfield of an included path, it is not disjoint from included paths so it's not discarded
+        expect( proveDeadAssignmentElimination(
+            { $addFields: { 'user.name': '$n', unused: '$u' } },
+            [
+                safeLookup,
+                { $project: { user: 1, fee: '$safeLookup.fee' } }
+            ]
+        )).toEqual({
+            replacementStage: { $addFields: { 'user.name': '$n' } },
+            eliminatedFields: [ 'unused' ]
+        });
+
+        // Non-object $project stage is not treated as computed inclusion discarder
+        expect( proveDeadAssignmentElimination(
+            { $project: { jobID: 1, kept: 1 } },
+            [
+                safeLookup,
+                { $project: 'not-object' as any }
+            ]
+        )).toBeNull();
+
+        // Does not prune when all fields in a single-field $replaceWith are dead (would leave empty replacement)
+        expect( proveDeadAssignmentElimination(
+            { $replaceWith: { a: '$x' } },
+            [ { $count: 'total' } ]
+        )).toBeNull();
+
+        // Does not prune flag inclusions across $unset or $replaceWith when no $lookup was crossed
+        expect( proveDeadAssignmentElimination(
+            { $project: { jobID: 1, kept: 1 } },
+            [ { $unset: 'jobID' } ]
+        )).toBeNull();
+
+        expect( proveDeadAssignmentElimination(
+            { $project: { jobID: 1, kept: 1 } },
+            [ { $replaceWith: { kept: '$kept' } } ]
         )).toBeNull();
     });
 });

@@ -1180,4 +1180,755 @@ describe( 'End-to-End Complex Query Suite', () =>
             ]);
         });
     });
+
+    // -------------------------------------------------------------------------
+    // 12. Real-World Job Positions Country Aggregation (jobs.positions)
+    // -------------------------------------------------------------------------
+    describe( 'Real-World Job Positions Country Aggregation', () =>
+    {
+        const fromDate = new Date( '2025-10-14T22:00:00.000Z' );
+        const toDate = new Date( '2026-10-15T21:59:59.999Z' );
+        const fnBody = "function jobPositionActiveBetween(positions /*PositionDBE - chyba tam events v types*/, between) {\n    if (!Array.isArray(positions)) {\n        positions = [positions];\n    }\n    return positions.some((position) => ((position.events && position.events.opened < between.to\n        && (position.events.closed >= between.from\n            || position.events.hired >= between.from\n            || (!position.events.closed && !position.events.hired)))\n        && position.closeReason !== 'created-by-mistake'));\n}";
+
+        const createJobsPositionsPipeline = () =>
+        [
+            {
+                $match: {
+                    deleted: { $ne: true }
+                }
+            },
+            {
+                $addFields: {
+                    accountManagerID: {
+                        $arrayElemAt: [ '$contacts.accountManagerIDs', 0 ]
+                    }
+                }
+            },
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'accountManagerID',
+                    foreignField: 'accounts.id',
+                    as: 'accountManager'
+                }
+            },
+            {
+                $addFields: {
+                    accountManager: {
+                        $arrayElemAt: [ '$accountManager', 0 ]
+                    }
+                }
+            },
+            {
+                $lookup: {
+                    from: 'locations',
+                    localField: 'locationIDs',
+                    foreignField: '_id',
+                    as: 'jobLocation',
+                    pipeline: [
+                        {
+                            $project: {
+                                name: 1
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                $addFields: {
+                    totalApplicationsCount: {
+                        $sum: {
+                            $map: {
+                                input: '$engagements',
+                                as: 'engagement',
+                                in: {
+                                    $size: {
+                                        $filter: {
+                                            input: '$$engagement.applications',
+                                            as: 'application',
+                                            cond: {
+                                                $and: [ {}, {} ]
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    totalEngagementsCount: {
+                        $size: '$engagements'
+                    }
+                }
+            },
+            {
+                $unwind: '$positions'
+            },
+            {
+                $match: {
+                    $and: [
+                        {
+                            deleted: { $ne: true },
+                            'positions.deleted': { $ne: true }
+                        },
+                        {
+                            $expr: {
+                                $function: {
+                                    lang: 'js',
+                                    args: [
+                                        '$positions',
+                                        {
+                                            from: fromDate,
+                                            to: toDate
+                                        }
+                                    ],
+                                    body: fnBody
+                                }
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                $replaceWith: {
+                    $mergeObjects: [
+                        {
+                            id: '$positions.id',
+                            locationIDs: '$locationIDs',
+                            jobID: '$_id',
+                            events: '$positions.events',
+                            jobEvents: '$events',
+                            title: '$title',
+                            salary: '$employment.salary',
+                            type: '$employment.type',
+                            totalApplicationsCount: '$totalApplicationsCount',
+                            totalEngagementsCount: '$totalEngagementsCount',
+                            accountManager: '$accountManager',
+                            jobLocation: '$jobLocation'
+                        },
+                        {
+                            totalApplicationsCount: '$totalApplicationsCount',
+                            totalEngagementsCount: '$totalEngagementsCount',
+                            accountManagerID: '$accountManagerID',
+                            accountManager: '$accountManager',
+                            jobLocation: '$jobLocation'
+                        }
+                    ]
+                }
+            },
+            {
+                $match: {}
+            },
+            {
+                $sort: {
+                    id: -1
+                }
+            },
+            {
+                $unwind: '$locationIDs'
+            },
+            {
+                $lookup: {
+                    from: 'locations',
+                    localField: 'locationIDs',
+                    foreignField: '_id',
+                    pipeline: [
+                        {
+                            $project: {
+                                country: 1
+                            }
+                        }
+                    ],
+                    as: 'location'
+                }
+            },
+            {
+                $unwind: '$location'
+            },
+            {
+                $lookup: {
+                    from: 'locations',
+                    localField: 'location.country',
+                    foreignField: 'country',
+                    pipeline: [
+                        {
+                            $match: {
+                                type: 'country'
+                            }
+                        }
+                    ],
+                    as: 'country'
+                }
+            },
+            {
+                $unwind: '$country'
+            },
+            {
+                $group: {
+                    _id: '$country._id',
+                    count: { $sum: 1 },
+                    country: { $first: '$country.country' },
+                    label: { $first: '$country.name' }
+                }
+            },
+            {
+                $sort: {
+                    count: -1
+                }
+            }
+        ];
+
+        it( 'optimizes jobs.positions pipeline in default mode by eliminating all dead upstream stages and pruning $replaceWith and $lookup', () =>
+        {
+            const pipeline = createJobsPositionsPipeline();
+            const optimized = optimizePipeline( pipeline );
+
+            expect( optimized ).toEqual([
+                {
+                    $match: {
+                        deleted: { $ne: true }
+                    }
+                },
+                {
+                    $unwind: '$positions'
+                },
+                {
+                    $match: {
+                        'positions.deleted': { $ne: true },
+                        $expr: {
+                            $function: {
+                                lang: 'js',
+                                args: [
+                                    '$positions',
+                                    {
+                                        from: fromDate,
+                                        to: toDate
+                                    }
+                                ],
+                                body: fnBody
+                            }
+                        }
+                    }
+                },
+                {
+                    $replaceWith: {
+                        id: '$positions.id',
+                        locationIDs: '$locationIDs'
+                    }
+                },
+                {
+                    $sort: {
+                        id: -1
+                    }
+                },
+                {
+                    $unwind: '$locationIDs'
+                },
+                {
+                    $lookup: {
+                        from: 'locations',
+                        localField: 'locationIDs',
+                        foreignField: '_id',
+                        pipeline: [
+                            {
+                                $project: {
+                                    country: 1
+                                }
+                            }
+                        ],
+                        as: 'location'
+                    }
+                },
+                {
+                    $unwind: '$location'
+                },
+                {
+                    $lookup: {
+                        from: 'locations',
+                        localField: 'location.country',
+                        foreignField: 'country',
+                        pipeline: [
+                            {
+                                $match: {
+                                    type: 'country'
+                                }
+                            },
+                            {
+                                $project: {
+                                    _id: 1,
+                                    country: 1,
+                                    name: 1
+                                }
+                            }
+                        ],
+                        as: 'country'
+                    }
+                },
+                {
+                    $unwind: '$country'
+                },
+                {
+                    $group: {
+                        _id: '$country._id',
+                        count: { $sum: 1 },
+                        country: { $first: '$country.country' },
+                        label: { $first: '$country.name' }
+                    }
+                },
+                {
+                    $sort: {
+                        count: -1
+                    }
+                }
+            ]);
+        });
+
+        it( 'optimizes jobs.positions pipeline under strictFieldOrder: true while preserving lookup subpipeline shape', () =>
+        {
+            const pipeline = createJobsPositionsPipeline();
+            const optimized = optimizePipeline( pipeline, { strictFieldOrder: true } );
+
+            expect( optimized ).toHaveLength( 12 );
+            expect( optimized[ 3 ] ).toEqual({
+                $replaceWith: {
+                    id: '$positions.id',
+                    locationIDs: '$locationIDs'
+                }
+            });
+            expect( optimized[ 8 ].$lookup.pipeline ).toEqual([
+                {
+                    $match: {
+                        type: 'country'
+                    }
+                }
+            ]);
+        });
+
+        it( 'optimizes jobs.positions pipeline under strictErrors: true by pruning error-free $replaceWith fields, eliminating jobLocation $lookup, and merging adjacent $addFields', () =>
+        {
+            const pipeline = createJobsPositionsPipeline();
+            const optimized = optimizePipeline( pipeline, { strictErrors: true } );
+
+            // Stage 4 (jobLocation lookup) and Stage 9 (empty $match) are removed,
+            // and Stage 3 + Stage 5 coalesce into one $addFields stage: 18 - 3 = 15 stages
+            expect( optimized ).toHaveLength( 15 );
+            expect( Object.keys( optimized[ 3 ].$addFields )).toEqual([
+                'accountManager',
+                'totalApplicationsCount',
+                'totalEngagementsCount'
+            ]);
+            expect( optimized[ 5 ] ).toEqual({
+                $match: {
+                    'positions.deleted': { $ne: true },
+                    $expr: {
+                        $function: {
+                            lang: 'js',
+                            args: [
+                                '$positions',
+                                {
+                                    from: fromDate,
+                                    to: toDate
+                                }
+                            ],
+                            body: fnBody
+                        }
+                    }
+                }
+            });
+            expect( optimized[ 6 ] ).toEqual({
+                $replaceWith: {
+                    id: '$positions.id',
+                    locationIDs: '$locationIDs'
+                }
+            });
+            expect( optimized[ 11 ].$lookup.pipeline ).toEqual([
+                {
+                    $match: {
+                        type: 'country'
+                    }
+                },
+                {
+                    $project: {
+                        _id: 1,
+                        country: 1,
+                        name: 1
+                    }
+                }
+            ]);
+        });
+    });
+
+    // -------------------------------------------------------------------------
+    // 13. Real-World Contracts Country Aggregation (contracts)
+    // -------------------------------------------------------------------------
+    describe( 'Real-World Contracts Country Aggregation', () =>
+    {
+        const createContractsPipeline = () =>
+        [
+            {
+                $match: {
+                    $and: [
+                        {
+                            'employment.interval.start': {
+                                $lte: '2026-10-15'
+                            },
+                            $or: [
+                                {
+                                    'employment.interval.end': {
+                                        $gte: '2025-10-15'
+                                    }
+                                },
+                                {
+                                    'employment.interval.end': {
+                                        $exists: false
+                                    }
+                                }
+                            ],
+                            'events.dropout': {
+                                $exists: false
+                            }
+                        },
+                        {
+                            deleted: {
+                                $ne: true
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                $lookup: {
+                    from: 'organizations',
+                    let: {
+                        billingEntityID: '$billingEntityID'
+                    },
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: {
+                                    $in: [
+                                        '$$billingEntityID',
+                                        {
+                                            $ifNull: [ '$billingEntities.id', [] ]
+                                        }
+                                    ]
+                                }
+                            }
+                        },
+                        {
+                            $unwind: '$billingEntities'
+                        },
+                        {
+                            $match: {
+                                $expr: {
+                                    $eq: [ '$billingEntities.id', '$$billingEntityID' ]
+                                }
+                            }
+                        },
+                        {
+                            $project: {
+                                _id: 0,
+                                locationID: '$billingEntities.locationID'
+                            }
+                        }
+                    ],
+                    as: 'billingEntity'
+                }
+            },
+            {
+                $unwind: {
+                    path: '$billingEntity',
+                    preserveNullAndEmptyArrays: true
+                }
+            },
+            {
+                $lookup: {
+                    from: 'locations',
+                    localField: 'billingEntity.locationID',
+                    foreignField: '_id',
+                    pipeline: [
+                        {
+                            $project: {
+                                _id: 1,
+                                ancestorIDs: 1,
+                                country: 1
+                            }
+                        }
+                    ],
+                    as: 'billingEntityLocation'
+                }
+            },
+            {
+                $unwind: {
+                    path: '$billingEntityLocation',
+                    preserveNullAndEmptyArrays: true
+                }
+            },
+            {
+                $group: {
+                    _id: {
+                        contractorID: '$contractor.id',
+                        locationID: '$billingEntityLocation._id'
+                    },
+                    locationID: {
+                        $first: '$billingEntityLocation._id'
+                    }
+                }
+            },
+            {
+                $lookup: {
+                    from: 'locations',
+                    localField: 'locationID',
+                    foreignField: '_id',
+                    pipeline: [
+                        {
+                            $project: {
+                                country: 1
+                            }
+                        }
+                    ],
+                    as: 'location'
+                }
+            },
+            {
+                $unwind: '$location'
+            },
+            {
+                $lookup: {
+                    from: 'locations',
+                    localField: 'location.country',
+                    foreignField: 'country',
+                    pipeline: [
+                        {
+                            $match: {
+                                type: 'country'
+                            }
+                        }
+                    ],
+                    as: 'country'
+                }
+            },
+            {
+                $unwind: '$country'
+            },
+            {
+                $group: {
+                    _id: {
+                        contractorID: '$_id.contractorID',
+                        countryID: '$country._id'
+                    },
+                    country: {
+                        $first: '$country'
+                    }
+                }
+            },
+            {
+                $group: {
+                    _id: '$country._id',
+                    count: {
+                        $sum: 1
+                    },
+                    countryCode: {
+                        $first: '$country.country'
+                    },
+                    title: {
+                        $first: '$country.name'
+                    }
+                }
+            }
+        ];
+
+        it( 'optimizes contracts pipeline by narrowing billingEntityLocation subpipeline and pruning country subpipeline across passthrough $group', () =>
+        {
+            const pipeline = createContractsPipeline();
+            const optimized = optimizePipeline( pipeline );
+
+            expect( optimized[ 3 ].$lookup.pipeline ).toEqual([
+                {
+                    $project: {
+                        _id: 1
+                    }
+                }
+            ]);
+            expect( optimized[ 8 ].$lookup.pipeline ).toEqual([
+                {
+                    $match: {
+                        type: 'country'
+                    }
+                },
+                {
+                    $project: {
+                        _id: 1,
+                        country: 1,
+                        name: 1
+                    }
+                }
+            ]);
+
+            // Under strictFieldOrder: true, preserves subpipeline field shapes
+            const strictOrderOptimized = optimizePipeline( pipeline, { strictFieldOrder: true } );
+            expect( strictOrderOptimized[ 3 ].$lookup.pipeline ).toEqual([
+                {
+                    $project: {
+                        _id: 1,
+                        ancestorIDs: 1,
+                        country: 1
+                    }
+                }
+            ]);
+            expect( strictOrderOptimized[ 8 ].$lookup.pipeline ).toEqual([
+                {
+                    $match: {
+                        type: 'country'
+                    }
+                }
+            ]);
+        });
+    });
+
+    // -------------------------------------------------------------------------
+    // 14. Real-World Placements Fee Aggregation (placements)
+    // -------------------------------------------------------------------------
+    describe( 'Real-World Placements Fee Aggregation', () =>
+    {
+        const createPlacementsPipeline = () =>
+        [
+            {
+                $match: {
+                    $and: [
+                        {
+                            deleted: {
+                                $ne: true
+                            },
+                            'events.dropout': {
+                                $exists: false
+                            },
+                            'events.placed': {
+                                $exists: true
+                            }
+                        },
+                        {
+                            'employment.start': {
+                                $gte: '2025-10-15',
+                                $lte: '2026-10-15'
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                $project: {
+                    jobID: 1,
+                    recruiterID: 1,
+                    engagementID: 1,
+                    employment: 1,
+                    fees: 1
+                }
+            },
+            {
+                $lookup: {
+                    from: 'jobs',
+                    let: {
+                        engagementID: '$engagementID'
+                    },
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: {
+                                    $in: [
+                                        '$$engagementID',
+                                        {
+                                            $ifNull: [ '$engagements.id', [] ]
+                                        }
+                                    ]
+                                }
+                            }
+                        },
+                        {
+                            $unwind: '$engagements'
+                        },
+                        {
+                            $match: {
+                                $expr: {
+                                    $eq: [ '$engagements.id', '$$engagementID' ]
+                                }
+                            }
+                        },
+                        {
+                            $project: {
+                                markup: '$engagements.fee.markup'
+                            }
+                        }
+                    ],
+                    as: 'fee'
+                }
+            },
+            {
+                $lookup: {
+                    from: 'locations',
+                    localField: 'employment.locationID',
+                    foreignField: '_id',
+                    pipeline: [
+                        {
+                            $project: {
+                                country: 1
+                            }
+                        }
+                    ],
+                    as: 'country'
+                }
+            },
+            {
+                $unwind: {
+                    path: '$country',
+                    preserveNullAndEmptyArrays: true
+                }
+            },
+            {
+                $project: {
+                    engagementFee: {
+                        $arrayElemAt: [ '$fee.markup', 0 ]
+                    },
+                    country: 1,
+                    placementFees: '$fees',
+                    employment: 1
+                }
+            }
+        ];
+
+        it( 'optimizes placements pipeline by pruning dead jobID/recruiterID inclusions before $lookup and excluding _id in jobs subpipeline', () =>
+        {
+            const pipeline = createPlacementsPipeline();
+            const optimized = optimizePipeline( pipeline );
+
+            expect( optimized[ 1 ] ).toEqual({
+                $project: {
+                    engagementID: 1,
+                    employment: 1,
+                    fees: 1
+                }
+            });
+            expect( optimized[ 2 ].$lookup.pipeline[ 3 ] ).toEqual({
+                $project: {
+                    _id: 0,
+                    markup: '$engagements.fee.markup'
+                }
+            });
+
+            // Under strictFieldOrder: true, prunes dead upstream flag inclusions while preserving subpipeline $project
+            const strictOrderOptimized = optimizePipeline( pipeline, { strictFieldOrder: true } );
+            expect( strictOrderOptimized[ 1 ] ).toEqual({
+                $project: {
+                    engagementID: 1,
+                    employment: 1,
+                    fees: 1
+                }
+            });
+            expect( strictOrderOptimized[ 2 ].$lookup.pipeline[ 3 ] ).toEqual({
+                $project: {
+                    markup: '$engagements.fee.markup'
+                }
+            });
+        });
+    });
 });
+

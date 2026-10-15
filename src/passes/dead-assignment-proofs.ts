@@ -1,19 +1,23 @@
 import { DEFAULT_GUARANTEE_CONTEXT, type GuaranteeContext } from '../guarantees';
-import { isExactTopLevelPath, relatePaths } from '../analyzer/paths';
+import { isExactPath, isExactTopLevelPath, relatePaths } from '../analyzer/paths';
 import { analyzeProjection, projectionVisibility } from '../analyzer/projections';
 import { analyzeStage } from '../analyzer/semantics';
+import { StageSemantics } from '../analyzer/types';
 import { isPlainObject } from '../utils';
+import { stageReadsFieldOrder } from './guarantee-guards';
 import { getSingleStageEntry } from './helpers';
-import 
-{ 
-    canContinuePastStage, 
-    dependenciesReadAnyPath, 
-    exactUnsetFields, 
-    hasOnlyKnownDependencyPaths, 
-    isSafePrunableAssignment, 
-    parseAddFieldStage, 
-    parseSimpleProject 
-} 
+import { arePathsDisjoint } from './path-disjoint';
+import
+{
+    canContinuePastStage,
+    dependenciesReadAnyPath,
+    exactUnsetFields,
+    hasOnlyKnownDependencyPaths,
+    isSafePrunableAssignment,
+    parseAddFieldStage,
+    parseObjectLiteralReplacementStage,
+    parseSimpleProject
+}
 from './projection-proofs';
 
 export interface DeadAssignmentProof
@@ -22,12 +26,80 @@ export interface DeadAssignmentProof
     readonly eliminatedFields : readonly string[]
 }
 
-function isFieldDeadInSuffix(
-    path    : string,
-    suffix  : readonly unknown[],
-    context : GuaranteeContext
+function canCrossLookupInDeadSuffix(
+    stage     : unknown,
+    semantics : StageSemantics,
+    path      : string
 ): boolean
 {
+    if(
+        semantics.operator !== '$lookup'
+        || semantics.unknown
+        || semantics.malformed
+        || semantics.observable.unknown
+        || semantics.dependencies.unknown
+        || semantics.dependencies.element.size > 0
+        || stageReadsFieldOrder( stage )
+    )
+    {
+        return false;
+    }
+
+    return (
+        arePathsDisjoint( semantics.writes, [ path ] )
+        && arePathsDisjoint( semantics.modifies, [ path ] )
+        && arePathsDisjoint( semantics.removes, [ path ] )
+    );
+}
+
+function isDiscardedByComputedInclusionProject(
+    stage : unknown,
+    path  : string
+): boolean
+{
+    const entry = getSingleStageEntry( stage );
+    if( !entry || entry[ 0 ] !== '$project' || !isPlainObject( entry[ 1 ] ))
+    {
+        return false;
+    }
+
+    const semantics = analyzeStage( stage );
+    const projection = semantics.projection;
+    if(
+        semantics.unknown
+        || semantics.malformed
+        || !hasOnlyKnownDependencyPaths( semantics )
+        || !projection
+        || projection.unknown
+        || projection.hasPathCollisions
+        || projection.mode !== 'inclusion'
+    )
+    {
+        return false;
+    }
+
+    if( dependenciesReadAnyPath( semantics, [ path ] ))
+    {
+        return false;
+    }
+
+    if( path === '_id' || path.startsWith( '_id.' ))
+    {
+        return projection.id === 'excluded';
+    }
+
+    return true;
+}
+
+function isFieldDeadInSuffix(
+    path                : string,
+    suffix              : readonly unknown[],
+    context             : GuaranteeContext,
+    requireCrossedLookup = false
+): boolean
+{
+    let crossedLookup = false;
+
     for( const stage of suffix )
     {
         const semantics = analyzeStage( stage );
@@ -37,7 +109,7 @@ function isFieldDeadInSuffix(
 
         if( unsetFields && unsetFields.has( path ))
         {
-            return true;
+            return !requireCrossedLookup || crossedLookup;
         }
 
         // 2. Check if stage overwrites path via $addFields or $set
@@ -50,7 +122,7 @@ function isFieldDeadInSuffix(
                 return false;
             }
 
-            if( context.strictFieldOrder )
+            if( context.strictFieldOrder || crossedLookup || requireCrossedLookup )
             {
                 return false;
             }
@@ -67,8 +139,19 @@ function isFieldDeadInSuffix(
         )
         {
             return (
-                hasOnlyKnownDependencyPaths( semantics )
+                ( !requireCrossedLookup || crossedLookup )
+                && hasOnlyKnownDependencyPaths( semantics )
                 && !dependenciesReadAnyPath( semantics, [ path ])
+            );
+        }
+
+        const replacement = parseObjectLiteralReplacementStage( stage );
+
+        if( replacement )
+        {
+            return (
+                ( !requireCrossedLookup || crossedLookup )
+                && !dependenciesReadAnyPath( replacement.semantics, [ path ] )
             );
         }
 
@@ -81,8 +164,12 @@ function isFieldDeadInSuffix(
 
             if( visibility === 'hidden' || visibility === 'removed' )
             {
-                return true;
+                return !requireCrossedLookup || crossedLookup;
             }
+        }
+        else if( isDiscardedByComputedInclusionProject( stage, path ))
+        {
+            return !requireCrossedLookup || crossedLookup;
         }
 
         // 4. If not killed, check if downstream reads this path
@@ -92,6 +179,12 @@ function isFieldDeadInSuffix(
         }
 
         // 5. If not killed and not read, check if we can safely continue past this stage
+        if( canCrossLookupInDeadSuffix( stage, semantics, path ))
+        {
+            crossedLookup = true;
+            continue;
+        }
+
         if( !canContinuePastStage( semantics, new Set([ path ])))
         {
             return false;
@@ -109,8 +202,8 @@ function parseProjectForComputedPruning( stage: unknown ): Record<string, unknow
     const projection = analyzeProjection( entry[ 1 ], 'project' );
     if(
         projection.unknown
+        || projection.hasPathCollisions
         || projection.mode !== 'inclusion'
-        || projection.computedPaths.size === 0
     )
     {
         return null;
@@ -148,9 +241,10 @@ function allExactUnsetFields( stage: unknown ): Set<string> | null
 }
 
 /**
- * Proves that one or more computed assignments in an `$addFields`, `$set`, or
- * inclusion `$project` stage, or field removals in an `$unset` stage, are dead
- * because they are never read before being overwritten or discarded by downstream stages.
+ * Proves that one or more computed assignments in an `$addFields`, `$set`,
+ * inclusion `$project`, or object-literal `$replaceWith`/`$replaceRoot` stage,
+ * or field removals in an `$unset` stage, are dead because they are never read
+ * before being overwritten or discarded by downstream stages.
  */
 export function proveDeadAssignmentElimination(
     sourceStage : unknown,
@@ -195,25 +289,33 @@ export function proveDeadAssignmentElimination(
     if( projectSpec )
     {
         const deadFields = new Set<string>();
+        let prunedFlagField = false;
 
         for( const [ path, expression ] of Object.entries( projectSpec ))
         {
             if(
                 path === '_id'
                 || expression === 0
-                || expression === 1
                 || expression === false
-                || expression === true
                 || !isExactTopLevelPath( path )
-                || !isSafePrunableAssignment( expression, context.strictErrors )
             )
             {
                 continue;
             }
 
-            if( isFieldDeadInSuffix( path, suffix, context ))
+            const isFlagInclusion = expression === 1 || expression === true;
+            if( !isFlagInclusion && !isSafePrunableAssignment( expression, context.strictErrors ))
+            {
+                continue;
+            }
+
+            if( isFieldDeadInSuffix( path, suffix, context, isFlagInclusion ))
             {
                 deadFields.add( path );
+                if( isFlagInclusion )
+                {
+                    prunedFlagField = true;
+                }
             }
         }
 
@@ -230,13 +332,60 @@ export function proveDeadAssignmentElimination(
             ([ path, value ]) => path === '_id' && value !== 0 && value !== false
         );
 
-        if( !hasRemainingNonIdInclusionOrCompute && !hasRemainingIdInclusionOrCompute )
+        if(
+            ( prunedFlagField && !hasRemainingNonIdInclusionOrCompute )
+            || ( !hasRemainingNonIdInclusionOrCompute && !hasRemainingIdInclusionOrCompute )
+        )
         {
             return null;
         }
 
         return {
             replacementStage: { $project: Object.fromEntries( remaining ) },
+            eliminatedFields: Array.from( deadFields )
+        };
+    }
+
+    const replacementSource = parseObjectLiteralReplacementStage( sourceStage );
+
+    if( replacementSource )
+    {
+        const deadFields = new Set<string>();
+        const entries = Object.entries( replacementSource.specification );
+
+        for( const [ path, expression ] of entries )
+        {
+            if(
+                !isExactTopLevelPath( path )
+                || !isSafePrunableAssignment( expression, context.strictErrors )
+            )
+            {
+                continue;
+            }
+
+            if( isFieldDeadInSuffix( path, suffix, context ))
+            {
+                deadFields.add( path );
+            }
+        }
+
+        if( deadFields.size === 0 ){ return null }
+
+        if( deadFields.size === entries.length )
+        {
+            if( entries.length <= 1 ){ return null }
+
+            deadFields.delete( entries[ 0 ]![ 0 ] );
+        }
+
+        const remaining = entries.filter(([ path ]) => !deadFields.has( path ));
+        const newRootObj = Object.fromEntries( remaining );
+        const replacementStage = replacementSource.operator === '$replaceRoot'
+            ? { $replaceRoot: { newRoot: newRootObj } }
+            : { $replaceWith: newRootObj };
+
+        return {
+            replacementStage,
             eliminatedFields: Array.from( deadFields )
         };
     }

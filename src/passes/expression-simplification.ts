@@ -748,6 +748,44 @@ export function simplifyExpression( expr: unknown ): unknown
                 return ( simplified.$concatArrays as unknown[][] ).flat( 1 );
             }
         }
+        else if( op === '$mergeObjects' && Array.isArray( simplified.$mergeObjects ) && simplified.$mergeObjects.length >= 1 )
+        {
+            const items = simplified.$mergeObjects;
+
+            if( items.every(( item ): item is Record<string, unknown> => isPlainObject( item ) && Object.keys( item ).every(( k ) => !k.startsWith( '$' ))))
+            {
+                const merged: Record<string, unknown> = {};
+                let canFold = true;
+
+                for( const item of items )
+                {
+                    for( const [ k, val ] of Object.entries( item ))
+                    {
+                        if( k in merged )
+                        {
+                            const summary = analyzeExpression( val );
+
+                            if( !isEqual( merged[ k ], val ) || summary.unknown || summary.determinism !== 'deterministic' )
+                            {
+                                canFold = false;
+                                break;
+                            }
+                        }
+                        else
+                        {
+                            merged[ k ] = val;
+                        }
+                    }
+
+                    if( !canFold ){ break }
+                }
+
+                if( canFold && Object.keys( merged ).length > 0 )
+                {
+                    return merged;
+                }
+            }
+        }
         else if( op === '$isArray' )
         {
             const unary = extractUnaryOperand( simplified.$isArray );

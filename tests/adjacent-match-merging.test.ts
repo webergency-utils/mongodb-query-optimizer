@@ -126,4 +126,114 @@ describe( 'AdjacentMatchMergingPass', () =>
             }
         ] );
     } );
+
+    it( 'eliminates dominated $match conjuncts across intervening stages that do not modify the checked field', () =>
+    {
+        const pipeline = [
+            { $match: { deleted: { $ne: true } } },
+            { $unwind: '$positions' },
+            {
+                $match: {
+                    $and: [
+                        {
+                            deleted: { $ne: true },
+                            'positions.deleted': { $ne: true }
+                        },
+                        {
+                            $expr: {
+                                $function: {
+                                    lang: 'js',
+                                    args: [ '$positions' ],
+                                    body: 'function(p) { return true; }'
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+        ];
+
+        expect( pass.execute( pipeline, DEFAULT_GUARANTEE_CONTEXT ) ).toEqual( [
+            { $match: { deleted: { $ne: true } } },
+            { $unwind: '$positions' },
+            {
+                $match: {
+                    'positions.deleted': { $ne: true },
+                    $expr: {
+                        $function: {
+                            lang: 'js',
+                            args: [ '$positions' ],
+                            body: 'function(p) { return true; }'
+                        }
+                    }
+                }
+            }
+        ] );
+
+        // Drops the entire downstream $match stage when all of its conjuncts are dominated
+        expect( pass.execute( [
+            { $match: { deleted: { $ne: true } } },
+            { $unwind: '$positions' },
+            { $match: { deleted: { $ne: true } } }
+        ], DEFAULT_GUARANTEE_CONTEXT ) ).toEqual( [
+            { $match: { deleted: { $ne: true } } },
+            { $unwind: '$positions' }
+        ] );
+
+        // Does NOT eliminate a downstream conjunct when an intermediate stage modifies the field
+        const overwrittenPipeline = [
+            { $match: { deleted: { $ne: true } } },
+            { $set: { deleted: '$positions.deleted' } },
+            { $match: { deleted: { $ne: true }, active: true } }
+        ];
+        expect( pass.execute( overwrittenPipeline, DEFAULT_GUARANTEE_CONTEXT ) ).toEqual( overwrittenPipeline );
+
+        // Does NOT eliminate downstream conjunct when intermediate $project has unknown projection or hides the field
+        const unknownProjectPipeline = [
+            { $match: { deleted: { $ne: true } } },
+            { $project: { unknownField: { $unknownOp: 1 } } },
+            { $match: { deleted: { $ne: true } } }
+        ];
+        expect( pass.execute( unknownProjectPipeline, DEFAULT_GUARANTEE_CONTEXT ) ).toEqual( unknownProjectPipeline );
+
+        const hidingProjectPipeline = [
+            { $match: { deleted: { $ne: true } } },
+            { $project: { other: 1, _id: 0 } },
+            { $match: { deleted: { $ne: true } } }
+        ];
+        expect( pass.execute( hidingProjectPipeline, DEFAULT_GUARANTEE_CONTEXT ) ).toEqual( hidingProjectPipeline );
+
+        // Does NOT eliminate when intermediate stage removes the field via $unset
+        const unsettingPipeline = [
+            { $match: { deleted: { $ne: true } } },
+            { $unset: 'deleted' },
+            { $match: { deleted: { $ne: true } } }
+        ];
+        expect( pass.execute( unsettingPipeline, DEFAULT_GUARANTEE_CONTEXT ) ).toEqual( unsettingPipeline );
+
+        // Handles malformed downstream match stage
+        const malformedPipeline = [
+            { $match: { deleted: { $ne: true } } },
+            { $unwind: '$positions' },
+            { $match: { items: { $elemMatch: 'not-object' } } }
+        ];
+        expect( pass.execute( malformedPipeline, DEFAULT_GUARANTEE_CONTEXT ) ).toEqual( malformedPipeline );
+
+        // Eliminates multiple dominated conjuncts across stages (hits current !== pipeline)
+        const multiDominatedPipeline = [
+            { $match: { a: 1, b: 2 } },
+            { $unwind: '$items' },
+            { $match: { a: 1, x: 10 } },
+            { $sort: { x: 1 } },
+            { $match: { b: 2, y: 20 } }
+        ];
+        expect( pass.execute( multiDominatedPipeline, DEFAULT_GUARANTEE_CONTEXT ) ).toEqual([
+            { $match: { a: 1, b: 2 } },
+            { $unwind: '$items' },
+            { $match: { x: 10 } },
+            { $sort: { x: 1 } },
+            { $match: { y: 20 } }
+        ]);
+    } );
 } );
+

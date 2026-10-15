@@ -2326,5 +2326,492 @@ describe('movement sort question', () =>
             pipelineLookup,
             [ { $project: { 'orders.total': 1, x: { $in: [ { $getField: 'orders.a' }, [ 1, 2 ] ] } } } ]
         )).toBeNull();
+
+        // Lookup subpipeline unused field pruning from downstream $group
+        expect( proveLookupSubpipelineFieldPruning(
+            {
+                $lookup: {
+                    from: 'locations',
+                    localField: 'location.country',
+                    foreignField: 'country',
+                    pipeline: [ { $match: { type: 'country' } } ],
+                    as: 'country'
+                }
+            },
+            [
+                { $unwind: '$country' },
+                {
+                    $group: {
+                        _id: '$country._id',
+                        count: { $sum: 1 },
+                        country: { $first: '$country.country' },
+                        label: { $first: '$country.name' }
+                    }
+                }
+            ]
+        )).toEqual({
+            lookupStage: {
+                $lookup: {
+                    from: 'locations',
+                    localField: 'location.country',
+                    foreignField: 'country',
+                    pipeline: [
+                        { $match: { type: 'country' } },
+                        { $project: { _id: 1, country: 1, name: 1 } }
+                    ],
+                    as: 'country'
+                }
+            }
+        });
+
+        // Traces through a passthrough $group accumulator ($first: '$country') into the next $group stage
+        expect( proveLookupSubpipelineFieldPruning(
+            {
+                $lookup: {
+                    from: 'locations',
+                    localField: 'location.country',
+                    foreignField: 'country',
+                    pipeline: [ { $match: { type: 'country' } } ],
+                    as: 'country'
+                }
+            },
+            [
+                { $unwind: '$country' },
+                {
+                    $group: {
+                        _id: {
+                            contractorID: '$_id.contractorID',
+                            countryID: '$country._id'
+                        },
+                        country: { $first: '$country' }
+                    }
+                },
+                {
+                    $group: {
+                        _id: '$country._id',
+                        count: { $sum: 1 },
+                        countryCode: { $first: '$country.country' },
+                        title: { $first: '$country.name' }
+                    }
+                }
+            ]
+        )).toEqual({
+            lookupStage: {
+                $lookup: {
+                    from: 'locations',
+                    localField: 'location.country',
+                    foreignField: 'country',
+                    pipeline: [
+                        { $match: { type: 'country' } },
+                        { $project: { _id: 1, country: 1, name: 1 } }
+                    ],
+                    as: 'country'
+                }
+            }
+        });
+
+        // Narrows an existing simple inclusion $project at the end of a $lookup subpipeline
+        expect( proveLookupSubpipelineFieldPruning(
+            {
+                $lookup: {
+                    from: 'locations',
+                    localField: 'billingEntity.locationID',
+                    foreignField: '_id',
+                    pipeline: [
+                        {
+                            $project: {
+                                _id: 1,
+                                ancestorIDs: 1,
+                                country: 1
+                            }
+                        }
+                    ],
+                    as: 'billingEntityLocation'
+                }
+            },
+            [
+                {
+                    $unwind: {
+                        path: '$billingEntityLocation',
+                        preserveNullAndEmptyArrays: true
+                    }
+                },
+                {
+                    $group: {
+                        _id: {
+                            contractorID: '$contractor.id',
+                            locationID: '$billingEntityLocation._id'
+                        },
+                        locationID: { $first: '$billingEntityLocation._id' }
+                    }
+                }
+            ]
+        )).toEqual({
+            lookupStage: {
+                $lookup: {
+                    from: 'locations',
+                    localField: 'billingEntity.locationID',
+                    foreignField: '_id',
+                    pipeline: [
+                        {
+                            $project: {
+                                _id: 1
+                            }
+                        }
+                    ],
+                    as: 'billingEntityLocation'
+                }
+            }
+        });
+
+        // Adds _id: 0 to a computed inclusion $project at the end of a $lookup subpipeline across intermediate disjoint stages
+        expect( proveLookupSubpipelineFieldPruning(
+            {
+                $lookup: {
+                    from: 'jobs',
+                    let: { engagementID: '$engagementID' },
+                    pipeline: [
+                        { $unwind: '$engagements' },
+                        { $project: { markup: '$engagements.fee.markup' } }
+                    ],
+                    as: 'fee'
+                }
+            },
+            [
+                {
+                    $lookup: {
+                        from: 'locations',
+                        localField: 'locationID',
+                        foreignField: '_id',
+                        as: 'country'
+                    }
+                },
+                {
+                    $unwind: {
+                        path: '$country',
+                        preserveNullAndEmptyArrays: true
+                    }
+                },
+                {
+                    $project: {
+                        engagementFee: { $arrayElemAt: [ '$fee.markup', 0 ] },
+                        country: 1
+                    }
+                }
+            ]
+        )).toEqual({
+            lookupStage: {
+                $lookup: {
+                    from: 'jobs',
+                    let: { engagementID: '$engagementID' },
+                    pipeline: [
+                        { $unwind: '$engagements' },
+                        {
+                            $project: {
+                                _id: 0,
+                                markup: '$engagements.fee.markup'
+                            }
+                        }
+                    ],
+                    as: 'fee'
+                }
+            }
+        });
+
+        // Stops skipping when intermediate stage touches alias (lookup reading alias, unwind on alias, or unknown stage)
+        const jobLookup = {
+            $lookup: {
+                from: 'jobs',
+                as: 'fee',
+                pipeline: [ { $project: { a: 1, b: 1 } } ]
+            }
+        };
+        const followerProject = { $project: { 'fee.a': 1 } };
+
+        // Intermediate lookup reading fee
+        expect( proveLookupSubpipelineFieldPruning(
+            jobLookup,
+            [
+                { $lookup: { from: 'other', localField: 'fee.id', foreignField: '_id', as: 'other' } },
+                followerProject
+            ]
+        )).toBeNull();
+
+        // Intermediate lookup with let reading fee
+        expect( proveLookupSubpipelineFieldPruning(
+            jobLookup,
+            [
+                { $lookup: { from: 'other', let: { f: '$fee' }, pipeline: [], as: 'other' } },
+                followerProject
+            ]
+        )).toBeNull();
+
+        // Intermediate unwind on fee
+        expect( proveLookupSubpipelineFieldPruning(
+            jobLookup,
+            [
+                { $unwind: '$fee' },
+                followerProject
+            ]
+        )).toEqual({
+            lookupStage: {
+                $lookup: {
+                    from: 'jobs',
+                    as: 'fee',
+                    pipeline: [ { $project: { _id: 0, a: 1 } } ]
+                }
+            }
+        });
+
+        // Intermediate unsupported stage (e.g. $group not matching passthrough accumulator)
+        expect( proveLookupSubpipelineFieldPruning(
+            jobLookup,
+            [
+                { $group: { _id: '$dept' } },
+                followerProject
+            ]
+        )).toBeNull();
+
+        // Narrowing subproject where downstream needs _id retains _id: 1
+        expect( proveLookupSubpipelineFieldPruning(
+            jobLookup,
+            [
+                { $project: { 'fee._id': 1, 'fee.a': 1 } }
+            ]
+        )).toEqual({
+            lookupStage: {
+                $lookup: {
+                    from: 'jobs',
+                    as: 'fee',
+                    pipeline: [ { $project: { _id: 1, a: 1 } } ]
+                }
+            }
+        });
+
+        // Narrowing returns null when subpipeline project already has no extra non-id keys
+        expect( proveLookupSubpipelineFieldPruning(
+            {
+                $lookup: {
+                    from: 'jobs',
+                    as: 'fee',
+                    pipeline: [ { $project: { a: 1 } } ]
+                }
+            },
+            [ followerProject ]
+        )).toBeNull();
+
+        // Supports $last passthrough accumulator across intermediate group
+        expect( proveLookupSubpipelineFieldPruning(
+            {
+                $lookup: {
+                    from: 'locations',
+                    localField: 'locId',
+                    foreignField: '_id',
+                    pipeline: [],
+                    as: 'loc'
+                }
+            },
+            [
+                { $unwind: '$loc' },
+                { $group: { _id: '$dept', loc: { $last: '$loc' } } },
+                { $group: { _id: '$loc.code', total: { $sum: 1 } } }
+            ]
+        )).toEqual({
+            lookupStage: {
+                $lookup: {
+                    from: 'locations',
+                    localField: 'locId',
+                    foreignField: '_id',
+                    pipeline: [ { $project: { _id: 0, code: 1 } } ],
+                    as: 'loc'
+                }
+            }
+        });
+
+        // Rejects invalid passthrough accumulators ($max, multiple accumulator keys, or wrong expression)
+        expect( proveLookupSubpipelineFieldPruning(
+            {
+                $lookup: {
+                    from: 'locations',
+                    localField: 'locId',
+                    foreignField: '_id',
+                    pipeline: [],
+                    as: 'loc'
+                }
+            },
+            [
+                { $unwind: '$loc' },
+                { $group: { _id: '$dept', loc: { $max: '$loc' } } },
+                { $group: { _id: '$loc.code', total: { $sum: 1 } } }
+            ]
+        )).toBeNull();
+
+        expect( proveLookupSubpipelineFieldPruning(
+            {
+                $lookup: {
+                    from: 'locations',
+                    localField: 'locId',
+                    foreignField: '_id',
+                    pipeline: [],
+                    as: 'loc'
+                }
+            },
+            [
+                { $unwind: '$loc' },
+                { $group: { _id: '$dept', loc: { $first: '$loc', extra: 1 } } },
+                { $group: { _id: '$loc.code', total: { $sum: 1 } } }
+            ]
+        )).toBeNull();
+
+        expect( proveLookupSubpipelineFieldPruning(
+            {
+                $lookup: {
+                    from: 'locations',
+                    localField: 'locId',
+                    foreignField: '_id',
+                    pipeline: [],
+                    as: 'loc'
+                }
+            },
+            [
+                { $unwind: '$loc' },
+                { $group: { _id: '$dept', loc: { $first: '$otherField' } } },
+                { $group: { _id: '$loc.code', total: { $sum: 1 } } }
+            ]
+        )).toBeNull();
+
+        // Rejects when following stage after passthrough group cannot parse alias subfields
+        expect( proveLookupSubpipelineFieldPruning(
+            {
+                $lookup: {
+                    from: 'locations',
+                    localField: 'locId',
+                    foreignField: '_id',
+                    pipeline: [],
+                    as: 'loc'
+                }
+            },
+            [
+                { $unwind: '$loc' },
+                { $group: { _id: '$dept', loc: { $first: '$loc' } } },
+                { $match: { loc: 1 } }
+            ]
+        )).toBeNull();
+
+        // Intermediate lookup with child pipeline whose outerDependencies reads alias cannot be skipped
+        expect( proveLookupSubpipelineFieldPruning(
+            jobLookup,
+            [
+                {
+                    $lookup: {
+                        from: 'other',
+                        let: { feeVal: '$fee' },
+                        pipeline: [ { $project: { x: '$$feeVal' } } ],
+                        as: 'other'
+                    }
+                },
+                followerProject
+            ]
+        )).toBeNull();
+
+        // Exclusion projection consumer is rejected in addAliasSubfieldsFromConsumer
+        expect( proveLookupSubpipelineFieldPruning(
+            jobLookup,
+            [ { $project: { unrelated: 0 } } ]
+        )).toBeNull();
+
+        // Intermediate lookup whose child outerDependencies contains ROOT cannot be skipped
+        expect( proveLookupSubpipelineFieldPruning(
+            jobLookup,
+            [
+                {
+                    $lookup: {
+                        from: 'other',
+                        let: { r: '$$ROOT' },
+                        pipeline: [ { $project: { x: '$$r' } } ],
+                        as: 'other'
+                    }
+                },
+                followerProject
+            ]
+        )).toBeNull();
+
+        // Non-object or missing passthrough accumulator in intermediate group returns null
+        expect( proveLookupSubpipelineFieldPruning(
+            {
+                $lookup: {
+                    from: 'locations',
+                    localField: 'locId',
+                    foreignField: '_id',
+                    pipeline: [],
+                    as: 'loc'
+                }
+            },
+            [
+                { $group: { _id: '$dept', loc: '$loc' } },
+                { $group: { _id: '$loc.code', total: { $sum: 1 } } }
+            ]
+        )).toBeNull();
+
+        expect( proveLookupSubpipelineFieldPruning(
+            {
+                $lookup: {
+                    from: 'locations',
+                    localField: 'locId',
+                    foreignField: '_id',
+                    pipeline: [],
+                    as: 'loc'
+                }
+            },
+            [
+                { $group: { _id: '$dept', total: { $sum: 1 } } },
+                { $group: { _id: '$loc.code', count: { $sum: 1 } } }
+            ]
+        )).toBeNull();
+
+        // Rejects when last subpipeline project is not a plain object
+        expect( proveLookupSubpipelineFieldPruning(
+            {
+                $lookup: {
+                    from: 'jobs',
+                    as: 'fee',
+                    pipeline: [ { $project: 'not-an-object' } ]
+                }
+            },
+            [ followerProject ]
+        )).toBeNull();
+
+        // Rejects when intermediate lookup has unknown or malformed semantics
+        expect( proveLookupSubpipelineFieldPruning(
+            jobLookup,
+            [
+                {
+                    $lookup: {
+                        from: 'other',
+                        pipeline: [ { $unknownOp: 1 } as any ],
+                        as: 'other'
+                    }
+                },
+                followerProject
+            ]
+        )).toBeNull();
+
+        // Rejects when passthrough group is the terminal stage (no following stage to consume subfields)
+        expect( proveLookupSubpipelineFieldPruning(
+            {
+                $lookup: {
+                    from: 'locations',
+                    localField: 'locId',
+                    foreignField: '_id',
+                    pipeline: [],
+                    as: 'loc'
+                }
+            },
+            [
+                { $unwind: '$loc' },
+                { $group: { _id: '$dept', loc: { $first: '$loc' } } }
+            ]
+        )).toBeNull();
     });
 });
+

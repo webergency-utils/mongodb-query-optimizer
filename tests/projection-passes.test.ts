@@ -16,6 +16,8 @@ import {
     ComplexProjectionDeferralPass,
 } from '../src/passes/complex-projection-deferral.js';
 import {
+    isExactPathDiscardedByFollower,
+    parseObjectLiteralReplacementStage,
     proveAddFieldSplitAcrossSort,
     proveUnusedFieldPruningThroughSuffix,
 } from '../src/passes/projection-proofs.js';
@@ -1639,5 +1641,44 @@ describe('projection production integration and scheduling', () =>
             { $group: { _id: '$dept', a: { $sum: '$x' } } },
             [ { $limit: 5 } ]
         )).toBeNull();
+
+        // Branch tests for parseObjectLiteralReplacementStage and isExactPathDiscardedByFollower
+        expect(parseObjectLiteralReplacementStage(null)).toBeNull();
+        expect(parseObjectLiteralReplacementStage({ $match: {} })).toBeNull();
+        expect(parseObjectLiteralReplacementStage({ $replaceRoot: 'not-object' })).toBeNull();
+        expect(parseObjectLiteralReplacementStage({ $replaceRoot: { extra: 1 } })).toBeNull();
+        expect(parseObjectLiteralReplacementStage({ $replaceRoot: { newRoot: 'not-object' } })).toBeNull();
+        expect(parseObjectLiteralReplacementStage({ $replaceWith: 'not-object' })).toBeNull();
+        expect(parseObjectLiteralReplacementStage({ $replaceWith: {} })).toBeNull();
+        expect(parseObjectLiteralReplacementStage({ $replaceWith: { 'a.b': 1 } })).toBeNull();
+        expect(parseObjectLiteralReplacementStage({ $replaceWith: { a: { $getField: 'x' } } })).toBeNull();
+        expect(parseObjectLiteralReplacementStage({ $replaceWith: { a: { $unknownOp: 1 } } })).toBeNull();
+
+        // $mergeObjects branches: empty items, non-object items, non-exact paths, differing values, unsafe expressions
+        expect(parseObjectLiteralReplacementStage({
+            $replaceWith: { $mergeObjects: [ 'not-object' ] }
+        })).toBeNull();
+        expect(parseObjectLiteralReplacementStage({
+            $replaceWith: { $mergeObjects: [ {} ] }
+        })).toBeNull();
+        expect(parseObjectLiteralReplacementStage({
+            $replaceWith: { $mergeObjects: [ { 'dotted.field': 1 } ] }
+        })).toBeNull();
+        expect(parseObjectLiteralReplacementStage({
+            $replaceWith: { $mergeObjects: [ { a: 1 }, { a: 2 } ] }
+        })).toBeNull();
+        expect(parseObjectLiteralReplacementStage({
+            $replaceWith: { $mergeObjects: [ { a: { $divide: [ '$x', 0 ] } }, { a: { $divide: [ '$x', 0 ] } } ] }
+        })).toBeNull();
+
+        // isExactPathDiscardedByFollower with replacement stage
+        expect(isExactPathDiscardedByFollower(
+            'unused',
+            { $replaceWith: { kept: '$x' } }
+        )).toBe(true);
+        expect(isExactPathDiscardedByFollower(
+            'x',
+            { $replaceWith: { kept: '$x' } }
+        )).toBe(false);
     });
 });

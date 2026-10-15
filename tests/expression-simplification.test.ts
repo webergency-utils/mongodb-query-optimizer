@@ -912,5 +912,50 @@ describe( 'ExpressionSimplificationPass unit and proof tests', () =>
             }
         });
     });
+
+    it( 'folds $mergeObjects of plain object literals when duplicate keys have identical deterministic values', () =>
+    {
+        expect( simplifyExpression({
+            $mergeObjects: [
+                { id: '$positions.id', total: '$totalCount' },
+                { total: '$totalCount', manager: '$accountManager' }
+            ]
+        })).toEqual({
+            id: '$positions.id',
+            total: '$totalCount',
+            manager: '$accountManager'
+        });
+
+        // Preserves $mergeObjects when duplicate keys have differing values (risk of null/missing override)
+        const differingDuplicate = {
+            $mergeObjects: [
+                { id: '$positions.id', total: '$a' },
+                { total: '$b' }
+            ]
+        };
+        expect( simplifyExpression( differingDuplicate ) ).toEqual( differingDuplicate );
+
+        // Preserves $mergeObjects when duplicate keys are non-deterministic
+        const nonDetDuplicate = {
+            $mergeObjects: [
+                { r: { $rand: {} } },
+                { r: { $rand: {} } }
+            ]
+        };
+        expect( simplifyExpression( nonDetDuplicate ) ).toEqual( nonDetDuplicate );
+
+        // Preserves $mergeObjects when any element is a field reference or operator object
+        expect( simplifyExpression({
+            $mergeObjects: [ '$doc', { extra: 1 } ]
+        })).toEqual({
+            $mergeObjects: [ '$doc', { extra: 1 } ]
+        });
+        expect( simplifyExpression({
+            $mergeObjects: [ { $literal: { a: 1 } }, { b: 2 } ]
+        })).toEqual({
+            $mergeObjects: [ { $literal: { a: 1 } }, { b: 2 } ]
+        });
+    });
 });
+
 

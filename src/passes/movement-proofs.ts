@@ -1,4 +1,4 @@
-import { relatePaths } from '../analyzer/paths';
+import { isExactPath, relatePaths } from '../analyzer/paths';
 import {
     projectionVisibility,
 } from '../analyzer/projections';
@@ -8,6 +8,7 @@ import {
     dependenciesReadAnyPath,
     hasOnlyKnownDependencyPaths,
     isExactPathDiscardedByFollower,
+    parseSimpleProject,
 } from './projection-proofs';
 import {
     ScopedDependencies,
@@ -1809,6 +1810,127 @@ export function proveLookupLimitPushdown(
     return null;
 }
 
+function canSkipStageForLookupSubpipelinePruning(
+    stage : unknown,
+    alias : string
+): boolean
+{
+    if( isUnwindForPath( stage, alias ))
+    {
+        return !(
+            isPlainObject(( stage as Record<string, unknown> ).$unwind )
+            && (( stage as Record<string, Record<string, unknown>> ).$unwind.includeArrayIndex === alias )
+        );
+    }
+
+    const sem = analyzeStage( stage );
+    if( sem.operator === '$lookup' )
+    {
+        if(
+            sem.unknown
+            || sem.malformed
+            || sem.observable.unknown
+            || sem.dependencies.unknown
+            || sem.dependencies.element.size > 0
+            || stageReadsFieldOrder( stage )
+        )
+        {
+            return false;
+        }
+
+        if( dependenciesReadAnyPath( sem, [ alias ] ))
+        {
+            return false;
+        }
+
+        return (
+            arePathsDisjoint( sem.writes, [ alias ] )
+            && arePathsDisjoint( sem.modifies, [ alias ] )
+            && arePathsDisjoint( sem.removes, [ alias ] )
+        );
+    }
+
+    return canContinuePastStage( sem, new Set([ alias ]));
+}
+
+function isPassthroughGroupAccumulator(
+    acc   : unknown,
+    alias : string
+): boolean
+{
+    if( !isPlainObject( acc )){ return false }
+    const entries = Object.entries( acc );
+    if( entries.length !== 1 ){ return false }
+    const [ op, expr ] = entries[ 0 ]!;
+    return ( op === '$first' || op === '$last' ) && expr === `$${ alias }`;
+}
+
+function addAliasSubfieldsFromConsumer(
+    stage     : unknown,
+    alias     : string,
+    subFields : Set<string>
+): boolean
+{
+    const entry = getSingleStageEntry( stage );
+    if(
+        !entry
+        || ( entry[ 0 ] !== '$project' && entry[ 0 ] !== '$group' )
+        || !isPlainObject( entry[ 1 ] )
+    )
+    {
+        return false;
+    }
+
+    const spec = entry[ 1 ] as Record<string, unknown>;
+    const sem = analyzeStage( stage );
+    if(
+        sem.malformed
+        || sem.unknown
+        || !hasOnlyKnownDependencyPaths( sem )
+        || containsGetField( spec, true )
+        || sem.dependencies.local.has( alias )
+    )
+    {
+        return false;
+    }
+
+    if( entry[ 0 ] === '$project' )
+    {
+        if(
+            !sem.projection
+            || sem.projection.unknown
+            || sem.projection.mode !== 'inclusion'
+            || alias in spec
+        )
+        {
+            return false;
+        }
+    }
+
+    const prefix = `${ alias }.`;
+
+    for( const dep of sem.dependencies.local )
+    {
+        if( dep.startsWith( prefix ))
+        {
+            subFields.add( dep.slice( prefix.length ).split( '.' )[ 0 ]! );
+        }
+    }
+
+    if( entry[ 0 ] === '$project' && sem.projection )
+    {
+        for( const inc of sem.projection.includedPaths )
+        {
+            if( inc.startsWith( prefix ))
+            {
+                subFields.add( inc.slice( prefix.length ).split( '.' )[ 0 ]! );
+            }
+        }
+    }
+
+    return true;
+}
+
 export function proveLookupSubpipelineFieldPruning(
     lookupStage     : unknown,
     followingStages : readonly unknown[],
@@ -1841,63 +1963,169 @@ export function proveLookupSubpipelineFieldPruning(
         return null;
     }
 
-    const lastSub = lookupSpec.pipeline.length > 0
-        ? getSingleStageEntry( lookupSpec.pipeline[ lookupSpec.pipeline.length - 1 ] )
-        : null;
-    if( lastSub && lastSub[ 0 ] === '$project' )
-    {
-        return null;
-    }
-
     const alias = lookupSpec.as;
-    const targetStage = isUnwindForPath( followingStages[ 0 ], alias )
-        ? followingStages[ 1 ]
-        : followingStages[ 0 ];
+    let cursor = 0;
 
-    const targetEntry = getSingleStageEntry( targetStage );
-    if( !targetEntry || targetEntry[ 0 ] !== '$project' || !isPlainObject( targetEntry[ 1 ] ))
+    while( cursor < followingStages.length )
+    {
+        const candidate = followingStages[ cursor ];
+        const candidateEntry = getSingleStageEntry( candidate );
+
+        if(
+            candidateEntry
+            && ( candidateEntry[ 0 ] === '$project' || candidateEntry[ 0 ] === '$group' )
+        )
+        {
+            break;
+        }
+
+        if( !canSkipStageForLookupSubpipelinePruning( candidate, alias ))
+        {
+            return null;
+        }
+
+        cursor++;
+    }
+
+    if( cursor >= followingStages.length )
     {
         return null;
     }
 
-    const projSpec = targetEntry[ 1 ] as Record<string, unknown>;
-    const projSem = analyzeStage( targetStage );
-    if(
-        projSem.malformed
-        || projSem.unknown
-        || !projSem.projection
-        || projSem.projection.unknown
-        || projSem.projection.mode !== 'inclusion'
-        || !hasOnlyKnownDependencyPaths( projSem )
-        || containsGetField( projSpec, true )
-        || alias in projSpec
-        || projSem.dependencies.local.has( alias )
-    )
-    {
-        return null;
-    }
-
-    const prefix = `${ alias }.`;
+    const targetStage = followingStages[ cursor ];
     const subFields = new Set<string>();
 
-    for( const dep of projSem.dependencies.local )
+    if( !addAliasSubfieldsFromConsumer( targetStage, alias, subFields ))
     {
-        if( dep.startsWith( prefix ))
+        const targetEntry = getSingleStageEntry( targetStage );
+        if(
+            !targetEntry
+            || targetEntry[ 0 ] !== '$group'
+            || !isPlainObject( targetEntry[ 1 ] )
+            || cursor + 1 >= followingStages.length
+        )
         {
-            subFields.add( dep.slice( prefix.length ).split( '.' )[ 0 ]! );
+            return null;
         }
-    }
 
-    for( const inc of projSem.projection.includedPaths )
-    {
-        if( inc.startsWith( prefix ))
+        const targetSpec = targetEntry[ 1 ] as Record<string, unknown>;
+        if( !isPassthroughGroupAccumulator( targetSpec[ alias ], alias ))
         {
-            subFields.add( inc.slice( prefix.length ).split( '.' )[ 0 ]! );
+            return null;
+        }
+
+        const sanitizedGroup = {
+            $group: {
+                ...targetSpec,
+                [ alias ]: { $sum: 1 }
+            }
+        };
+
+        addAliasSubfieldsFromConsumer( sanitizedGroup, alias, subFields );
+
+        if( !addAliasSubfieldsFromConsumer( followingStages[ cursor + 1 ], alias, subFields ))
+        {
+            return null;
         }
     }
 
     if( subFields.size === 0 )
     {
+        return null;
+    }
+
+    const lastSubStage = lookupSpec.pipeline.length > 0
+        ? lookupSpec.pipeline[ lookupSpec.pipeline.length - 1 ]
+        : null;
+    const lastSub = lastSubStage
+        ? getSingleStageEntry( lastSubStage )
+        : null;
+
+    if( lastSub && lastSub[ 0 ] === '$project' )
+    {
+        if( !isPlainObject( lastSub[ 1 ] ))
+        {
+            return null;
+        }
+
+        const lastSubSpec = lastSub[ 1 ] as Record<string, unknown>;
+        const simpleSub = parseSimpleProject( lastSubStage );
+
+        if( simpleSub && simpleSub.mode === 'inclusion' )
+        {
+            const extraNonIdKeys = Object.keys( lastSubSpec ).filter(
+                ( k ) => k !== '_id' && !subFields.has( k )
+            );
+
+            if( extraNonIdKeys.length === 0 )
+            {
+                return null;
+            }
+
+            const narrowedSpec: Record<string, unknown> = {};
+            for( const [ k, v ] of Object.entries( lastSubSpec ))
+            {
+                if( k !== '_id' && subFields.has( k ))
+                {
+                    narrowedSpec[ k ] = v;
+                }
+            }
+
+            if( subFields.has( '_id' ))
+            {
+                narrowedSpec._id = 1;
+            }
+            else
+            {
+                narrowedSpec._id = 0;
+            }
+
+            return {
+                lookupStage: {
+                    ...( lookupStage as Record<string, unknown> ),
+                    $lookup: {
+                        ...lookupSpec,
+                        pipeline: [
+                            ...lookupSpec.pipeline.slice( 0, -1 ),
+                            { $project: narrowedSpec }
+                        ]
+                    }
+                }
+            };
+        }
+
+        const lastSubSem = analyzeStage( lastSubStage );
+        if(
+            !simpleSub
+            && !lastSubSem.malformed
+            && !lastSubSem.unknown
+            && lastSubSem.projection
+            && !lastSubSem.projection.unknown
+            && !lastSubSem.projection.hasPathCollisions
+            && lastSubSem.projection.mode === 'inclusion'
+            && !subFields.has( '_id' )
+            && !( '_id' in lastSubSpec )
+        )
+        {
+            return {
+                lookupStage: {
+                    ...( lookupStage as Record<string, unknown> ),
+                    $lookup: {
+                        ...lookupSpec,
+                        pipeline: [
+                            ...lookupSpec.pipeline.slice( 0, -1 ),
+                            {
+                                $project: {
+                                    ...lastSubSpec,
+                                    _id: 0
+                                }
+                            }
+                        ]
+                    }
+                }
+            };
+        }
+
         return null;
     }
 

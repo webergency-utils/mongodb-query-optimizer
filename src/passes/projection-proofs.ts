@@ -11,7 +11,7 @@ import {
     ProjectionSummary,
     StageSemantics,
 } from '../analyzer/types';
-import { isPlainObject } from '../utils.js';
+import { isEqual, isPlainObject } from '../utils.js';
 import { getSingleStageEntry } from './helpers.js';
 
 const ADD_FIELD_OPERATORS = new Set(['$addFields', '$set']);
@@ -21,6 +21,13 @@ export interface AddFieldStage
     readonly operator: '$addFields' | '$set';
     readonly specification: Record<string, unknown>;
     readonly semantics: StageSemantics;
+}
+
+export interface ObjectLiteralReplacementStage
+{
+    readonly operator      : '$replaceWith' | '$replaceRoot';
+    readonly specification : Record<string, unknown>;
+    readonly semantics     : StageSemantics;
 }
 
 export interface SimpleProject
@@ -852,9 +859,117 @@ function projectDiscardedSourceFields(
     return discarded;
 }
 
+export function parseObjectLiteralReplacementStage(
+    stage: unknown
+): ObjectLiteralReplacementStage | null
+{
+    const entry = getSingleStageEntry( stage );
+
+    if( !entry || ( entry[ 0 ] !== '$replaceWith' && entry[ 0 ] !== '$replaceRoot' ))
+    {
+        return null;
+    }
+
+    let rawRoot: unknown;
+
+    if( entry[ 0 ] === '$replaceRoot' )
+    {
+        if(
+            !isPlainObject( entry[ 1 ] )
+            || Object.keys( entry[ 1 ] ).length !== 1
+            || !( 'newRoot' in entry[ 1 ] )
+        )
+        {
+            return null;
+        }
+
+        rawRoot = entry[ 1 ].newRoot;
+    }
+    else
+    {
+        rawRoot = entry[ 1 ];
+    }
+
+    if( !isPlainObject( rawRoot ))
+    {
+        return null;
+    }
+
+    let specification: Record<string, unknown>;
+    const rootKeys = Object.keys( rawRoot );
+
+    if( rootKeys.length === 1 && rootKeys[ 0 ] === '$mergeObjects' && Array.isArray( rawRoot.$mergeObjects ) && rawRoot.$mergeObjects.length > 0 )
+    {
+        const merged: Record<string, unknown> = {};
+
+        for( const item of rawRoot.$mergeObjects )
+        {
+            if( !isPlainObject( item ) || Object.keys( item ).length === 0 )
+            {
+                return null;
+            }
+
+            for( const [ k, v ] of Object.entries( item ))
+            {
+                if( !isExactTopLevelPath( k ))
+                {
+                    return null;
+                }
+
+                if( k in merged )
+                {
+                    if( !isEqual( merged[ k ], v ) || !isSafePrunableAssignment( v, true ))
+                    {
+                        return null;
+                    }
+                }
+                else
+                {
+                    merged[ k ] = v;
+                }
+            }
+        }
+
+        specification = merged;
+    }
+    else
+    {
+        if( rootKeys.length === 0 || rootKeys.some(( k ) => !isExactTopLevelPath( k )))
+        {
+            return null;
+        }
+
+        specification = rawRoot;
+    }
+
+    if( containsGetField( specification ))
+    {
+        return null;
+    }
+
+    const semantics = analyzeStage( stage );
+
+    if(
+        semantics.malformed
+        || semantics.unknown
+        || semantics.observable.unknown
+        || semantics.children.length > 0
+        || !hasOnlyKnownDependencyPaths( semantics )
+    )
+    {
+        return null;
+    }
+
+    return {
+        operator      : entry[ 0 ] as '$replaceWith' | '$replaceRoot',
+        specification,
+        semantics
+    };
+}
+
 /**
- * True when the follower is a simple unset or flag project that drops path
- * from the successful output document.
+ * True when the follower is a simple unset, flag project, or object-literal
+ * replacement stage that drops path from the successful output document.
  */
 export function isExactPathDiscardedByFollower(
     path: string,
@@ -868,13 +983,20 @@ export function isExactPathDiscardedByFollower(
     }
 
     const project = parseSimpleProject(followingStage);
-    if (!project)
+    if (project)
     {
-        return false;
+        const visibility = projectionVisibility(project.projection, path);
+        return visibility === 'hidden' || visibility === 'removed';
     }
 
-    const visibility = projectionVisibility(project.projection, path);
-    return visibility === 'hidden' || visibility === 'removed';
+    const replacement = parseObjectLiteralReplacementStage( followingStage );
+
+    if( replacement )
+    {
+        return !dependenciesReadAnyPath( replacement.semantics, [ path ] );
+    }
+
+    return false;
 }
 
 export function parseProjectionCommuteSortKeys(sortStage: unknown): string[] | null
@@ -1235,7 +1357,10 @@ function proveKillOnStage(
     const followingProject = unsetFields || overwrite
         ? null
         : parseSimpleProject(stage);
-    if (!unsetFields && !overwrite && !followingProject)
+    const replacement = unsetFields || overwrite || followingProject
+        ? null
+        : parseObjectLiteralReplacementStage( stage );
+    if (!unsetFields && !overwrite && !followingProject && !replacement)
     {
         return null;
     }
@@ -1245,7 +1370,13 @@ function proveKillOnStage(
             ? new Set(
                 Object.keys(overwrite.specification).filter(isExactTopLevelPath),
             )
-            : projectDiscardedSourceFields(source, followingProject!));
+            : followingProject
+                ? projectDiscardedSourceFields(source, followingProject)
+                : new Set(
+                    Object.keys( source.specification ).filter(
+                        ( path ) => isExactTopLevelPath( path ) && !dependenciesReadAnyPath( replacement!.semantics, [ path ] )
+                    )
+                ));
     const eligibleFields = new Set<string>();
 
     for (const path of live)
