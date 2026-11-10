@@ -6,10 +6,13 @@ import {
 } from 'mongodb';
 import { describe, expect, it } from 'vitest';
 import { optimizePipeline } from './helpers/pre-gate-optimizer.js';
-import {
+import
+{
     LimitSkipCoalescingPass,
     proveLimitSkipCoalescing,
-} from '../src/passes/limit-skip-coalescing.js';
+    proveLimitSkipEmptyWindow
+}
+from '../src/passes/limit-skip-coalescing.js';
 import { optimizePipelineWithCandidateProfile } from '../src/passes/registry.js';
 import {
     productionSemanticCases,
@@ -183,19 +186,18 @@ describe('limit and skip coalescing scheduling', () =>
             { $limit: 10 },
         ]);
 
-        // Leaves { $limit: L }, { $skip: S } untouched when S >= L
+        // Collapses { $limit: L }, { $skip: S } to an empty-stream contradiction when S >= L
         expect(
             optimizePipelineWithCandidateProfile(
                 [
                     { $limit: 5 },
-                    { $skip: 5 },
+                    { $skip: 5 }
                 ],
                 LIMIT_SKIP,
-                [],
-            ),
+                []
+            )
         ).toEqual([
-            { $limit: 5 },
-            { $skip: 5 },
+            { $match: { _id: { $in: [] } } }
         ]);
 
         // Eliminates redundant downstream $limit across non-expanding stages
@@ -254,24 +256,66 @@ describe('limit and skip coalescing scheduling', () =>
         ]);
     });
 
-    it('preserves every unproved value and the caller input', () =>
+    it( 'preserves every unproved value and the caller input', () =>
     {
-        const pipeline = [
-            { $limit: '10' },
-            { $limit: 5 },
+        const pipeline =
+        [
             { $skip: Number.MAX_SAFE_INTEGER },
             { $skip: 1 },
-            { $skip: Long.fromNumber(2) },
+            { $limit: '10' },
+            { $limit: 5 },
+            { $skip: Long.fromNumber( 2 ) },
             { $skip: 3 },
             { $limit: 4, malformed: true },
-            { $limit: 2 },
+            { $limit: 2 }
         ];
-        const snapshot = structuredClone(pipeline);
+        const snapshot = structuredClone( pipeline );
 
         expect(
-            optimizePipelineWithCandidateProfile(pipeline, LIMIT_SKIP, []),
-        ).toEqual(pipeline);
-        expect(pipeline).toEqual(snapshot);
+            optimizePipelineWithCandidateProfile( pipeline, LIMIT_SKIP, [] )
+        ).toEqual( pipeline );
+        expect( pipeline ).toEqual( snapshot );
+    });
+
+    it( 'proves empty-window collapse for limit followed by skip >= limit and respects strictErrors', () =>
+    {
+        expect( proveLimitSkipEmptyWindow( [ { $limit: 5 } ], -1 )).toBeNull();
+        expect( proveLimitSkipEmptyWindow( [ { $limit: 5 } ], 0 )).toBeNull();
+        expect( proveLimitSkipEmptyWindow( [ { $skip: 5 }, { $skip: 5 } ], 0 )).toBeNull();
+        expect( proveLimitSkipEmptyWindow( [ { $limit: 5 }, { $limit: 5 } ], 0 )).toBeNull();
+        expect( proveLimitSkipEmptyWindow( [ { $limit: 0 }, { $skip: 5 } ], 0 )).toBeNull();
+        expect( proveLimitSkipEmptyWindow( [ { $limit: 5 }, { $skip: -1 } ], 0 )).toBeNull();
+        expect( proveLimitSkipEmptyWindow( [ { $limit: 5 }, { $skip: 4 } ], 0 )).toBeNull();
+
+        expect( proveLimitSkipEmptyWindow( [ { $limit: 5 }, { $skip: 5 } ], 0 )).toEqual({
+            $match : { _id: { $in: [] } }
+        });
+        expect( proveLimitSkipEmptyWindow( [ { $limit: 3 }, { $skip: 8 } ], 0 )).toEqual({
+            $match : { _id: { $in: [] } }
+        });
+
+        // Under strictErrors, upstream error-prone stages block empty-window collapse
+        expect( proveLimitSkipEmptyWindow(
+            [
+                { $addFields: { x: { $toInt: '$raw' } } },
+                { $limit: 3 },
+                { $skip: 3 }
+            ],
+            1,
+            { strictFieldOrder: false, strictErrors: true }
+        )).toBeNull();
+
+        expect( proveLimitSkipEmptyWindow(
+            [
+                { $match: { status: 'active' } },
+                { $limit: 3 },
+                { $skip: 3 }
+            ],
+            1,
+            { strictFieldOrder: false, strictErrors: true }
+        )).toEqual({
+            $match : { _id: { $in: [] } }
+        });
     });
 
     it('is active, nested, immutable, and stable after one public call', () =>

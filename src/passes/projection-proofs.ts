@@ -1551,6 +1551,110 @@ function proveUnusedGroupAccumulatorPruning(
  * does not observe the dead writes. Exclusion projects, unknown stages,
  * whole-document reads, and any read of the write still block.
  */
+export interface RedundantUnsetProof
+{
+    readonly replacementStage : { readonly $unset: string | readonly string[] } | null;
+}
+
+export function proveRedundantDownstreamUnset(
+    pipeline   : readonly unknown[],
+    unsetIndex : number
+): RedundantUnsetProof | null
+{
+    if( unsetIndex <= 0 || unsetIndex >= pipeline.length )
+    {
+        return null;
+    }
+
+    const unsetFields = exactUnsetFields( pipeline[ unsetIndex ] );
+
+    if( !unsetFields )
+    {
+        return null;
+    }
+
+    const candidates = new Set( unsetFields );
+    const provenAbsent = new Set<string>();
+
+    for( let i = unsetIndex - 1; i >= 0 && candidates.size > 0; i-- )
+    {
+        const prev = pipeline[ i ];
+        const prevUnset = exactUnsetFields( prev );
+
+        if( prevUnset )
+        {
+            for( const field of Array.from( candidates ))
+            {
+                if( prevUnset.has( field ))
+                {
+                    candidates.delete( field );
+                    provenAbsent.add( field );
+                }
+            }
+
+            continue;
+        }
+
+        const prevProject = parseSimpleProject( prev );
+
+        if( prevProject )
+        {
+            for( const field of Array.from( candidates ))
+            {
+                const vis = projectionVisibility( prevProject.projection, field );
+
+                if( vis === 'hidden' || vis === 'removed' )
+                {
+                    candidates.delete( field );
+                    provenAbsent.add( field );
+                }
+            }
+
+            continue;
+        }
+
+        const sem = analyzeStage( prev );
+
+        if(
+            sem.unknown
+            || sem.malformed
+            || sem.observable.unknown
+            || sem.operator === '$unionWith'
+            || sem.operator === '$densify'
+        )
+        {
+            break;
+        }
+
+        for( const field of Array.from( candidates ))
+        {
+            if( !arePathsDisjoint( sem.writes, [ field ] ))
+            {
+                candidates.delete( field );
+            }
+        }
+    }
+
+    if( provenAbsent.size === 0 )
+    {
+        return null;
+    }
+
+    const kept = Array.from( unsetFields ).filter(( field ) => !provenAbsent.has( field ));
+
+    if( kept.length === 0 )
+    {
+        return { replacementStage: null };
+    }
+
+    return {
+        replacementStage:
+        {
+            $unset : kept.length === 1 ? kept[ 0 ]! : kept
+        }
+    };
+}
+
 export function proveUnusedFieldPruningThroughSuffix(
     sourceStage: unknown,
     suffix: readonly unknown[],

@@ -1,5 +1,6 @@
 import { analyzeStage } from '../analyzer/semantics.js';
 import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
+import { isStageProvenErrorFree } from './guarantee-guards.js';
 import { getSingleStageEntry } from './helpers.js';
 import { PipelinePass } from './types.js';
 
@@ -207,12 +208,53 @@ export function proveRedundantDownstreamLimit(
     return false;
 }
 
+export function proveLimitSkipEmptyWindow(
+    pipeline   : readonly unknown[],
+    limitIndex : number,
+    context    : GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT
+): Readonly<{ $match: { readonly _id: { readonly $in: readonly [] } } }> | null
+{
+    if( limitIndex < 0 || limitIndex + 1 >= pipeline.length )
+    {
+        return null;
+    }
+
+    const left = parseStrictStage( pipeline[ limitIndex ] );
+    const right = parseStrictStage( pipeline[ limitIndex + 1 ] );
+
+    if(
+        !left
+        || !right
+        || left.operator !== '$limit'
+        || right.operator !== '$skip'
+        || !isValidOperand( '$limit', left.value )
+        || !isValidOperand( '$skip', right.value )
+        || right.value < left.value
+    )
+    {
+        return null;
+    }
+
+    if( context.strictErrors )
+    {
+        for( let i = 0; i < limitIndex; i++ )
+        {
+            if( !isStageProvenErrorFree( pipeline[ i ] ))
+            {
+                return null;
+            }
+        }
+    }
+
+    return { $match: { _id: { $in: [] } } };
+}
+
 export class LimitSkipCoalescingPass implements PipelinePass
 {
     readonly name       = 'limit-skip-coalescing';
     readonly stageTypes = [ '$limit', '$skip' ] as const;
 
-    execute( pipeline: any[], _context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
+    execute( pipeline: any[], context: GuaranteeContext = DEFAULT_GUARANTEE_CONTEXT ): any[]
     {
         for( let index = 0; index + 1 < pipeline.length; index++ )
         {
@@ -235,6 +277,14 @@ export class LimitSkipCoalescingPass implements PipelinePass
             {
                 const result = [ ...pipeline ];
                 result.splice( index, 2, normProof.skipStage, normProof.limitStage );
+                return result;
+            }
+
+            const emptyProof = proveLimitSkipEmptyWindow( pipeline, index, context );
+            if( emptyProof )
+            {
+                const result = [ ...pipeline ];
+                result.splice( index, 2, emptyProof );
                 return result;
             }
         }

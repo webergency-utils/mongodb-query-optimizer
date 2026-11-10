@@ -1,7 +1,10 @@
 import { isFilterContradiction } from '../analyzer/filters';
+import { analyzeStage } from '../analyzer/semantics';
 import { withCandidateFilterRuleProfile } from '../filter-rule-registry';
 import { GuaranteeContext, OptimizerOptions, resolvePipelineGuarantees } from '../guarantees';
 import { containsValue, hasCycle, isEqual, isPlainObject } from '../utils';
+import { isStageProvenErrorFree } from './guarantee-guards';
+import { getSingleStageEntry } from './helpers';
 import { AdjacentAddFieldMergingPass } from './adjacent-addfield-merging';
 import { AddFieldPushdownPass } from './add-field-pushdown';
 import { AdjacentMatchMergingPass } from './adjacent-match-merging';
@@ -209,7 +212,8 @@ const STAGE_TYPE_BITS: Readonly<Record<string, number>> = Object.freeze({
     $facet          : 1 << 15,
     $unionWith      : 1 << 16,
     $replaceRoot    : 1 << 17,
-    $replaceWith    : 1 << 18
+    $replaceWith    : 1 << 18,
+    $graphLookup    : 1 << 19
 });
 
 const STAGE_UNKNOWN_BIT = 1 << 30;
@@ -505,7 +509,7 @@ function applyGlobalSweepWithDirty(
 
             if( stage && typeof stage === 'object' && !Array.isArray( stage ) && stage.$match )
             {
-                if( isFilterContradiction( stage.$match ) && !hasUnionWithAfter( current, i ))
+                if( isFilterContradiction( stage.$match ) && canTruncateEmptyStreamAfter( current, i, context ))
                 {
                     if( current.length > i + 1 )
                     {
@@ -525,6 +529,67 @@ function applyGlobalSweepWithDirty(
         modified,
         converged : !nonFilterModified && passes === activePipelinePasses
     };
+}
+
+const EMPTY_STREAM_PRESERVING_OPERATORS = new Set([
+    '$addFields',
+    '$bucket',
+    '$bucketAuto',
+    '$count',
+    '$fill',
+    '$graphLookup',
+    '$group',
+    '$limit',
+    '$lookup',
+    '$match',
+    '$project',
+    '$replaceRoot',
+    '$replaceWith',
+    '$sample',
+    '$set',
+    '$setWindowFields',
+    '$skip',
+    '$sort',
+    '$sortByCount',
+    '$unset',
+    '$unwind'
+]);
+
+function canTruncateEmptyStreamAfter(
+    pipeline  : readonly any[],
+    fromIndex : number,
+    context   : GuaranteeContext
+): boolean
+{
+    for( let i = fromIndex + 1; i < pipeline.length; i++ )
+    {
+        const stage = pipeline[ i ];
+        const entry = getSingleStageEntry( stage );
+
+        if( !entry || !EMPTY_STREAM_PRESERVING_OPERATORS.has( entry[ 0 ] ))
+        {
+            return false;
+        }
+
+        if( context.strictErrors )
+        {
+            if( !isStageProvenErrorFree( stage ))
+            {
+                return false;
+            }
+
+            continue;
+        }
+
+        const sem = analyzeStage( stage );
+
+        if( sem.malformed || sem.unknown )
+        {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 function isDeadUnionWithStage( stage: any, context: GuaranteeContext ): boolean
@@ -557,21 +622,8 @@ function isDeadUnionWithStage( stage: any, context: GuaranteeContext ): boolean
         && !Array.isArray( firstSubStage )
         && firstSubStage.$match
         && isFilterContradiction( firstSubStage.$match )
-        && !hasUnionWithAfter( unionWith.pipeline, 0 )
+        && canTruncateEmptyStreamAfter( unionWith.pipeline, 0, context )
     );
-}
-
-function hasUnionWithAfter( pipeline: readonly any[], fromIndex: number ): boolean
-{
-    for( let i = fromIndex + 1; i < pipeline.length; i++ )
-    {
-        if( pipeline[ i ] && typeof pipeline[ i ] === 'object' && '$unionWith' in pipeline[ i ] )
-        {
-            return true;
-        }
-    }
-
-    return false;
 }
 
 /**

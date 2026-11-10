@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { optimizeFilter, optimizePipeline } from './helpers/pre-gate-optimizer.js';
+import { optimizePipeline as optimizePipelineWithGuarantees } from '../src/index.js';
+import { FilterOptimizationPass } from '../src/passes/filter-optimization.js';
+import { DEFAULT_GUARANTEE_CONTEXT } from '../src/guarantees.js';
 import { runMockPipeline } from './helpers/mock-engine.js';
 
 // Fast structural supplement only; the MongoDB differential oracle is authoritative.
@@ -1463,6 +1466,192 @@ describe('correctness regressions', () => {
                     pipeline: [
                         { $match: { status: 'open' } }
                     ]
+                }
+            }
+        ]);
+    });
+
+    it( 'preserves empty-stream-emitting and side-effect stages after a contradictory $match', () =>
+    {
+        // Arrange
+        const facetAfterContradiction =
+        [
+            { $match: { age: { $gt: 50, $lt: 20 } } },
+            { $facet: { items: [ { $limit: 5 } ] } }
+        ];
+        const densifyAfterContradiction =
+        [
+            { $match: { age: { $gt: 50, $lt: 20 } } },
+            { $densify: { field: 'ts', range: { step: 1, bounds: [ 0, 5 ] } } }
+        ];
+        const outAfterContradiction =
+        [
+            { $match: { age: { $gt: 50, $lt: 20 } } },
+            { $out: 'archive_coll' }
+        ];
+        const unknownAfterContradiction =
+        [
+            { $match: { age: { $gt: 50, $lt: 20 } } },
+            { $unknownCustomStage: {} }
+        ];
+        const malformedAfterContradiction =
+        [
+            { $match: { age: { $gt: 50, $lt: 20 } } },
+            { $limit: 'invalid' }
+        ];
+        const deadUnionWithFacet =
+        [
+            { $match: { status: 'active' } },
+            {
+                $unionWith :
+                {
+                    coll     : 'archived_orders',
+                    pipeline :
+                    [
+                        { $match: { age: { $gt: 50, $lt: 20 } } },
+                        { $facet: { counts: [ { $count: 'n' } ] } }
+                    ]
+                }
+            }
+        ];
+
+        // Act & Assert
+        expect( optimizePipeline( facetAfterContradiction )).toHaveLength( 2 );
+        expect( optimizePipeline( densifyAfterContradiction )).toHaveLength( 2 );
+        expect( optimizePipeline( outAfterContradiction )).toHaveLength( 2 );
+        expect( optimizePipeline( unknownAfterContradiction )).toHaveLength( 2 );
+        expect( optimizePipeline( malformedAfterContradiction )).toHaveLength( 2 );
+        expect( optimizePipeline( deadUnionWithFacet )).toHaveLength( 2 );
+
+        // Under strictErrors, error-prone downstream stages are preserved while safe ones can truncate
+        expect( optimizePipelineWithGuarantees(
+            [
+                { $match: { _id: { $in: [] } } },
+                { $addFields: { parsed: { $toInt: '$raw' } } }
+            ],
+            { strictErrors: true }
+        )).toHaveLength( 2 );
+
+        expect( optimizePipelineWithGuarantees(
+            [
+                { $match: { _id: { $in: [] } } },
+                { $sort: { score: -1 } }
+            ],
+            { strictErrors: true }
+        )).toEqual([ { $match: { _id: { $in: [] } } } ]);
+    });
+
+    it( 'optimizes $graphLookup.restrictSearchWithMatch filters and removes empty restrictions', () =>
+    {
+        // Arrange
+        const pass = new FilterOptimizationPass();
+        const unchangedPipeline =
+        [
+            { $sort: { _id: 1 } },
+            {
+                $graphLookup :
+                {
+                    from             : 'employees',
+                    startWith        : '$reportsTo',
+                    connectFromField : 'reportsTo',
+                    connectToField   : '_id',
+                    as               : 'managers'
+                }
+            },
+            {
+                $graphLookup :
+                {
+                    from                    : 'employees',
+                    startWith               : '$reportsTo',
+                    connectFromField        : 'reportsTo',
+                    connectToField          : '_id',
+                    as                      : 'activeManagers',
+                    restrictSearchWithMatch : { active: true }
+                }
+            }
+        ];
+
+        const emptyRestrictionPipeline =
+        [
+            {
+                $graphLookup :
+                {
+                    from                    : 'employees',
+                    startWith               : '$reportsTo',
+                    connectFromField        : 'reportsTo',
+                    connectToField          : '_id',
+                    as                      : 'managers',
+                    restrictSearchWithMatch : { $and: [ {} ] }
+                }
+            }
+        ];
+
+        const simplifiedRestrictionPipeline =
+        [
+            { $match: { $and: [ {} ] } },
+            {
+                $graphLookup :
+                {
+                    from                    : 'employees',
+                    startWith               : '$reportsTo',
+                    connectFromField        : 'reportsTo',
+                    connectToField          : '_id',
+                    as                      : 'managers',
+                    restrictSearchWithMatch : { role: { $in: [ 'lead' ] } }
+                }
+            },
+            {
+                $graphLookup :
+                {
+                    from                    : 'employees',
+                    startWith               : '$reportsTo',
+                    connectFromField        : 'reportsTo',
+                    connectToField          : '_id',
+                    as                      : 'allManagers',
+                    restrictSearchWithMatch : {}
+                }
+            }
+        ];
+
+        // Act
+        const unchangedResult = pass.execute( unchangedPipeline, DEFAULT_GUARANTEE_CONTEXT );
+        const emptyResult = pass.execute( emptyRestrictionPipeline, DEFAULT_GUARANTEE_CONTEXT );
+        const simplifiedResult = optimizePipeline( simplifiedRestrictionPipeline );
+
+        // Assert
+        expect( unchangedResult ).toBe( unchangedPipeline );
+        expect( emptyResult ).toEqual([
+            {
+                $graphLookup :
+                {
+                    from             : 'employees',
+                    startWith        : '$reportsTo',
+                    connectFromField : 'reportsTo',
+                    connectToField   : '_id',
+                    as               : 'managers'
+                }
+            }
+        ]);
+        expect( simplifiedResult ).toEqual([
+            {
+                $graphLookup :
+                {
+                    from                    : 'employees',
+                    startWith               : '$reportsTo',
+                    connectFromField        : 'reportsTo',
+                    connectToField          : '_id',
+                    as                      : 'managers',
+                    restrictSearchWithMatch : { role: 'lead' }
+                }
+            },
+            {
+                $graphLookup :
+                {
+                    from             : 'employees',
+                    startWith        : '$reportsTo',
+                    connectFromField : 'reportsTo',
+                    connectToField   : '_id',
+                    as               : 'allManagers'
                 }
             }
         ]);

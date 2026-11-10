@@ -1,5 +1,6 @@
 import { PipelinePass } from './types';
 import { GuaranteeContext, DEFAULT_GUARANTEE_CONTEXT } from '../guarantees.js';
+import { isSingleKeyStage } from './helpers.js';
 import
 {
     proveLookupDelayAcrossStage,
@@ -7,7 +8,7 @@ import
     proveLookupMatchSplit,
     proveLookupSubpipelineFieldPruning,
     proveLookupSubpipelinePushdown,
-    proveLookupSubpipelinePushdownAcrossSuffix,
+    proveLookupSubpipelinePushdownAcrossSuffix
 }
 from './movement-proofs.js';
 
@@ -31,7 +32,10 @@ export class LookupDelayPass implements PipelinePass
 
             while( currentIndex < current.length - 1 )
             {
+                if( !isSingleKeyStage( current[ currentIndex ], '$lookup' )){ break }
+
                 const suffixAfterNext = current.slice( currentIndex + 2 );
+
                 if( proveLookupDelayAcrossStage(
                     current[ currentIndex ],
                     current[ currentIndex + 1 ],
@@ -101,35 +105,6 @@ export class LookupDelayPass implements PipelinePass
                         else
                         {
                             result.splice( currentIndex + 2, 1 );
-                        }
-
-                        continue;
-                    }
-
-                    const subProofB = proveLookupSubpipelinePushdown(
-                        current[ currentIndex ],
-                        current[ currentIndex + 2 ],
-                        current[ currentIndex + 1 ],
-                        context
-                    );
-
-                    if( subProofB )
-                    {
-                        if( result === null )
-                        {
-                            result = [ ...pipeline ];
-                            current = result;
-                        }
-
-                        result[ currentIndex ] = subProofB.lookupStage;
-
-                        if( subProofB.residualStage )
-                        {
-                            result[ currentIndex + 1 ] = subProofB.residualStage;
-                        }
-                        else
-                        {
-                            result.splice( currentIndex + 1, 1 );
                         }
 
                         continue;

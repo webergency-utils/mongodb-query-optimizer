@@ -956,6 +956,218 @@ describe( 'ExpressionSimplificationPass unit and proof tests', () =>
             $mergeObjects: [ { $literal: { a: 1 } }, { b: 2 } ]
         });
     });
+
+    it( 'simplifies $size over safe $map, fuses nested $filter, and prunes dead $let vars', () =>
+    {
+        // 1. $size over $map -> $size over input when body is error-free deterministic without $$REMOVE
+        expect( simplifyExpression({
+            $size :
+            {
+                $map :
+                {
+                    input : '$items',
+                    in    : { $gt: [ '$$this.qty', 0 ] }
+                }
+            }
+        })).toEqual({ $size: '$items' });
+
+        expect( simplifyExpression({
+            $size :
+            {
+                $map :
+                {
+                    input : [ 10, 20, 30 ],
+                    as    : 'item',
+                    in    : '$$item'
+                }
+            }
+        })).toBe( 3 );
+
+        // Barriers for $size over $map
+        const removeMap = { $size: { $map: { input: '$items', in: '$$REMOVE' } } };
+        const removeSubMap = { $size: { $map: { input: '$items', in: '$$REMOVE.x' } } };
+        const errorMap = { $size: { $map: { input: '$items', in: { $toInt: '$$this' } } } };
+        const volatileMap = { $size: { $map: { input: '$items', in: { $rand: {} } } } };
+        const unknownMap = { $size: { $map: { input: '$items', in: { $unknownExpr: '$$this' } } } };
+        const badAsMap = { $size: { $map: { input: '$items', as: '', in: 1 } } };
+        const extraKeyMap = { $size: { $map: { input: '$items', in: 1, extra: true } } };
+        const missingInMap = { $size: { $map: { input: '$items' } } };
+        const nonObjMap = { $size: { $map: 'invalid' } };
+
+        expect( simplifyExpression( removeMap )).toEqual( removeMap );
+        expect( simplifyExpression( removeSubMap )).toEqual( removeSubMap );
+        expect( simplifyExpression( errorMap )).toEqual( errorMap );
+        expect( simplifyExpression( volatileMap )).toEqual( volatileMap );
+        expect( simplifyExpression( unknownMap )).toEqual( unknownMap );
+        expect( simplifyExpression( badAsMap )).toEqual( badAsMap );
+        expect( simplifyExpression( extraKeyMap )).toEqual( extraKeyMap );
+        expect( simplifyExpression( missingInMap )).toEqual( missingInMap );
+        expect( simplifyExpression( nonObjMap )).toEqual( nonObjMap );
+
+        // 2. Nested $filter fusion
+        expect( simplifyExpression({
+            $filter :
+            {
+                input :
+                {
+                    $filter :
+                    {
+                        input : '$orders',
+                        cond  : { $eq: [ '$$this.status', 'paid' ] }
+                    }
+                },
+                cond : { $gt: [ '$$this.total', 100 ] }
+            }
+        })).toEqual({
+            $filter :
+            {
+                input : '$orders',
+                cond  :
+                {
+                    $and :
+                    [
+                        { $eq: [ '$$this.status', 'paid' ] },
+                        { $gt: [ '$$this.total', 100 ] }
+                    ]
+                }
+            }
+        });
+
+        expect( simplifyExpression({
+            $filter :
+            {
+                input :
+                {
+                    $filter :
+                    {
+                        input : '$orders',
+                        as    : 'ord',
+                        cond  : { $eq: [ '$$ord.status', 'paid' ] }
+                    }
+                },
+                as   : 'ord',
+                cond : { $gt: [ '$$ord.total', 100 ] }
+            }
+        })).toEqual({
+            $filter :
+            {
+                input : '$orders',
+                as    : 'ord',
+                cond  :
+                {
+                    $and :
+                    [
+                        { $eq: [ '$$ord.status', 'paid' ] },
+                        { $gt: [ '$$ord.total', 100 ] }
+                    ]
+                }
+            }
+        });
+
+        // Barriers for nested $filter fusion
+        const mismatchedAsFilter =
+        {
+            $filter :
+            {
+                input : { $filter: { input: '$orders', as: 'a', cond: { $gt: [ '$$a', 0 ] } } },
+                as    : 'b',
+                cond  : { $lt: [ '$$b', 10 ] }
+            }
+        };
+        const limitedInnerFilter =
+        {
+            $filter :
+            {
+                input : { $filter: { input: '$orders', cond: { $gt: [ '$$this', 0 ] }, limit: 5 } },
+                cond  : { $lt: [ '$$this', 10 ] }
+            }
+        };
+        const errorOuterFilter =
+        {
+            $filter :
+            {
+                input : { $filter: { input: '$orders', cond: { $gt: [ '$$this', 0 ] } } },
+                cond  : { $gt: [ { $toInt: '$$this' }, 10 ] }
+            }
+        };
+        const invalidAsFilter =
+        {
+            $filter :
+            {
+                input : '$orders',
+                as    : '',
+                cond  : { $gt: [ '$x', 0 ] }
+            }
+        };
+        const missingCondFilter =
+        {
+            $filter :
+            {
+                input : '$orders'
+            }
+        };
+
+        expect( simplifyExpression( mismatchedAsFilter )).toEqual( mismatchedAsFilter );
+        expect( simplifyExpression( limitedInnerFilter )).toEqual( limitedInnerFilter );
+        expect( simplifyExpression( errorOuterFilter )).toEqual( errorOuterFilter );
+        expect( simplifyExpression( invalidAsFilter )).toEqual( invalidAsFilter );
+        expect( simplifyExpression( missingCondFilter )).toEqual( missingCondFilter );
+
+        // 3. $let dead-vars pruning
+        expect( simplifyExpression({
+            $let :
+            {
+                vars : { unused: '$price' },
+                in   : 42
+            }
+        })).toBe( 42 );
+
+        expect( simplifyExpression({
+            $let :
+            {
+                vars :
+                {
+                    deadLiteral : '$a',
+                    usedDirect  : '$b',
+                    usedNested  : '$c',
+                    volatileVar : { $rand: {} }
+                },
+                in :
+                {
+                    arr : [ '$$usedDirect', { sub: '$$usedNested.field' } ],
+                    lit : { $literal: '$$deadLiteral' }
+                }
+            }
+        })).toEqual({
+            $let :
+            {
+                vars :
+                {
+                    usedDirect  : '$b',
+                    usedNested  : '$c',
+                    volatileVar : { $rand: {} }
+                },
+                in :
+                {
+                    arr : [ '$$usedDirect', { sub: '$$usedNested.field' } ],
+                    lit : { $literal: '$$deadLiteral' }
+                }
+            }
+        });
+
+        // Unchanged when all vars are used or $let spec is malformed
+        const allUsedLet = { $let: { vars: { x: '$a' }, in: '$$x' } };
+        const emptyVarsLet = { $let: { vars: {}, in: 1 } };
+        const emptyKeyLet = { $let: { vars: { '': 1 }, in: 1 } };
+        const extraPropLet = { $let: { vars: { x: 1 }, in: 1, extra: true } };
+        const nonObjLet = { $let: 'invalid' };
+
+        expect( simplifyExpression( allUsedLet )).toEqual( allUsedLet );
+        expect( simplifyExpression( emptyVarsLet )).toEqual( emptyVarsLet );
+        expect( simplifyExpression( emptyKeyLet )).toEqual( emptyKeyLet );
+        expect( simplifyExpression( extraPropLet )).toEqual( extraPropLet );
+        expect( simplifyExpression( nonObjLet )).toEqual( nonObjLet );
+    });
 });
 
 

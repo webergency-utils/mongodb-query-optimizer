@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { optimizePipeline } from './helpers/pre-gate-optimizer.js';
+import { optimizeFilter, optimizePipeline } from './helpers/pre-gate-optimizer.js';
+import { productionSemanticCases } from './fixtures/semantic-cases.js';
+import { isEqual } from '../src/utils.js';
 import { LookupDelayPass } from '../src/passes/lookup-delay.js';
 import {
     proveLookupDelayAcrossStage,
@@ -926,6 +928,57 @@ describe('high-ROI aggregation optimization passes end-to-end rewrites', () =>
                 },
             },
         ]);
+    });
+
+    it( 'verifies every feat-audit differential fixture performs its intended rewrite or preserves its soundness barrier', () =>
+    {
+        // Arrange
+        const auditFixtures = productionSemanticCases.filter(
+            ( testCase ) => testCase.id.startsWith( 'feat-audit-' )
+        );
+
+        expect( auditFixtures ).toHaveLength( 15 );
+
+        // Act & Assert
+        for( const testCase of auditFixtures )
+        {
+            if( testCase.kind === 'filter' )
+            {
+                const optimized = optimizeFilter( testCase.filter, testCase.optimizerOptions );
+                expect( isEqual( optimized, testCase.filter ), `${ testCase.id } should rewrite filter` ).toBe( false );
+                continue;
+            }
+
+            const optimized = optimizePipeline( testCase.pipeline as Stage[], testCase.optimizerOptions );
+
+            if( testCase.id === 'feat-audit-contradiction-preserves-densify' )
+            {
+                // Soundness barrier: $densify on explicit range must remain after contradictory $match
+                expect( optimized ).toEqual( testCase.pipeline );
+                continue;
+            }
+
+            if( testCase.id === 'feat-audit-contradiction-preserves-facet' )
+            {
+                // Filter simplifies to contradiction, AND $facet stage is preserved after it
+                expect( optimized ).toHaveLength( 2 );
+                expect( optimized[ 1 ] ).toHaveProperty( '$facet' );
+                continue;
+            }
+
+            if(
+                testCase.id === 'feat-audit-lookup-unwind-include-array-index-barrier'
+                || testCase.id === 'feat-audit-lookup-match-size-before-unwind-barrier'
+            )
+            {
+                // Soundness barrier: $lookup.pipeline must NOT absorb the post-lookup { status: 'paid' } predicate
+                const lookupStage = optimized.find(( stage ) => '$lookup' in stage ) as { $lookup: { pipeline?: Stage[] } };
+                expect( JSON.stringify( lookupStage.$lookup.pipeline ?? [] )).not.toContain( 'paid' );
+                continue;
+            }
+
+            expect( isEqual( optimized, testCase.pipeline ), `${ testCase.id } should rewrite pipeline` ).toBe( false );
+        }
     });
 });
 

@@ -3397,6 +3397,626 @@ export const productionSemanticCases: readonly SemanticCase[] = [
         affectedTransformationIds: [ 'dead-assignment-elimination' ],
         expectedEquivalent: true,
     },
+    {
+        id: 'feat-audit-filter-not-exists-bool',
+        kind: 'filter',
+        mainCollectionId: 'main',
+        collections:
+        {
+            main:
+            {
+                documents:
+                [
+                    { _id: 1, deletedAt: null, archivedAt: new Date( '2026-01-01T00:00:00.000Z' ) },
+                    { _id: 2, archivedAt: null },
+                    { _id: 3, deletedAt: new Date( '2026-02-01T00:00:00.000Z' ) },
+                    { _id: 4, archivedAt: [] }
+                ]
+            }
+        },
+        filter:
+        {
+            deletedAt  : { $not: { $exists: true } },
+            archivedAt : { $not: { $exists: false } }
+        },
+        options: { sort: { _id: 1 } },
+        observation: 'ordered-bson',
+        affectedTransformationIds: [ 'filter-optimization' ],
+        expectedEquivalent: true
+    },
+    {
+        id: 'feat-audit-filter-cross-and-negation-multikey-prune',
+        kind: 'filter',
+        mainCollectionId: 'main',
+        collections:
+        {
+            main:
+            {
+                documents:
+                [
+                    { _id: 1, tags: [ 'open', 'archived' ], active: true },
+                    { _id: 2, tags: [ 'open', 'featured' ], active: true },
+                    { _id: 3, tags: 'archived', active: true },
+                    { _id: 4, tags: 'closed', active: true },
+                    { _id: 5, active: true }
+                ]
+            }
+        },
+        filter:
+        {
+            tags : { $ne: 'archived' },
+            $and :
+            [
+                { tags: { $in: [ 'open', 'archived', 'closed' ] } },
+                { active: true }
+            ]
+        },
+        options: { sort: { _id: 1 } },
+        observation: 'ordered-bson',
+        affectedTransformationIds: [ 'filter-optimization' ],
+        expectedEquivalent: true
+    },
+    {
+        id: 'feat-audit-filter-cross-and-negation-contradiction',
+        kind: 'filter',
+        mainCollectionId: 'main',
+        collections:
+        {
+            main:
+            {
+                documents:
+                [
+                    { _id: 1, tags: [ 'banned', 'good' ] },
+                    { _id: 2, tags: 'spam' },
+                    { _id: 3, tags: [] },
+                    { _id: 4 }
+                ]
+            }
+        },
+        filter:
+        {
+            $and :
+            [
+                { tags: { $nin: [ 'banned', 'spam' ] } },
+                { tags: { $in: [ 'banned', 'spam' ] } }
+            ]
+        },
+        options: { sort: { _id: 1 } },
+        observation: 'ordered-bson',
+        affectedTransformationIds: [ 'filter-optimization' ],
+        expectedEquivalent: true
+    },
+    {
+        id: 'feat-audit-filter-or-range-subsumption-mixed-bson',
+        kind: 'filter',
+        mainCollectionId: 'main',
+        collections:
+        {
+            main:
+            {
+                documents:
+                [
+                    { _id: 1, score: new Int32( 10 ), val: new Date( '2026-06-01T00:00:00.000Z' ) },
+                    { _id: 2, score: Decimal128.fromString( '25.5' ), val: 5 },
+                    { _id: 3, score: [ 5, 15 ], val: 15 },
+                    { _id: 4, score: '25', val: null },
+                    { _id: 5, score: 8 }
+                ]
+            }
+        },
+        filter:
+        {
+            $and :
+            [
+                {
+                    $or :
+                    [
+                        { score: { $gt: 20 } },
+                        { score: { $gte: 10 } }
+                    ]
+                },
+                {
+                    $or :
+                    [
+                        { val: { $gt: 10 } },
+                        { val: { $gt: new Date( '2026-01-01T00:00:00.000Z' ) } }
+                    ]
+                }
+            ]
+        },
+        options: { sort: { _id: 1 } },
+        observation: 'ordered-bson',
+        affectedTransformationIds: [ 'filter-optimization' ],
+        expectedEquivalent: true
+    },
+    {
+        id: 'feat-audit-contradiction-preserves-facet',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections:
+        {
+            main:
+            {
+                documents:
+                [
+                    { _id: 1, age: 30 },
+                    { _id: 2, age: 40 }
+                ]
+            }
+        },
+        pipeline:
+        [
+            { $match: { age: { $gt: 50, $lt: 20 } } },
+            {
+                $facet :
+                {
+                    items : [ { $limit: 5 } ],
+                    total : [ { $count: 'n' } ]
+                }
+            }
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: [ 'filter-optimization' ],
+        expectedEquivalent: true
+    },
+    {
+        id: 'feat-audit-contradiction-preserves-densify',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections:
+        {
+            main:
+            {
+                documents:
+                [
+                    { _id: 1, step: 10 }
+                ]
+            }
+        },
+        pipeline:
+        [
+            { $match: { _id: { $in: [] } } },
+            { $densify: { field: 'step', range: { step: 1, bounds: [ 0, 3 ] } } },
+            { $sort: { step: 1 } }
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: [ 'filter-optimization' ],
+        expectedEquivalent: true
+    },
+    {
+        id: 'feat-audit-lookup-unwind-include-array-index-barrier',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections:
+        {
+            main:
+            {
+                documents:
+                [
+                    { _id: 1, name: 'Alice' },
+                    { _id: 2, name: 'Bob' }
+                ]
+            },
+            orders:
+            {
+                documents:
+                [
+                    { _id: 101, customerId: 1, seq: 1, status: 'pending' },
+                    { _id: 102, customerId: 1, seq: 2, status: 'paid' },
+                    { _id: 103, customerId: 2, seq: 1, status: 'paid' }
+                ]
+            }
+        },
+        pipeline:
+        [
+            {
+                $lookup :
+                {
+                    from     : 'orders',
+                    let      : { cid: '$_id' },
+                    pipeline :
+                    [
+                        { $match: { $expr: { $eq: [ '$customerId', '$$cid' ] } } },
+                        { $sort: { seq: 1 } }
+                    ],
+                    as : 'orders'
+                }
+            },
+            { $unwind: { path: '$orders', includeArrayIndex: 'orderIdx' } },
+            { $match: { 'orders.status': 'paid' } },
+            { $sort: { _id: 1, orderIdx: 1 } }
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: [ 'lookup-delay', 'unwind-prefilter' ],
+        expectedEquivalent: true
+    },
+    {
+        id: 'feat-audit-lookup-match-size-before-unwind-barrier',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections:
+        {
+            main:
+            {
+                documents:
+                [
+                    { _id: 1, name: 'Alice' },
+                    { _id: 2, name: 'Bob' }
+                ]
+            },
+            orders:
+            {
+                documents:
+                [
+                    { _id: 101, customerId: 1, status: 'paid' },
+                    { _id: 102, customerId: 1, status: 'pending' },
+                    { _id: 103, customerId: 2, status: 'paid' }
+                ]
+            }
+        },
+        pipeline:
+        [
+            {
+                $lookup :
+                {
+                    from     : 'orders',
+                    let      : { cid: '$_id' },
+                    pipeline :
+                    [
+                        { $match: { $expr: { $eq: [ '$customerId', '$$cid' ] } } },
+                        { $sort: { _id: 1 } }
+                    ],
+                    as : 'orders'
+                }
+            },
+            {
+                $match :
+                {
+                    $and :
+                    [
+                        { orders: { $elemMatch: { status: 'paid' } } },
+                        { orders: { $size: 1 } }
+                    ]
+                }
+            },
+            { $unwind: '$orders' },
+            { $sort: { _id: 1 } }
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: [ 'lookup-delay' ],
+        expectedEquivalent: true
+    },
+    {
+        id: 'feat-audit-graphlookup-restrict-search-filter-opt',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections:
+        {
+            main:
+            {
+                documents:
+                [
+                    { _id: 1, name: 'CEO', active: true },
+                    { _id: 2, name: 'VP', reportsTo: 1, active: true },
+                    { _id: 3, name: 'InactiveDir', reportsTo: 1, active: false },
+                    { _id: 4, name: 'IC', reportsTo: 2, active: true },
+                    { _id: 5, name: 'OrphanIC', reportsTo: 3, active: true }
+                ]
+            }
+        },
+        pipeline:
+        [
+            {
+                $graphLookup :
+                {
+                    from                    : 'main',
+                    startWith               : '$reportsTo',
+                    connectFromField        : 'reportsTo',
+                    connectToField          : '_id',
+                    as                      : 'managers',
+                    restrictSearchWithMatch :
+                    {
+                        active : { $in: [ true ] },
+                        $and   : [ {} ]
+                    }
+                }
+            },
+            {
+                $addFields :
+                {
+                    managerIds : { $sortArray: { input: '$managers._id', sortBy: 1 } }
+                }
+            },
+            { $unset: 'managers' },
+            { $sort: { _id: 1 } }
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: [ 'filter-optimization' ],
+        expectedEquivalent: true
+    },
+    {
+        id: 'feat-audit-lookup-head-limit-firstn-arrayelemat-slice',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections:
+        {
+            main:
+            {
+                documents:
+                [
+                    { _id: 1, code: 'A' },
+                    { _id: 2, code: 'B' },
+                    { _id: 3, code: 'C' }
+                ]
+            },
+            items:
+            {
+                documents:
+                [
+                    { _id: 10, code: 'A', rank: 1, label: 'a1' },
+                    { _id: 11, code: 'A', rank: 2, label: 'a2' },
+                    { _id: 12, code: 'A', rank: 3, label: 'a3' },
+                    { _id: 13, code: 'A', rank: 4, label: 'a4' },
+                    { _id: 20, code: 'B', rank: 1, label: 'b1' }
+                ]
+            }
+        },
+        pipeline:
+        [
+            {
+                $lookup :
+                {
+                    from     : 'items',
+                    let      : { c: '$code' },
+                    pipeline :
+                    [
+                        { $match: { $expr: { $eq: [ '$code', '$$c' ] } } },
+                        { $sort: { rank: 1 } }
+                    ],
+                    as : 'items'
+                }
+            },
+            {
+                $project :
+                {
+                    _id    : 1,
+                    topTwo : { $firstN: { input: '$items', n: 2 } },
+                    second : { $arrayElemAt: [ '$items', 1 ] },
+                    window : { $slice: [ '$items', 1, 2 ] }
+                }
+            },
+            { $sort: { _id: 1 } }
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: [ 'lookup-delay' ],
+        expectedEquivalent: true
+    },
+    {
+        id: 'feat-audit-lookup-semijoin-and-antijoin-limit',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections:
+        {
+            main:
+            {
+                documents:
+                [
+                    { _id: 1, name: 'Alice', active: true },
+                    { _id: 2, name: 'Bob', active: true },
+                    { _id: 3, name: 'Carol', active: true },
+                    { _id: 4, name: 'Dave', active: false }
+                ]
+            },
+            orders:
+            {
+                documents:
+                [
+                    { _id: 101, customerId: 1 },
+                    { _id: 102, customerId: 1 },
+                    { _id: 103, customerId: 2 },
+                    { _id: 104, customerId: 4 }
+                ]
+            },
+            blocks:
+            {
+                documents:
+                [
+                    { _id: 201, customerId: 2 },
+                    { _id: 202, customerId: 2 }
+                ]
+            }
+        },
+        pipeline:
+        [
+            {
+                $lookup :
+                {
+                    from     : 'orders',
+                    let      : { cid: '$_id' },
+                    pipeline : [ { $match: { $expr: { $eq: [ '$customerId', '$$cid' ] } } } ],
+                    as       : 'orders'
+                }
+            },
+            { $match: { 'orders.0': { $exists: true }, active: true } },
+            { $unset: 'orders' },
+            {
+                $lookup :
+                {
+                    from     : 'blocks',
+                    let      : { cid: '$_id' },
+                    pipeline : [ { $match: { $expr: { $eq: [ '$customerId', '$$cid' ] } } } ],
+                    as       : 'blocks'
+                }
+            },
+            { $match: { blocks: [] } },
+            { $unset: 'blocks' },
+            { $sort: { _id: 1 } }
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: [ 'lookup-delay' ],
+        expectedEquivalent: true
+    },
+    {
+        id: 'feat-audit-facet-shared-conjunct-hoisting',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections:
+        {
+            main:
+            {
+                documents:
+                [
+                    { _id: 1, orgId: 'org-1', status: 'active', amount: 150 },
+                    { _id: 2, orgId: 'org-1', status: 'pending', amount: 250 },
+                    { _id: 3, orgId: 'org-2', status: 'active', amount: 500 },
+                    { _id: 4, orgId: 'org-1', status: 'active', amount: 50 }
+                ]
+            }
+        },
+        pipeline:
+        [
+            {
+                $facet :
+                {
+                    activeItems :
+                    [
+                        { $match: { orgId: 'org-1', status: 'active' } },
+                        { $sort: { _id: 1 } }
+                    ],
+                    highValueCount :
+                    [
+                        { $match: { orgId: 'org-1', amount: { $gte: 100 } } },
+                        { $count: 'total' }
+                    ]
+                }
+            }
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: [ 'facet-prefix-hoisting' ],
+        expectedEquivalent: true
+    },
+    {
+        id: 'feat-audit-limit-skip-empty-window-collapse',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections:
+        {
+            main:
+            {
+                documents:
+                [
+                    { _id: 1, score: 10 },
+                    { _id: 2, score: 20 },
+                    { _id: 3, score: 30 }
+                ]
+            }
+        },
+        pipeline:
+        [
+            { $sort: { _id: 1 } },
+            { $limit: 2 },
+            { $skip: 5 }
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: [ 'limit-skip-coalescing' ],
+        expectedEquivalent: true
+    },
+    {
+        id: 'feat-audit-redundant-downstream-unset-elimination',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections:
+        {
+            main:
+            {
+                documents:
+                [
+                    { _id: 1, name: 'Alice', secret: 's1', temp: 't1', dropLater: 1 },
+                    { _id: 2, name: 'Bob', dropLater: 2 }
+                ]
+            }
+        },
+        pipeline:
+        [
+            { $project: { name: 1, temp: 1, dropLater: 1 } },
+            { $unset: 'temp' },
+            { $sort: { _id: 1 } },
+            { $unset: [ 'secret', 'temp', 'dropLater' ] }
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: [ 'adjacent-project-merging' ],
+        expectedEquivalent: true
+    },
+    {
+        id: 'feat-audit-expression-size-map-nested-filter-let-prune',
+        kind: 'pipeline',
+        mainCollectionId: 'main',
+        collections:
+        {
+            main:
+            {
+                documents:
+                [
+                    { _id: 1, items: [ { qty: 1, price: 20 }, { qty: 3, price: 60 }, { qty: 0, price: 90 } ], bonus: 5 },
+                    { _id: 2, items: [], bonus: 10 }
+                ]
+            }
+        },
+        pipeline:
+        [
+            {
+                $project :
+                {
+                    _id        : 1,
+                    mappedSize :
+                    {
+                        $size :
+                        {
+                            $map :
+                            {
+                                input : '$items',
+                                as    : 'it',
+                                in    : { $add: [ '$$it.qty', 1 ] }
+                            }
+                        }
+                    },
+                    filtered :
+                    {
+                        $filter :
+                        {
+                            input :
+                            {
+                                $filter :
+                                {
+                                    input : '$items',
+                                    as    : 'it',
+                                    cond  : { $gt: [ '$$it.qty', 0 ] }
+                                }
+                            },
+                            as   : 'it',
+                            cond : { $gte: [ '$$it.price', 50 ] }
+                        }
+                    },
+                    letComputed :
+                    {
+                        $let :
+                        {
+                            vars :
+                            {
+                                unusedA : '$bonus',
+                                usedB   : { $multiply: [ '$bonus', 2 ] }
+                            },
+                            in : { $add: [ '$$usedB', 1 ] }
+                        }
+                    }
+                }
+            },
+            { $sort: { _id: 1 } }
+        ],
+        observation: 'ordered-bson',
+        affectedTransformationIds: [ 'expression-simplification' ],
+        expectedEquivalent: true
+    }
 ];
 
 export const candidateSemanticCases: readonly SemanticCase[] = [

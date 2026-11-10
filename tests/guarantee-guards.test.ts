@@ -92,12 +92,19 @@ describe( 'stageAddsFields', () =>
         expect( stageAddsFields( { $addFields: { a: 1 } } )).toBe( true );
         expect( stageAddsFields( { $set: { b: 2 } } )).toBe( true );
         expect( stageAddsFields( { $lookup: { from: 'c', as: 'items' } } )).toBe( true );
+        expect( stageAddsFields( { $graphLookup: { from: 'c', startWith: '$p', connectFromField: 'p', connectToField: '_id', as: 'ancestors' } } )).toBe( true );
+        expect( stageAddsFields( { $setWindowFields: { output: { rank: { $rank: {} } } } } )).toBe( true );
+        expect( stageAddsFields( { $fill: { output: { qty: { value: 0 } } } } )).toBe( true );
         expect( stageAddsFields( { $unwind: { path: '$items', includeArrayIndex: 'idx' } } )).toBe( true );
     });
 
     it( 'returns false for non-field-adding stages and edge cases', () =>
     {
         expect( stageAddsFields( { $addFields: {} } )).toBe( false );
+        expect( stageAddsFields( { $setWindowFields: 'invalid' } )).toBe( false );
+        expect( stageAddsFields( { $setWindowFields: { sortBy: { a: 1 } } } )).toBe( false );
+        expect( stageAddsFields( { $setWindowFields: { output: {} } } )).toBe( false );
+        expect( stageAddsFields( { $fill: { output: {} } } )).toBe( false );
         expect( stageAddsFields( { $unwind: '$items' } )).toBe( false );
         expect( stageAddsFields( { $unwind: { path: '$items' } } )).toBe( false );
         expect( stageAddsFields( { $unwind: { path: '$items', includeArrayIndex: '' } } )).toBe( false );

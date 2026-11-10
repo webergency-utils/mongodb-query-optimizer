@@ -14,7 +14,7 @@ import {
     ScopedDependencies,
     StageSemantics,
 } from '../analyzer/types';
-import { isPlainObject } from '../utils.js';
+import { hasSingleKey, isPlainObject } from '../utils.js';
 import {
     combineConjuncts,
     decomposeFilterIntoConjuncts,
@@ -196,26 +196,36 @@ function extractDirectAliases(
     return aliases;
 }
 
+const sortedAliasesCache = new WeakMap<ReadonlyMap<string, string>, ReadonlyArray<readonly [ string, string ]>>();
+
 function resolveAlias(
-    path: string,
-    aliases: ReadonlyMap<string, string>,
+    path    : string,
+    aliases : ReadonlyMap<string, string>
 ): AliasResolution | null
 {
-    const sortedAliases = Array.from(aliases.entries()).sort(
-        ([left], [right]) => right.length - left.length,
-    );
+    if( aliases.size === 0 ){ return null }
 
-    for (const [target, source] of sortedAliases)
+    let sortedAliases = sortedAliasesCache.get( aliases );
+
+    if( sortedAliases === undefined )
     {
-        if (path === target)
+        sortedAliases = Array.from( aliases.entries() ).sort(
+            ([ left ], [ right ]) => right.length - left.length
+        );
+        sortedAliasesCache.set( aliases, sortedAliases );
+    }
+
+    for( const [ target, source ] of sortedAliases )
+    {
+        if( path === target )
         {
             return { path: source };
         }
 
-        if (path.startsWith(`${target}.`))
+        if( path.startsWith( `${ target }.` ))
         {
             return {
-                path: `${source}${path.slice(target.length)}`,
+                path : `${ source }${ path.slice( target.length ) }`
             };
         }
     }
@@ -1249,7 +1259,6 @@ export function proveLookupSubpipelinePushdown(
 
     const unwindSpec = ( unwindStage as Record<string, unknown> ).$unwind;
     let unwindPath: string;
-    let indexField: string | undefined;
 
     if( typeof unwindSpec === 'string' )
     {
@@ -1266,17 +1275,13 @@ export function proveLookupSubpipelinePushdown(
             !unwindSpec.path.startsWith( '$' )
             || unwindSpec.path.length <= 1
             || unwindSpec.preserveNullAndEmptyArrays === true
+            || 'includeArrayIndex' in unwindSpec
         )
         {
             return null;
         }
 
         unwindPath = unwindSpec.path.slice( 1 );
-
-        if( typeof unwindSpec.includeArrayIndex === 'string' )
-        {
-            indexField = unwindSpec.includeArrayIndex;
-        }
     }
     else
     {
@@ -1309,21 +1314,10 @@ export function proveLookupSubpipelinePushdown(
     {
         const [ key, val ] = Object.entries( conjunct )[ 0 ]!;
 
-        if( indexField && ( key === indexField || key.startsWith( indexField + '.' )))
-        {
-            residual.push( conjunct );
-            continue;
-        }
-
         if( key.startsWith( prefix ))
         {
             const innerKey = key.slice( prefix.length );
             pushableToSub.push( { [ innerKey ]: val } );
-        }
-        else if( key === lookupSpec.as && isPlainObject( val ) && isPlainObject( val.$elemMatch ))
-        {
-            const elemConjuncts = decomposeFilterIntoConjuncts( val.$elemMatch as Record<string, unknown> );
-            pushableToSub.push( ...elemConjuncts );
         }
         else
         {
@@ -1397,12 +1391,6 @@ export function proveLookupSubpipelinePushdownAcrossSuffix(
             if( isUnwindForPath( stage, alias ))
             {
                 unwindStage = stage;
-                const entry = getSingleStageEntry( stage )!;
-                const spec = entry[ 1 ];
-                if( isPlainObject( spec ) && typeof spec.includeArrayIndex === 'string' )
-                {
-                    live.add( spec.includeArrayIndex );
-                }
                 continue;
             }
         }
@@ -1562,24 +1550,51 @@ function extractHeadLimitExpression( expr: unknown, alias: string ): number | nu
             : null;
     }
 
+    if( op === '$firstN' )
+    {
+        const spec = ( expr as Record<string, unknown> ).$firstN;
+
+        if( !isPlainObject( spec ) || Object.keys( spec ).length !== 2 ){ return null }
+
+        return (
+            isDirectAliasReference( spec.input, alias )
+            && typeof spec.n === 'number'
+            && Number.isSafeInteger( spec.n )
+            && spec.n > 0
+        )
+            ? spec.n
+            : null;
+    }
+
     if( op === '$arrayElemAt' )
     {
         const args = ( expr as Record<string, unknown> ).$arrayElemAt;
+
         if( !Array.isArray( args ) || args.length !== 2 ){ return null }
 
-        return isDirectAliasReference( args[ 0 ], alias ) && args[ 1 ] === 0
-            ? 1
+        const [ arrArg, idxArg ] = args;
+
+        return (
+            isDirectAliasReference( arrArg, alias )
+            && typeof idxArg === 'number'
+            && Number.isSafeInteger( idxArg )
+            && idxArg >= 0
+            && idxArg < Number.MAX_SAFE_INTEGER
+        )
+            ? idxArg + 1
             : null;
     }
 
     if( op === '$slice' )
     {
         const args = ( expr as Record<string, unknown> ).$slice;
+
         if( !Array.isArray( args ) || ( args.length !== 2 && args.length !== 3 )){ return null }
 
         if( args.length === 2 )
         {
             const [ arrArg, countArg ] = args;
+
             if(
                 isDirectAliasReference( arrArg, alias )
                 && typeof countArg === 'number'
@@ -1589,19 +1604,24 @@ function extractHeadLimitExpression( expr: unknown, alias: string ): number | nu
             {
                 return countArg;
             }
+
             return null;
         }
 
         const [ arrArg, skipArg, countArg ] = args;
+
         if(
             isDirectAliasReference( arrArg, alias )
-            && skipArg === 0
+            && typeof skipArg === 'number'
+            && Number.isSafeInteger( skipArg )
+            && skipArg >= 0
             && typeof countArg === 'number'
             && Number.isSafeInteger( countArg )
             && countArg > 0
+            && Number.isSafeInteger( skipArg + countArg )
         )
         {
-            return countArg;
+            return skipArg + countArg;
         }
     }
 
@@ -1725,6 +1745,94 @@ function extractStageHeadLimit(
     return null;
 }
 
+function isSemiJoinAliasPredicate( key: string, val: unknown, alias: string ): boolean
+{
+    if( key === `${ alias }.0` )
+    {
+        return (
+            isPlainObject( val )
+            && hasSingleKey( val )
+            && typeof val.$exists === 'boolean'
+        );
+    }
+
+    if( key !== alias )
+    {
+        return false;
+    }
+
+    if( Array.isArray( val ))
+    {
+        return val.length === 0;
+    }
+
+    if( !isPlainObject( val ) || !hasSingleKey( val ))
+    {
+        return false;
+    }
+
+    if( '$eq' in val || '$ne' in val )
+    {
+        const operand = '$eq' in val ? val.$eq : val.$ne;
+
+        return Array.isArray( operand ) && operand.length === 0;
+    }
+
+    return val.$size === 0;
+}
+
+function extractSemiJoinLimit(
+    followingStages : readonly unknown[],
+    alias           : string,
+    context         : GuaranteeContext
+): number | null
+{
+    if( followingStages.length < 2 ){ return null }
+
+    const matchStage = followingStages[ 0 ];
+    const discardStage = followingStages[ 1 ];
+
+    if(
+        !isMatchStage( matchStage )
+        || !isExactPathDiscardedByFollower( alias, discardStage )
+        || ( context.strictErrors && !isStageProvenErrorFree( discardStage ))
+    )
+    {
+        return null;
+    }
+
+    const matchSem = analyzeStage( matchStage );
+
+    if( !isSafeMatchSummary( matchSem ))
+    {
+        return null;
+    }
+
+    const conjuncts = decomposeFilterIntoConjuncts( matchStage.$match );
+    let sawSemiJoinCheck = false;
+
+    for( const conjunct of conjuncts )
+    {
+        const conjunctSem = analyzeStage({ $match: conjunct });
+
+        if( arePathsDisjoint( conjunctSem.dependencies.local, [ alias ] ))
+        {
+            continue;
+        }
+
+        const [ key, val ] = Object.entries( conjunct )[ 0 ]!;
+
+        if( !isSemiJoinAliasPredicate( key, val, alias ))
+        {
+            return null;
+        }
+
+        sawSemiJoinCheck = true;
+    }
+
+    return sawSemiJoinCheck ? 1 : null;
+}
+
 export function proveLookupLimitPushdown(
     lookupStage     : unknown,
     followingStages : readonly unknown[],
@@ -1801,6 +1909,23 @@ export function proveLookupLimitPushdown(
             $lookup: {
                 ...lookupSpec,
                 pipeline: pushLimitToSubpipeline( lookupSpec.pipeline, headLimit )
+            }
+        };
+
+        return { lookupStage: updatedLookup };
+    }
+
+    const semiJoinLimit = extractSemiJoinLimit( followingStages, lookupSpec.as, context );
+
+    if( semiJoinLimit !== null && !hasTerminalLimitAtMost( lookupSpec.pipeline, semiJoinLimit ))
+    {
+        const updatedLookup =
+        {
+            ...( lookupStage as Record<string, unknown> ),
+            $lookup:
+            {
+                ...lookupSpec,
+                pipeline : pushLimitToSubpipeline( lookupSpec.pipeline, semiJoinLimit )
             }
         };
 

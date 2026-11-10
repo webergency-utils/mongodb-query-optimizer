@@ -639,4 +639,112 @@ describe('optimizePipeline execution parity for facet prefix hoisting', () =>
         expect(optimizedResults[0].activeCount).toEqual([{ count: 4 }]);
         expect(optimizedResults[0].totalRevenue).toEqual([{ _id: null, sum: 650 }]);
     });
+
+    it( 'hoists shared top-level $match conjuncts across $facet branches and preserves execution parity', () =>
+    {
+        // Arrange
+        const partialPipeline =
+        [
+            {
+                $facet :
+                {
+                    highValue :
+                    [
+                        {
+                            $match :
+                            {
+                                $and :
+                                [
+                                    { orgId: 'org-1' },
+                                    { orgId: 'org-1' },
+                                    { revenue: { $gte: 200 } }
+                                ]
+                            }
+                        },
+                        { $count: 'count' }
+                    ],
+                    pendingOnly :
+                    [
+                        { $match: { orgId: 'org-1', status: 'pending' } },
+                        { $count: 'count' }
+                    ]
+                }
+            }
+        ];
+
+        const fullShiftOneBranchPipeline =
+        [
+            {
+                $facet :
+                {
+                    allOrg :
+                    [
+                        { $match: { orgId: 'org-1' } },
+                        { $count: 'count' }
+                    ],
+                    activeOrg :
+                    [
+                        { $match: { orgId: 'org-1', status: 'active' } },
+                        { $count: 'count' }
+                    ]
+                }
+            }
+        ];
+
+        // Act
+        const optimizedPartial = optimizePipeline( partialPipeline );
+        const optimizedFullShift = proveFacetPrefixHoisting( fullShiftOneBranchPipeline[ 0 ] );
+
+        // Assert
+        expect( optimizedPartial[ 0 ] ).toEqual({ $match: { orgId: 'org-1' } });
+        expect( runMockPipeline( tenantDataset, optimizedPartial )).toEqual(
+            runMockPipeline( tenantDataset, partialPipeline )
+        );
+
+        expect( optimizedFullShift ).toEqual({
+            hoistedStages   : [ { $match: { orgId: 'org-1' } } ],
+            simplifiedFacet :
+            {
+                $facet :
+                {
+                    allOrg    : [ { $count: 'count' } ],
+                    activeOrg : [ { $match: { status: 'active' } }, { $count: 'count' } ]
+                }
+            }
+        });
+
+        // Negative barriers: no shared conjuncts, > 64 conjuncts, unsafe $match, field-order-reading $match
+        expect( proveFacetPrefixHoisting({
+            $facet :
+            {
+                a : [ { $match: { orgId: 'org-1' } } ],
+                b : [ { $match: { status: 'active' } } ]
+            }
+        })).toBeNull();
+
+        const oversizedAnd = Array.from({ length: 65 }, ( _, i ) => ({ [ `f${ i }` ]: i }));
+        expect( proveFacetPrefixHoisting({
+            $facet :
+            {
+                a : [ { $match: { $and: oversizedAnd } } ],
+                b : [ { $match: { f0: 0, status: 'active' } } ]
+            }
+        })).toBeNull();
+
+        expect( proveFacetPrefixHoisting({
+            $facet :
+            {
+                a : [ { $match: { orgId: 'org-1', $expr: { $eq: [ '$$ROOT', { x: 1 } ] } } } ],
+                b : [ { $match: { orgId: 'org-1', status: 'active' } } ]
+            }
+        })).toBeNull();
+
+        expect( proveFacetPrefixHoisting({
+            $facet :
+            {
+                a : [ { $match: { orgId: 'org-1', $expr: { $gt: [ { $size: { $objectToArray: '$meta' } }, 0 ] } } } ],
+                b : [ { $match: { orgId: 'org-1', status: 'active' } } ]
+            }
+        })).toBeNull();
+    });
 });

@@ -233,6 +233,59 @@ function isErrorFreeDeterministicCondition( condExpr: unknown ): boolean
     );
 }
 
+function isErrorFreeDeterministicScoped( expr: unknown, varName: string ): boolean
+{
+    const summary = analyzeExpression
+    (
+        expr,
+        {
+            documentScope : 'local',
+            variables     : new Map([[ varName, { scope: 'local', wholeDocument: true } ]])
+        }
+    );
+
+    return (
+        !summary.unknown
+        && summary.determinism === 'deterministic'
+        && summary.errors === 'none-known'
+    );
+}
+
+function containsVariableReference( expr: unknown, varName: string ): boolean
+{
+    if( typeof expr === 'string' )
+    {
+        return expr === `$$${ varName }` || expr.startsWith( `$$${ varName }.` );
+    }
+
+    if( Array.isArray( expr ))
+    {
+        return expr.some(( item ) => containsVariableReference( item, varName ));
+    }
+
+    if( isPlainObject( expr ))
+    {
+        if( '$literal' in expr )
+        {
+            return false;
+        }
+
+        return Object.values( expr ).some(( val ) => containsVariableReference( val, varName ));
+    }
+
+    return false;
+}
+
+function isSimpleFilterSpec( spec: Record<string, unknown> ): boolean
+{
+    return (
+        'input' in spec
+        && 'cond' in spec
+        && Object.keys( spec ).every(( k ) => k === 'input' || k === 'cond' || k === 'as' )
+        && ( !( 'as' in spec ) || ( typeof spec.as === 'string' && spec.as.length > 0 ))
+    );
+}
+
 function deduplicateBooleanOperands( items: readonly unknown[] ): unknown[]
 {
     if( items.length <= 1 || items.length > MAX_ANALYZED_ARRAY_LENGTH )
@@ -942,6 +995,28 @@ export function simplifyExpression( expr: unknown ): unknown
                         return simplifyExpression({ $size: filterSpec.input });
                     }
                 }
+                else if( Object.keys( inner ).length === 1 && '$map' in inner && isPlainObject( inner.$map ))
+                {
+                    const mapSpec = inner.$map as Record<string, unknown>;
+
+                    if(
+                        'input' in mapSpec
+                        && 'in' in mapSpec
+                        && Object.keys( mapSpec ).every(( k ) => k === 'input' || k === 'in' || k === 'as' )
+                        && ( !( 'as' in mapSpec ) || ( typeof mapSpec.as === 'string' && mapSpec.as.length > 0 ))
+                    )
+                    {
+                        const mapVar = ( mapSpec.as as string | undefined ) ?? 'this';
+
+                        if(
+                            !containsVariableReference( mapSpec.in, 'REMOVE' )
+                            && isErrorFreeDeterministicScoped( mapSpec.in, mapVar )
+                        )
+                        {
+                            return simplifyExpression({ $size: mapSpec.input });
+                        }
+                    }
+                }
             }
         }
         else if( op === '$filter' && isPlainObject( simplified.$filter ))
@@ -965,6 +1040,38 @@ export function simplifyExpression( expr: unknown ): unknown
                 }
             }
 
+            if(
+                isSimpleFilterSpec( filterSpec )
+                && isPlainObject( filterSpec.input )
+                && hasSingleKey( filterSpec.input )
+                && isPlainObject( filterSpec.input.$filter )
+            )
+            {
+                const innerSpec = filterSpec.input.$filter as Record<string, unknown>;
+
+                if( isSimpleFilterSpec( innerSpec ))
+                {
+                    const outerAs = ( filterSpec.as as string | undefined ) ?? 'this';
+                    const innerAs = ( innerSpec.as as string | undefined ) ?? 'this';
+
+                    if( outerAs === innerAs && isErrorFreeDeterministicScoped( filterSpec.cond, outerAs ))
+                    {
+                        const fusedSpec: Record<string, unknown> =
+                        {
+                            input : innerSpec.input,
+                            cond  : simplifyExpression({ $and: [ innerSpec.cond, filterSpec.cond ] })
+                        };
+
+                        if( outerAs !== 'this' )
+                        {
+                            fusedSpec.as = outerAs;
+                        }
+
+                        return simplifyExpression({ $filter: fusedSpec });
+                    }
+                }
+            }
+
             if( isPlainObject( filterSpec.cond ))
             {
                 const condObj = filterSpec.cond as Record<string, unknown>;
@@ -980,6 +1087,38 @@ export function simplifyExpression( expr: unknown ): unknown
                             cond: condItems[ 0 ]
                         }
                     };
+                }
+            }
+        }
+        else if( op === '$let' && isPlainObject( simplified.$let ))
+        {
+            const letSpec = simplified.$let as Record<string, unknown>;
+
+            if( Object.keys( letSpec ).length === 2 && isPlainObject( letSpec.vars ) && 'in' in letSpec )
+            {
+                const varEntries = Object.entries( letSpec.vars );
+
+                if( varEntries.length >= 1 && varEntries.every(([ k ]) => k.length > 0 ))
+                {
+                    const keptEntries = varEntries.filter(
+                        ([ k, v ]) => containsVariableReference( letSpec.in, k ) || !isErrorFreeDeterministicCondition( v )
+                    );
+
+                    if( keptEntries.length === 0 )
+                    {
+                        return letSpec.in;
+                    }
+
+                    if( keptEntries.length < varEntries.length )
+                    {
+                        return {
+                            $let:
+                            {
+                                vars : Object.fromEntries( keptEntries ),
+                                in   : letSpec.in
+                            }
+                        };
+                    }
                 }
             }
         }

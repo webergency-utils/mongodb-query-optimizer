@@ -1,8 +1,10 @@
 import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
 import { PipelinePass } from './types.js';
-import {
+import
+{
     proveAdjacentAddFieldMerge
-} from './projection-proofs.js';
+}
+from './projection-proofs.js';
 
 export class AdjacentAddFieldMergingPass implements PipelinePass
 {
@@ -18,10 +20,7 @@ export class AdjacentAddFieldMergingPass implements PipelinePass
                 pipeline[ index ]
             );
 
-            if( !proof )
-            {
-                continue;
-            }
+            if( !proof ){ continue }
 
             const result = [ ...pipeline ];
             result.splice( index - 1, 2, proof.mergedStage );

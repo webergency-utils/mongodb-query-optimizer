@@ -26,7 +26,8 @@ export function isStageProvenErrorFree( stage: unknown ): boolean
 
 /**
  * Returns true if the stage adds new fields to existing documents.
- * Covers $addFields, $set, $lookup, and $unwind with includeArrayIndex.
+ * Covers $addFields, $set, $lookup, $graphLookup, $setWindowFields, $fill,
+ * and $unwind with includeArrayIndex.
  */
 export function stageAddsFields( stage: unknown ): boolean
 {
@@ -41,9 +42,16 @@ export function stageAddsFields( stage: unknown ): boolean
         return isPlainObject( value ) && Object.keys( value ).length > 0;
     }
 
-    if( operator === '$lookup' )
+    if( operator === '$lookup' || operator === '$graphLookup' )
     {
         return true;
+    }
+
+    if( operator === '$setWindowFields' || operator === '$fill' )
+    {
+        return isPlainObject( value )
+            && isPlainObject( value.output )
+            && Object.keys( value.output ).length > 0;
     }
 
     if( operator === '$unwind' )
