@@ -1605,6 +1605,168 @@ describe( 'production safe filter profile (8 active rules)', () =>
             'created.at': date
         });
     } );
+
+    it( 'simplifies $not over boolean $exists while preserving non-boolean or conflicting forms', () =>
+    {
+        // Arrange & Act & Assert
+        expect( optimizeFilter({ deletedAt: { $not: { $exists: true } } })).toEqual({
+            deletedAt : { $exists: false }
+        });
+        expect( optimizeFilter({ deletedAt: { $not: { $exists: false } } })).toEqual({
+            deletedAt : { $exists: true }
+        });
+        expect( optimizeFilter({ deletedAt: { $not: { $exists: 1 } } })).toEqual({
+            deletedAt : { $not: { $exists: 1 } }
+        });
+        expect( optimizeFilter({ deletedAt: { $exists: true, $not: { $exists: true } } })).toEqual({
+            deletedAt : { $exists: true, $not: { $exists: true } }
+        });
+    });
+
+    it( 'detects contradictions and prunes $in values across $and and top-level $ne / $nin constraints', () =>
+    {
+        // Arrange & Act & Assert
+        expect( optimizeFilter({
+            $and :
+            [
+                { status: { $ne: 'archived' } },
+                { status: 'archived' }
+            ]
+        })).toEqual({ status: { $in: [] } });
+
+        expect( optimizeFilter({
+            $and :
+            [
+                { status: { $nin: [ 'archived', 'deleted' ] } },
+                { status: { $eq: 'deleted' } }
+            ]
+        })).toEqual({ status: { $in: [] } });
+
+        expect( optimizeFilter({
+            $and :
+            [
+                { tags: { $ne: 'banned' } },
+                { tags: { $all: [ 'featured', 'banned' ] } }
+            ]
+        })).toEqual({ tags: { $in: [] } });
+
+        expect( optimizeFilter({
+            $and :
+            [
+                { _id: { $ne: 1 } },
+                { _id: 1 }
+            ]
+        })).toEqual({ _id: { $in: [] } });
+
+        expect( optimizeFilter({
+            $and :
+            [
+                { _id: { $ne: 1 } },
+                { _id: { $all: [ 1, 2 ] } }
+            ]
+        })).toEqual({ _id: { $in: [] } });
+
+        expect( optimizeFilter({
+            status : { $ne: 'archived' },
+            $and   :
+            [
+                { status: { $in: [ 'open', 'archived', 'closed' ] } },
+                { orgId: 'org-1' }
+            ]
+        })).toEqual({
+            status : { $ne: 'archived' },
+            orgId  : 'org-1',
+            $and   : [ { status: { $in: [ 'open', 'closed' ] } } ]
+        });
+
+        expect( optimizeFilter({
+            $and :
+            [
+                { status: { $nin: [ 'open', 'closed' ] } },
+                { status: { $in: [ 'open', 'closed' ] } }
+            ]
+        })).toEqual({ status: { $in: [] } });
+
+        // Preserves regex elements inside $in and $nin without pruning
+        const regexFilter =
+        {
+            $and :
+            [
+                { code: { $ne: 'abc' } },
+                { code: { $in: [ /abc/, 'def' ] } }
+            ]
+        };
+        expect( optimizeFilter( regexFilter )).toEqual({
+            code : { $ne: 'abc' },
+            $and : [ { code: { $in: [ /abc/, 'def' ] } } ]
+        });
+    });
+
+    it( 'subsumes redundant one-sided numeric and Date range branches inside $or', () =>
+    {
+        // Arrange
+        const d1 = new Date( '2026-01-01T00:00:00.000Z' );
+        const d2 = new Date( '2026-06-01T00:00:00.000Z' );
+
+        // Act & Assert
+        expect( optimizeFilter({
+            $or :
+            [
+                { age: { $gt: 20 } },
+                { age: { $gte: 10 } }
+            ]
+        })).toEqual({ age: { $gte: 10 } });
+
+        expect( optimizeFilter({
+            $or :
+            [
+                { age: { $gt: 10 } },
+                { age: { $gte: 10 } },
+                { role: 'admin' }
+            ]
+        })).toEqual({
+            $or :
+            [
+                { age: { $gte: 10 } },
+                { role: 'admin' }
+            ]
+        });
+
+        expect( optimizeFilter({
+            $or :
+            [
+                { score: { $lt: 10 } },
+                { score: { $lte: 20 } }
+            ]
+        })).toEqual({ score: { $lte: 20 } });
+
+        expect( optimizeFilter({
+            $or :
+            [
+                { score: { $lt: 20 } },
+                { score: { $lte: 20 } }
+            ]
+        })).toEqual({ score: { $lte: 20 } });
+
+        expect( optimizeFilter({
+            $or :
+            [
+                { createdAt: { $gt: d2 } },
+                { createdAt: { $gt: d1 } }
+            ]
+        })).toEqual({ createdAt: { $gt: d1 } });
+
+        // Never cross-subsumes numeric vs Date bounds (separate BSON type brackets)
+        const crossTypeOr =
+        {
+            $or :
+            [
+                { val: { $gt: 10 } },
+                { val: { $gt: d1 } }
+            ]
+        };
+        expect( optimizeFilter( crossTypeOr )).toEqual( crossTypeOr );
+    });
 } );
 
 

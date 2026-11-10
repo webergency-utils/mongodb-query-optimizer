@@ -1,8 +1,16 @@
 import { analyzePipeline, analyzeStage } from '../analyzer/semantics.js';
 import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
-import { isEqual, isPlainObject } from '../utils.js';
+import { containsValue, isEqual, isPlainObject, MAX_ANALYZED_ARRAY_LENGTH } from '../utils.js';
 import { stageReadsFieldOrder } from './guarantee-guards.js';
-import { getSingleStageEntry, getStageSpec, isMatchStage } from './helpers.js';
+import
+{
+    combineConjuncts,
+    decomposeFilterIntoConjuncts,
+    getSingleStageEntry,
+    getStageSpec,
+    isMatchStage
+}
+from './helpers.js';
 import { isSafeMatchSummary } from './movement-proofs.js';
 import
 {
@@ -158,6 +166,63 @@ export function proveFacetPrefixHoisting(
         for( const name of branchNames )
         {
             branches[ name ]!.shift();
+        }
+    }
+
+    const canSplitLeadingMatches = branchNames.every(( name ) =>
+    {
+        const firstStage = branches[ name ]![ 0 ];
+
+        return (
+            isMatchStage( firstStage )
+            && isEligibleHoistStage( firstStage, context )
+            && isSafeMatchSummary( analyzeStage( firstStage ))
+            && !stageReadsFieldOrder( firstStage )
+        );
+    });
+
+    if( canSplitLeadingMatches )
+    {
+        const branchConjuncts = branchNames.map(
+            ( name ) => decomposeFilterIntoConjuncts( branches[ name ]![ 0 ].$match )
+        );
+
+        if( branchConjuncts.every(( list ) => list.length <= MAX_ANALYZED_ARRAY_LENGTH ))
+        {
+            const commonConjuncts: Record<string, unknown>[] = [];
+
+            for( const conjunct of branchConjuncts[ 0 ]! )
+            {
+                if(
+                    !containsValue( commonConjuncts, conjunct )
+                    && branchConjuncts.every(( list, idx ) => idx === 0 || containsValue( list, conjunct ))
+                )
+                {
+                    commonConjuncts.push( conjunct );
+                }
+            }
+
+            if( commonConjuncts.length > 0 )
+            {
+                hoistedStages.push({ $match: combineConjuncts( commonConjuncts ) });
+
+                for( let i = 0; i < branchNames.length; i++ )
+                {
+                    const name = branchNames[ i ]!;
+                    const remaining = branchConjuncts[ i ]!.filter(
+                        ( conjunct ) => !containsValue( commonConjuncts, conjunct )
+                    );
+
+                    if( remaining.length === 0 )
+                    {
+                        branches[ name ]!.shift();
+                    }
+                    else
+                    {
+                        branches[ name ]![ 0 ] = { $match: combineConjuncts( remaining ) };
+                    }
+                }
+            }
         }
     }
 

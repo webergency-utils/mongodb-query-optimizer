@@ -727,6 +727,217 @@ export const mixedShapeDifferentialCases: readonly MixedShapeDifferentialCase[] 
         observation: 'ordered-bson',
         expectedOriginalOutcome: 'success',
     },
+    {
+        id                      : 'mixed-shape-audit-filter-rules-and-graphlookup',
+        description             : 'filter-optimization simplifies $not-$exists, cross-$and negations, $or range subsumption, and $graphLookup.restrictSearchWithMatch across polymorphic shapes',
+        passId                  : 'filter-optimization',
+        mainCollectionId        : 'main',
+        collections             : { main: { documents: standardMixedShapeDocs } },
+        pipeline                :
+        [
+            { $sort: { _id: 1 } },
+            {
+                $match :
+                {
+                    val    : { $not: { $exists: false } },
+                    status : { $ne: 'archived' },
+                    $and   :
+                    [
+                        { status: { $in: [ 'active', 'archived', 'inactive' ] } },
+                        {
+                            $or :
+                            [
+                                { rank: { $gt: 4 } },
+                                { rank: { $gte: 1 } }
+                            ]
+                        }
+                    ]
+                }
+            },
+            {
+                $graphLookup :
+                {
+                    from                    : 'main',
+                    startWith               : '$rank',
+                    connectFromField        : 'rank',
+                    connectToField          : '_id',
+                    as                      : 'peers',
+                    restrictSearchWithMatch : { status: { $in: [ 'active' ] } }
+                }
+            },
+            { $addFields: { peerIds: { $sortArray: { input: '$peers._id', sortBy: 1 } } } },
+            { $unset: 'peers' }
+        ],
+        observation             : 'ordered-bson',
+        expectedOriginalOutcome : 'success'
+    },
+    {
+        id                      : 'mixed-shape-audit-lookup-semijoin-and-head-limits',
+        description             : 'lookup-delay pushes semi-join $limit: 1 and $firstN / $arrayElemAt / $slice head limits across polymorphic shapes',
+        passId                  : 'lookup-delay',
+        mainCollectionId        : 'main',
+        collections             :
+        {
+            main    : { documents: standardMixedShapeDocs },
+            foreign : { documents: foreignLookupDocs }
+        },
+        pipeline                :
+        [
+            { $sort: { _id: 1 } },
+            {
+                $lookup :
+                {
+                    from     : 'foreign',
+                    let      : { fid: '$foreignId' },
+                    pipeline : [ { $match: { $expr: { $eq: [ '$_id', '$$fid' ] } } } ],
+                    as       : 'semi'
+                }
+            },
+            { $match: { 'semi.0': { $exists: true } } },
+            { $unset: 'semi' },
+            {
+                $lookup :
+                {
+                    from     : 'foreign',
+                    pipeline : [ { $sort: { _id: 1 } } ],
+                    as       : 'allForeign'
+                }
+            },
+            {
+                $project :
+                {
+                    _id     : 1,
+                    val     : 1,
+                    headTwo : { $firstN: { input: '$allForeign', n: 2 } },
+                    second  : { $arrayElemAt: [ '$allForeign', 1 ] },
+                    sliced  : { $slice: [ '$allForeign', 1, 2 ] }
+                }
+            }
+        ],
+        observation             : 'ordered-bson',
+        expectedOriginalOutcome : 'success'
+    },
+    {
+        id                      : 'mixed-shape-audit-facet-shared-conjuncts',
+        description             : 'facet-prefix-hoisting hoists shared $match conjuncts across $facet branches over polymorphic documents',
+        passId                  : 'facet-prefix-hoisting',
+        mainCollectionId        : 'main',
+        collections             : { main: { documents: standardMixedShapeDocs } },
+        pipeline                :
+        [
+            {
+                $facet :
+                {
+                    activeLow :
+                    [
+                        { $match: { status: 'active', rank: { $lt: 4 } } },
+                        { $sort: { _id: 1 } }
+                    ],
+                    activeHigh :
+                    [
+                        { $match: { status: 'active', rank: { $gte: 4 } } },
+                        { $sort: { _id: 1 } }
+                    ]
+                }
+            }
+        ],
+        observation             : 'ordered-bson',
+        expectedOriginalOutcome : 'success'
+    },
+    {
+        id                      : 'mixed-shape-audit-limit-skip-empty-window',
+        description             : 'limit-skip-coalescing collapses limit followed by skip >= limit to empty stream across polymorphic shapes',
+        passId                  : 'limit-skip-coalescing',
+        mainCollectionId        : 'main',
+        collections             : { main: { documents: standardMixedShapeDocs } },
+        pipeline                :
+        [
+            { $sort: { _id: 1 } },
+            { $limit: 3 },
+            { $skip: 3 }
+        ],
+        observation             : 'ordered-bson',
+        expectedOriginalOutcome : 'success'
+    },
+    {
+        id                      : 'mixed-shape-audit-redundant-downstream-unset',
+        description             : 'adjacent-project-merging shrinks redundant downstream $unset while preserving strict field order across polymorphic shapes',
+        passId                  : 'adjacent-project-merging',
+        mainCollectionId        : 'main',
+        collections             : { main: { documents: standardMixedShapeDocs } },
+        pipeline                :
+        [
+            { $sort: { _id: 1 } },
+            { $unset: 'foreignId' },
+            { $match: { rank: { $gte: 0 } } },
+            { $unset: [ 'foreignId', 'status' ] }
+        ],
+        observation             : 'ordered-bson',
+        expectedOriginalOutcome : 'success'
+    },
+    {
+        id                      : 'mixed-shape-audit-expression-simplifications',
+        description             : 'expression-simplification folds $size-over-$map, nested $filter, and dead $let vars across polymorphic shapes',
+        passId                  : 'expression-simplification',
+        mainCollectionId        : 'main',
+        collections             : { main: { documents: standardMixedShapeDocs } },
+        pipeline                :
+        [
+            { $sort: { _id: 1 } },
+            {
+                $addFields :
+                {
+                    safeArr : { $cond: [ { $isArray: '$val' }, '$val', [] ] }
+                }
+            },
+            {
+                $project :
+                {
+                    _id     : 1,
+                    val     : 1,
+                    arrSize :
+                    {
+                        $size :
+                        {
+                            $map :
+                            {
+                                input : '$safeArr',
+                                as    : 'el',
+                                in    : { $ifNull: [ '$$el', null ] }
+                            }
+                        }
+                    },
+                    filtered :
+                    {
+                        $filter :
+                        {
+                            input :
+                            {
+                                $filter :
+                                {
+                                    input : '$safeArr',
+                                    as    : 'el',
+                                    cond  : { $ne: [ '$$el', null ] }
+                                }
+                            },
+                            as   : 'el',
+                            cond : { $ne: [ '$$el', false ] }
+                        }
+                    },
+                    computed :
+                    {
+                        $let :
+                        {
+                            vars : { deadVar: '$rank', liveVar: { $add: [ '$rank', 1 ] } },
+                            in   : '$$liveVar'
+                        }
+                    }
+                }
+            }
+        ],
+        observation             : 'ordered-bson',
+        expectedOriginalOutcome : 'success'
+    },
     ...heuristicTopKHardeningCases(),
 ];
 

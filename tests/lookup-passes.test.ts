@@ -1,16 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { analyzeStage } from '../src/analyzer/semantics.js';
 import { optimizePipeline } from './helpers/pre-gate-optimizer.js';
-import {
+import
+{
     proveLookupDelayAcrossStage,
     proveLookupLimitPushdown,
     proveLookupMatchSplit,
     proveLookupSubpipelineFieldPruning,
     proveLookupSubpipelinePushdown,
+    proveLookupSubpipelinePushdownAcrossSuffix,
     proveMatchPushdownAcrossStage,
     proveRedundantLookupElimination,
-    proveRedundantLookupEliminationAcrossSuffix,
-} from '../src/passes/movement-proofs.js';
+    proveRedundantLookupEliminationAcrossSuffix
+}
+from '../src/passes/movement-proofs.js';
 import { LookupDelayPass } from '../src/passes/lookup-delay.js';
 import {
     optimizePipelineWithCandidateProfile,
@@ -1252,81 +1255,92 @@ describe('proveLookupSubpipelinePushdown', () =>
         });
     });
 
-    it('pushes subpipeline filter and retains residual for non-alias conditions and includeArrayIndex', () =>
+    it( 'pushes subpipeline filter with residual for non-alias conditions and rejects includeArrayIndex', () =>
     {
-        const lookup = {
-            $lookup: {
-                from: 'orders',
-                as: 'orders',
-                pipeline: [],
-            },
+        const lookup =
+        {
+            $lookup :
+            {
+                from     : 'orders',
+                as       : 'orders',
+                pipeline : []
+            }
         };
-        const unwind = {
-            $unwind: {
-                path: '$orders',
-                includeArrayIndex: 'orderIdx',
-            },
+        const unwindWithIndex =
+        {
+            $unwind :
+            {
+                path              : '$orders',
+                includeArrayIndex : 'orderIdx'
+            }
         };
-        const match = {
-            $match: {
-                'orders.status': 'completed',
-                customerActive: true,
-                orderIdx: 0,
-            },
+        const matchWithIndex =
+        {
+            $match :
+            {
+                'orders.status' : 'completed',
+                customerActive  : true,
+                orderIdx        : 0
+            }
         };
 
-        const proof = proveLookupSubpipelinePushdown(lookup, unwind, match);
-        expect(proof).not.toBeNull();
-        expect(proof?.lookupStage).toEqual({
-            $lookup: {
-                from: 'orders',
-                as: 'orders',
-                pipeline: [
-                    { $match: { status: 'completed' } },
-                ],
-            },
+        // Filtering early in subpipeline would shift orderIdx values
+        expect( proveLookupSubpipelinePushdown( lookup, unwindWithIndex, matchWithIndex )).toBeNull();
+
+        const unwindWithoutIndex =
+        {
+            $unwind :
+            {
+                path                       : '$orders',
+                preserveNullAndEmptyArrays : false
+            }
+        };
+        const match =
+        {
+            $match :
+            {
+                'orders.status' : 'completed',
+                customerActive  : true
+            }
+        };
+
+        const proof = proveLookupSubpipelinePushdown( lookup, unwindWithoutIndex, match );
+
+        expect( proof ).not.toBeNull();
+        expect( proof?.lookupStage ).toEqual({
+            $lookup :
+            {
+                from     : 'orders',
+                as       : 'orders',
+                pipeline : [ { $match: { status: 'completed' } } ]
+            }
         });
-        expect(proof?.residualStage).toEqual({
-            $match: {
-                customerActive: true,
-                orderIdx: 0,
-            },
+        expect( proof?.residualStage ).toEqual({
+            $match : { customerActive: true }
         });
     });
 
-    it('pushes $elemMatch on alias into subpipeline', () =>
+    it( 'does not push $elemMatch on unwound alias into subpipeline because unwound element is not an array', () =>
     {
-        const lookup = {
-            $lookup: {
-                from: 'orders',
-                as: 'orders',
-                pipeline: [],
-            },
+        const lookup =
+        {
+            $lookup :
+            {
+                from     : 'orders',
+                as       : 'orders',
+                pipeline : []
+            }
         };
         const unwind = { $unwind: '$orders' };
-        const match = {
-            $match: {
-                orders: { $elemMatch: { status: 'completed', total: { $gt: 50 } } },
-            },
+        const match =
+        {
+            $match :
+            {
+                orders : { $elemMatch: { status: 'completed', total: { $gt: 50 } } }
+            }
         };
 
-        const proof = proveLookupSubpipelinePushdown(lookup, unwind, match);
-        expect(proof).not.toBeNull();
-        expect(proof?.lookupStage).toEqual({
-            $lookup: {
-                from: 'orders',
-                as: 'orders',
-                pipeline: [
-                    {
-                        $match: {
-                            status: 'completed',
-                            total: { $gt: 50 },
-                        },
-                    },
-                ],
-            },
-        });
-        expect(proof?.residualStage).toBeUndefined();
+        expect( proveLookupSubpipelinePushdown( lookup, unwind, match )).toBeNull();
     });
 
     it('retains conditions directly on alias field when not a valid $elemMatch', () =>
@@ -1439,74 +1453,81 @@ describe('LookupDelayPass mixed match splitting and subpipeline pushdown', () =>
         ]);
     });
 
-    it('pushes filter into subpipeline when match stage precedes unwind', () =>
+    it( 'does not push match on alias array into subpipeline when match precedes unwind', () =>
     {
-        const pipeline = [
+        const pipeline =
+        [
             {
-                $lookup: {
-                    from: 'orders',
-                    as: 'orders',
-                    pipeline: [{ $sort: { date: -1 } }],
-                },
+                $lookup :
+                {
+                    from     : 'orders',
+                    as       : 'orders',
+                    pipeline : [ { $sort: { date: -1 } } ]
+                }
             },
             {
-                $match: {
-                    orders: { $elemMatch: { status: 'completed' } },
-                },
+                $match :
+                {
+                    orders : { $elemMatch: { status: 'completed' } }
+                }
             },
-            { $unwind: '$orders' },
+            { $unwind: '$orders' }
         ];
 
-        const result = pass.execute(pipeline);
-        expect(result).toEqual([
-            {
-                $lookup: {
-                    from: 'orders',
-                    as: 'orders',
-                    pipeline: [
-                        { $sort: { date: -1 } },
-                        { $match: { status: 'completed' } },
-                    ],
-                },
-            },
-            { $unwind: '$orders' },
-        ]);
+        const result = pass.execute( pipeline );
+
+        expect( result ).toBe( pipeline );
     });
 
-    it('splits disjoint conjuncts before lookup and pushes alias filter into subpipeline when match precedes unwind', () =>
+    it( 'splits disjoint conjuncts before lookup while keeping alias array predicates intact before unwind', () =>
     {
-        const pipeline = [
+        const pipeline =
+        [
             {
-                $lookup: {
-                    from: 'orders',
-                    as: 'orders',
-                    pipeline: [],
-                },
+                $lookup :
+                {
+                    from     : 'orders',
+                    as       : 'orders',
+                    pipeline : []
+                }
             },
             {
-                $match: {
-                    $and: [
+                $match :
+                {
+                    $and :
+                    [
                         { orders: { $elemMatch: { status: 'completed' } } },
                         { orders: { $size: 1 } },
-                        { country: 'US' },
-                    ],
-                },
+                        { country: 'US' }
+                    ]
+                }
             },
-            { $unwind: '$orders' },
+            { $unwind: '$orders' }
         ];
 
-        const result = pass.execute(pipeline);
-        expect(result).toEqual([
+        const result = pass.execute( pipeline );
+
+        expect( result ).toEqual([
             { $match: { country: 'US' } },
             {
-                $lookup: {
-                    from: 'orders',
-                    as: 'orders',
-                    pipeline: [{ $match: { status: 'completed' } }],
-                },
+                $lookup :
+                {
+                    from     : 'orders',
+                    as       : 'orders',
+                    pipeline : []
+                }
             },
-            { $match: { orders: { $size: 1 } } },
-            { $unwind: '$orders' },
+            {
+                $match :
+                {
+                    $and :
+                    [
+                        { orders: { $elemMatch: { status: 'completed' } } },
+                        { orders: { $size: 1 } }
+                    ]
+                }
+            },
+            { $unwind: '$orders' }
         ]);
     });
 });
@@ -1840,7 +1861,19 @@ describe('proveLookupLimitPushdown and LookupDelayPass limit pushdown', () =>
         expect(proveLookupLimitPushdown(lookup, [{ $set: { other: 1 } }])).toBeNull();
         expect(proveLookupLimitPushdown(lookup, [{ $set: { 'user.name': 1 } }])).toBeNull();
         expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $size: '$user' } } }])).toBeNull();
-        expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $arrayElemAt: ['$user', 1] } } }])).toBeNull();
+        expect( proveLookupLimitPushdown( lookup, [ { $set: { user: { $arrayElemAt: [ '$user', 1 ] } } } ] )).toEqual({
+            lookupStage :
+            {
+                $lookup :
+                {
+                    from     : 'users',
+                    as       : 'user',
+                    pipeline : [ { $limit: 2 } ]
+                }
+            }
+        });
+        expect( proveLookupLimitPushdown( lookup, [ { $set: { user: { $arrayElemAt: [ '$user', -1 ] } } } ] )).toBeNull();
+        expect( proveLookupLimitPushdown( lookup, [ { $set: { user: { $arrayElemAt: [ '$user', Number.MAX_SAFE_INTEGER ] } } } ] )).toBeNull();
         expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $arrayElemAt: ['$user'] } } }])).toBeNull();
         expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $first: '$other' } } }])).toBeNull();
         expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $first: '$user.name' } } }])).toBeNull();
@@ -1896,7 +1929,19 @@ describe('proveLookupLimitPushdown and LookupDelayPass limit pushdown', () =>
             }
         });
         expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $slice: ['$user', -2] } } }])).toBeNull();
-        expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $slice: ['$user', 1, 5] } } }])).toBeNull();
+        expect( proveLookupLimitPushdown( lookup, [ { $set: { user: { $slice: [ '$user', 1, 5 ] } } } ] )).toEqual({
+            lookupStage :
+            {
+                $lookup :
+                {
+                    from     : 'users',
+                    as       : 'user',
+                    pipeline : [ { $limit: 6 } ]
+                }
+            }
+        });
+        expect( proveLookupLimitPushdown( lookup, [ { $set: { user: { $slice: [ '$user', -1, 5 ] } } } ] )).toBeNull();
+        expect( proveLookupLimitPushdown( lookup, [ { $set: { user: { $slice: [ '$user', Number.MAX_SAFE_INTEGER, 1 ] } } } ] )).toBeNull();
         expect(proveLookupLimitPushdown(lookup, [{ $set: { user: { $slice: ['$$CURRENT.user', 0, 4] } } }])).toEqual({
             lookupStage: {
                 $lookup: {
@@ -2183,21 +2228,32 @@ describe('movement sort question', () =>
         });
 
         // Subpipeline $match pushdown across $unwind + intermediate stage + $match (full & partial)
-        const fullSuffixPipeline = [
+        const indexedUnwindPipeline =
+        [
             pipelineLookup,
             { $unwind: { path: '$orders', includeArrayIndex: 'orderIdx' } },
             { $addFields: { localFlag: true } },
             { $match: { 'orders.status': 'paid' } }
         ];
-        expect(pass.execute(fullSuffixPipeline)).toEqual([
+        expect( pass.execute( indexedUnwindPipeline )).toBe( indexedUnwindPipeline );
+
+        const fullSuffixPipeline =
+        [
+            pipelineLookup,
+            { $unwind: { path: '$orders' } },
+            { $addFields: { localFlag: true } },
+            { $match: { 'orders.status': 'paid' } }
+        ];
+        expect( pass.execute( fullSuffixPipeline )).toEqual([
             {
-                $lookup: {
-                    from: 'orders',
-                    as: 'orders',
-                    pipeline: [{ $match: { status: 'paid' } }]
+                $lookup :
+                {
+                    from     : 'orders',
+                    as       : 'orders',
+                    pipeline : [ { $match: { status: 'paid' } } ]
                 }
             },
-            { $unwind: { path: '$orders', includeArrayIndex: 'orderIdx' } },
+            { $unwind: { path: '$orders' } },
             { $addFields: { localFlag: true } }
         ]);
 
@@ -2812,6 +2868,122 @@ describe('movement sort question', () =>
                 { $group: { _id: '$dept', loc: { $first: '$loc' } } }
             ]
         )).toBeNull();
+    });
+
+    it( 'pushes head limits for $firstN / $arrayElemAt / $slice and semi-join / anti-join $limit: 1', () =>
+    {
+        const lookup = { $lookup: { from: 'users', as: 'user', pipeline: [] } };
+        const cappedLookup = { $lookup: { from: 'users', as: 'user', pipeline: [ { $limit: 1 } ] } };
+
+        // $firstN positive + rejection branches
+        expect( proveLookupLimitPushdown(
+            lookup,
+            [ { $set: { user: { $firstN: { input: '$user', n: 3 } } } } ]
+        )).toEqual({
+            lookupStage :
+            {
+                $lookup :
+                {
+                    from     : 'users',
+                    as       : 'user',
+                    pipeline : [ { $limit: 3 } ]
+                }
+            }
+        });
+
+        expect( proveLookupLimitPushdown( lookup, [ { $set: { user: { $firstN: '$user' } } } ] )).toBeNull();
+        expect( proveLookupLimitPushdown( lookup, [ { $set: { user: { $firstN: { input: '$user', n: 3, extra: 1 } } } } ] )).toBeNull();
+        expect( proveLookupLimitPushdown( lookup, [ { $set: { user: { $firstN: { input: '$user.sub', n: 3 } } } } ] )).toBeNull();
+        expect( proveLookupLimitPushdown( lookup, [ { $set: { user: { $firstN: { input: '$user', n: '3' } } } } ] )).toBeNull();
+        expect( proveLookupLimitPushdown( lookup, [ { $set: { user: { $firstN: { input: '$user', n: 1.5 } } } } ] )).toBeNull();
+        expect( proveLookupLimitPushdown( lookup, [ { $set: { user: { $firstN: { input: '$user', n: 0 } } } } ] )).toBeNull();
+
+        // Additional $arrayElemAt & $slice rejection branches
+        expect( proveLookupLimitPushdown( lookup, [ { $set: { user: { $arrayElemAt: '$user' } } } ] )).toBeNull();
+        expect( proveLookupLimitPushdown( lookup, [ { $set: { user: { $arrayElemAt: [ '$user.sub', 0 ] } } } ] )).toBeNull();
+        expect( proveLookupLimitPushdown( lookup, [ { $set: { user: { $arrayElemAt: [ '$user', '0' ] } } } ] )).toBeNull();
+        expect( proveLookupLimitPushdown( lookup, [ { $set: { user: { $arrayElemAt: [ '$user', 1.5 ] } } } ] )).toBeNull();
+        expect( proveLookupLimitPushdown( lookup, [ { $set: { user: { $slice: [ '$user', '2' ] } } } ] )).toBeNull();
+        expect( proveLookupLimitPushdown( lookup, [ { $set: { user: { $slice: [ '$user', 1.5 ] } } } ] )).toBeNull();
+        expect( proveLookupLimitPushdown( lookup, [ { $set: { user: { $slice: [ '$user.sub', 0, 2 ] } } } ] )).toBeNull();
+        expect( proveLookupLimitPushdown( lookup, [ { $set: { user: { $slice: [ '$user', '0', 2 ] } } } ] )).toBeNull();
+        expect( proveLookupLimitPushdown( lookup, [ { $set: { user: { $slice: [ '$user', 0.5, 2 ] } } } ] )).toBeNull();
+        expect( proveLookupLimitPushdown( lookup, [ { $set: { user: { $slice: [ '$user', 0, '2' ] } } } ] )).toBeNull();
+        expect( proveLookupLimitPushdown( lookup, [ { $set: { user: { $slice: [ '$user', 0, 1.5 ] } } } ] )).toBeNull();
+        expect( proveLookupLimitPushdown( lookup, [ { $set: { user: { $slice: [ '$user', 0, 0 ] } } } ] )).toBeNull();
+        expect( proveLookupLimitPushdown( lookup, [ { $set: { user: { $slice: [ '$user', 1, 2, 3 ] } } } ] )).toBeNull();
+
+        // Semi-join and anti-join $limit: 1 pushdown when alias is discarded immediately after $match
+        const semiJoinPredicates =
+        [
+            { 'user.0': { $exists: true } },
+            { 'user.0': { $exists: false } },
+            { user: [] },
+            { user: { $eq: [] } },
+            { user: { $ne: [] } },
+            { user: { $size: 0 } },
+            { active: true, 'user.0': { $exists: true } }
+        ];
+
+        for( const filter of semiJoinPredicates )
+        {
+            expect( proveLookupLimitPushdown(
+                lookup,
+                [ { $match: filter }, { $unset: 'user' } ]
+            )).toEqual({
+                lookupStage : cappedLookup
+            });
+        }
+
+        // Semi-join rejection barriers
+        expect( proveLookupLimitPushdown( cappedLookup, [ { $match: { 'user.0': { $exists: true } } }, { $unset: 'user' } ] )).toBeNull();
+        expect( proveLookupLimitPushdown( lookup, [ { $match: { 'user.0': { $exists: true } } } ] )).toBeNull();
+        expect( proveLookupLimitPushdown( lookup, [ { $match: { 'user.0': { $exists: true } } }, { $limit: 5 } ] )).toBeNull();
+        expect( proveLookupLimitPushdown(
+            lookup,
+            [
+                { $match: { 'user.0': { $exists: true } } },
+                { $replaceWith: { kept: { $toInt: '$raw' } } }
+            ],
+            { strictFieldOrder: false, strictErrors: true }
+        )).toBeNull();
+        expect( proveLookupLimitPushdown(
+            lookup,
+            [
+                { $match: { $expr: { $gt: [ { $rand: {} }, 0.5 ] } } },
+                { $unset: 'user' }
+            ]
+        )).toBeNull();
+        expect( proveLookupLimitPushdown( lookup, [ { $match: { active: true } }, { $unset: 'user' } ] )).toBeNull();
+
+        const nonSemiJoinPredicates =
+        [
+            { 'user.0': 1 },
+            { 'user.0': { $exists: true, $ne: null } },
+            { 'user.0': { $exists: 1 } },
+            { 'user.name': 'Alice' },
+            { user: [ 1 ] },
+            { user: 5 },
+            { user: { $gt: 1, $lt: 5 } },
+            { user: { $eq: 5 } },
+            { user: { $ne: [ 1 ] } },
+            { user: { $size: 2 } }
+        ];
+
+        for( const filter of nonSemiJoinPredicates )
+        {
+            expect( proveLookupLimitPushdown(
+                lookup,
+                [ { $match: filter }, { $unset: 'user' } ]
+            )).toBeNull();
+        }
+
+        // Invalid lookupStage guards on proveLookupSubpipelinePushdownAcrossSuffix
+        expect( proveLookupSubpipelinePushdownAcrossSuffix( null, [] )).toBeNull();
+        expect( proveLookupSubpipelinePushdownAcrossSuffix({ $lookup: {}, extra: 1 }, [] )).toBeNull();
+        expect( proveLookupSubpipelinePushdownAcrossSuffix({ $lookup: 'invalid' }, [] )).toBeNull();
+        expect( proveLookupSubpipelinePushdownAcrossSuffix({ $lookup: { from: 'u', as: 123 } }, [] )).toBeNull();
+        expect( proveLookupSubpipelinePushdownAcrossSuffix({ $lookup: { from: 'u', as: '' } }, [] )).toBeNull();
     });
 });
 

@@ -148,25 +148,41 @@ function simplifyFieldIntervals(
         if( notEntries.length === 1 )
         {
             const [ innerOp, innerVal ] = notEntries[ 0 ]!;
-            const flippedOp = innerOp === '$in'
-                ? '$nin'
-                : innerOp === '$nin'
-                    ? '$in'
-                    : innerOp === '$eq'
-                        ? '$ne'
-                        : innerOp === '$ne'
-                            ? '$eq'
-                            : null;
 
-            if( flippedOp !== null && !( flippedOp in operatorDocument ))
+            if( innerOp === '$exists' && typeof innerVal === 'boolean' && !( '$exists' in operatorDocument ))
             {
                 const { $not: _removedNot, ...restOps } = operatorDocument;
 
-                operatorDocument = {
+                operatorDocument =
+                {
                     ...restOps,
-                    [ flippedOp ]: innerVal
+                    $exists : !innerVal
                 };
                 owned = true;
+            }
+            else
+            {
+                const flippedOp = innerOp === '$in'
+                    ? '$nin'
+                    : innerOp === '$nin'
+                        ? '$in'
+                        : innerOp === '$eq'
+                            ? '$ne'
+                            : innerOp === '$ne'
+                                ? '$eq'
+                                : null;
+
+                if( flippedOp !== null && !( flippedOp in operatorDocument ))
+                {
+                    const { $not: _removedNot, ...restOps } = operatorDocument;
+
+                    operatorDocument =
+                    {
+                        ...restOps,
+                        [ flippedOp ] : innerVal
+                    };
+                    owned = true;
+                }
             }
         }
     }
@@ -1106,6 +1122,395 @@ function simplifyBooleanAbsorption(
 
             current.$and = filteredAnd;
         }
+    }
+
+    current = simplifyCrossAndNegations( current, owned );
+    current = simplifyOrRangeSubsumption( current, current !== filter || owned );
+
+    return current;
+}
+
+interface OneSidedRangeBranch
+{
+    readonly field      : string;
+    readonly isUpper    : boolean;
+    readonly isDateMode : boolean;
+    readonly strict     : boolean;
+    readonly bound      : number;
+}
+
+function parseOneSidedRangeBranch( branch: unknown ): OneSidedRangeBranch | null
+{
+    if( !isPlainObject( branch ) || !hasSingleKey( branch ))
+    {
+        return null;
+    }
+
+    const [ field, cond ] = Object.entries( branch )[ 0 ]!;
+
+    if( field.startsWith( '$' ) || !isPlainObject( cond ) || !hasSingleKey( cond ))
+    {
+        return null;
+    }
+
+    const [ op, rawVal ] = Object.entries( cond )[ 0 ]!;
+
+    if( op !== '$gt' && op !== '$gte' && op !== '$lt' && op !== '$lte' )
+    {
+        return null;
+    }
+
+    const isDateMode = rawVal instanceof Date;
+    const bound = extractComparableBound( rawVal, isDateMode );
+
+    if( bound === undefined )
+    {
+        return null;
+    }
+
+    return {
+        field,
+        isUpper    : op === '$lt' || op === '$lte',
+        isDateMode,
+        strict     : op === '$gt' || op === '$lt',
+        bound
+    };
+}
+
+function rangeSubsumes( wider: OneSidedRangeBranch, narrower: OneSidedRangeBranch ): boolean
+{
+    if(
+        wider.field !== narrower.field
+        || wider.isUpper !== narrower.isUpper
+        || wider.isDateMode !== narrower.isDateMode
+    )
+    {
+        return false;
+    }
+
+    if( wider.isUpper )
+    {
+        return wider.bound > narrower.bound
+            || ( wider.bound === narrower.bound && ( !wider.strict || narrower.strict ));
+    }
+
+    return wider.bound < narrower.bound
+        || ( wider.bound === narrower.bound && ( !wider.strict || narrower.strict ));
+}
+
+function simplifyOrRangeSubsumption(
+    filter  : Record<string, any>,
+    isOwned = false
+): Record<string, any>
+{
+    if(
+        !isPlainObject( filter )
+        || !Array.isArray( filter.$or )
+        || filter.$or.length < 2
+        || filter.$or.length > MAX_ANALYZED_ARRAY_LENGTH
+    )
+    {
+        return filter;
+    }
+
+    const branches = filter.$or;
+    const parsed = branches.map( parseOneSidedRangeBranch );
+
+    if( parsed.every(( item ) => item === null ))
+    {
+        return filter;
+    }
+
+    const keepFlags = new Array<boolean>( branches.length ).fill( true );
+    let droppedAny = false;
+
+    for( let i = 0; i < branches.length; i++ )
+    {
+        const candidate = parsed[ i ];
+
+        if( candidate === null || !keepFlags[ i ] )
+        {
+            continue;
+        }
+
+        for( let j = 0; j < branches.length; j++ )
+        {
+            if( i === j || !keepFlags[ j ] )
+            {
+                continue;
+            }
+
+            const other = parsed[ j ];
+
+            if( other !== null && rangeSubsumes( other, candidate ))
+            {
+                keepFlags[ i ] = false;
+                droppedAny = true;
+                break;
+            }
+        }
+    }
+
+    if( !droppedAny )
+    {
+        return filter;
+    }
+
+    const remaining = branches.filter(( _branch: unknown, idx: number ) => keepFlags[ idx ] );
+
+    if( remaining.length === 1 && hasSingleKey( filter ))
+    {
+        return remaining[ 0 ];
+    }
+
+    const next = isOwned ? filter : { ...filter };
+
+    if( !isOwned )
+    {
+        markFilterRewriteSafe( next );
+    }
+
+    next.$or = remaining;
+
+    return next;
+}
+
+function addForbiddenScalarsFromCondition(
+    field        : string,
+    cond         : unknown,
+    forbiddenMap : Map<string, unknown[]>
+): void
+{
+    if( !isPlainObject( cond ))
+    {
+        return;
+    }
+
+    if( '$ne' in cond && isConsolidatableScalar( cond.$ne ))
+    {
+        let list = forbiddenMap.get( field );
+
+        if( !list )
+        {
+            list = [];
+            forbiddenMap.set( field, list );
+        }
+
+        if( list.length < MAX_ANALYZED_ARRAY_LENGTH && !containsValue( list, cond.$ne ))
+        {
+            list.push( cond.$ne );
+        }
+    }
+
+    if( Array.isArray( cond.$nin ) && cond.$nin.length <= MAX_ANALYZED_ARRAY_LENGTH )
+    {
+        for( const item of cond.$nin )
+        {
+            if( !isConsolidatableScalar( item ))
+            {
+                continue;
+            }
+
+            let list = forbiddenMap.get( field );
+
+            if( !list )
+            {
+                list = [];
+                forbiddenMap.set( field, list );
+            }
+
+            if( list.length < MAX_ANALYZED_ARRAY_LENGTH && !containsValue( list, item ))
+            {
+                list.push( item );
+            }
+        }
+    }
+}
+
+function applyForbiddenScalarsToCondition(
+    cond      : unknown,
+    forbidden : readonly unknown[]
+): { contradicted: true } | { contradicted: false; nextCond: unknown }
+{
+    if( isConsolidatableScalar( cond ))
+    {
+        return containsValue( forbidden, cond )
+            ? { contradicted: true }
+            : { contradicted: false, nextCond: cond };
+    }
+
+    if( !isPlainObject( cond ))
+    {
+        return { contradicted: false, nextCond: cond };
+    }
+
+    if( '$eq' in cond && isConsolidatableScalar( cond.$eq ) && containsValue( forbidden, cond.$eq ))
+    {
+        return { contradicted: true };
+    }
+
+    if(
+        Array.isArray( cond.$all )
+        && cond.$all.length <= MAX_ANALYZED_ARRAY_LENGTH
+        && cond.$all.some(( item: unknown ) => isConsolidatableScalar( item ) && containsValue( forbidden, item ))
+    )
+    {
+        return { contradicted: true };
+    }
+
+    if(
+        Array.isArray( cond.$in )
+        && cond.$in.length > 0
+        && cond.$in.length <= MAX_ANALYZED_ARRAY_LENGTH
+    )
+    {
+        const remainingIn = cond.$in.filter(
+            ( item: unknown ) => !( isConsolidatableScalar( item ) && containsValue( forbidden, item ))
+        );
+
+        if( remainingIn.length === 0 )
+        {
+            return { contradicted: true };
+        }
+
+        if( remainingIn.length < cond.$in.length )
+        {
+            return {
+                contradicted : false,
+                nextCond     : { ...cond, $in: remainingIn }
+            };
+        }
+    }
+
+    return { contradicted: false, nextCond: cond };
+}
+
+function simplifyCrossAndNegations(
+    filter  : Record<string, any>,
+    isOwned = false
+): Record<string, any>
+{
+    if(
+        !isPlainObject( filter )
+        || !Array.isArray( filter.$and )
+        || filter.$and.length === 0
+        || filter.$and.length > MAX_ANALYZED_ARRAY_LENGTH
+    )
+    {
+        return filter;
+    }
+
+    const forbiddenMap = new Map<string, unknown[]>();
+
+    for( const [ key, val ] of Object.entries( filter ))
+    {
+        if( !key.startsWith( '$' ))
+        {
+            addForbiddenScalarsFromCondition( key, val, forbiddenMap );
+        }
+    }
+
+    for( const branch of filter.$and )
+    {
+        if( isPlainObject( branch ) && hasSingleKey( branch ))
+        {
+            const [ key, val ] = Object.entries( branch )[ 0 ]!;
+
+            if( !key.startsWith( '$' ))
+            {
+                addForbiddenScalarsFromCondition( key, val, forbiddenMap );
+            }
+        }
+    }
+
+    if( forbiddenMap.size === 0 )
+    {
+        return filter;
+    }
+
+    let current = filter;
+    let owned = isOwned;
+
+    for( const [ key, val ] of Object.entries( current ))
+    {
+        if( key.startsWith( '$' ))
+        {
+            continue;
+        }
+
+        const forbidden = forbiddenMap.get( key );
+
+        if( !forbidden )
+        {
+            continue;
+        }
+
+        const applied = applyForbiddenScalarsToCondition( val, forbidden );
+
+        if( applied.contradicted )
+        {
+            return { [ key ]: { $in: [] } };
+        }
+
+        if( applied.nextCond !== val )
+        {
+            if( !owned )
+            {
+                current = { ...current };
+                markFilterRewriteSafe( current );
+                owned = true;
+            }
+
+            current[ key ] = applied.nextCond;
+        }
+    }
+
+    let nextAnd: any[] | undefined;
+    const andBranches = current.$and as unknown[];
+
+    for( let i = 0; i < andBranches.length; i++ )
+    {
+        const branch = andBranches[ i ];
+
+        if( isPlainObject( branch ) && hasSingleKey( branch ))
+        {
+            const [ key, val ] = Object.entries( branch )[ 0 ]!;
+
+            if( !key.startsWith( '$' ))
+            {
+                const forbidden = forbiddenMap.get( key );
+
+                if( forbidden )
+                {
+                    const applied = applyForbiddenScalarsToCondition( val, forbidden );
+
+                    if( applied.contradicted )
+                    {
+                        return { [ key ]: { $in: [] } };
+                    }
+
+                    if( applied.nextCond !== val )
+                    {
+                        nextAnd ??= andBranches.slice( 0, i );
+                        nextAnd.push({ [ key ]: applied.nextCond });
+                        continue;
+                    }
+                }
+            }
+        }
+
+        nextAnd?.push( branch );
+    }
+
+    if( nextAnd !== undefined )
+    {
+        if( !owned )
+        {
+            current = { ...current };
+            markFilterRewriteSafe( current );
+        }
+
+        current.$and = nextAnd;
     }
 
     return current;

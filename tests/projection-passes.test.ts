@@ -15,12 +15,15 @@ import {
 import {
     ComplexProjectionDeferralPass,
 } from '../src/passes/complex-projection-deferral.js';
-import {
+import
+{
     isExactPathDiscardedByFollower,
     parseObjectLiteralReplacementStage,
     proveAddFieldSplitAcrossSort,
-    proveUnusedFieldPruningThroughSuffix,
-} from '../src/passes/projection-proofs.js';
+    proveRedundantDownstreamUnset,
+    proveUnusedFieldPruningThroughSuffix
+}
+from '../src/passes/projection-proofs.js';
 import {
     candidateSemanticCases,
     productionSemanticCases,
@@ -1680,5 +1683,103 @@ describe('projection production integration and scheduling', () =>
             'x',
             { $replaceWith: { kept: '$x' } }
         )).toBe(false);
+    });
+
+    it( 'eliminates or shrinks redundant downstream $unset across non-writing stages while respecting barriers', () =>
+    {
+        // Arrange
+        const pass = new AdjacentProjectMergingPass();
+
+        // Act & Assert: bounds and non-unset guards
+        expect( proveRedundantDownstreamUnset( [ { $unset: 'a' } ], 0 )).toBeNull();
+        expect( proveRedundantDownstreamUnset( [ { $unset: 'a' } ], 2 )).toBeNull();
+        expect( proveRedundantDownstreamUnset( [ { $unset: 'a' }, { $limit: 5 } ], 1 )).toBeNull();
+
+        // Full removal across intermediate disjoint stages after earlier $unset or simple $project
+        expect( pass.execute([
+            { $unset: 'secret' },
+            { $sort: { createdAt: -1 } },
+            { $unset: 'secret' }
+        ])).toEqual([
+            { $unset: 'secret' },
+            { $sort: { createdAt: -1 } }
+        ]);
+
+        // Partial shrink to single string and multi-field array
+        expect( pass.execute([
+            { $project: { name: 1, keepMe: 1 } },
+            { $limit: 10 },
+            { $unset: [ 'secret', 'keepMe' ] }
+        ])).toEqual([
+            { $project: { name: 1, keepMe: 1 } },
+            { $limit: 10 },
+            { $unset: 'keepMe' }
+        ]);
+
+        expect( proveRedundantDownstreamUnset(
+            [
+                { $unset: 'other' },
+                { $project: { secret: 0 } },
+                { $unset: [ 'secret', 'keepA', 'keepB' ] }
+            ],
+            2
+        )).toEqual({
+            replacementStage : { $unset: [ 'keepA', 'keepB' ] }
+        });
+
+        // Barriers: intermediate stage writes field, $unionWith, $densify, unknown, malformed
+        expect( proveRedundantDownstreamUnset(
+            [
+                { $unset: 'secret' },
+                { $addFields: { secret: 'reintroduced' } },
+                { $unset: 'secret' }
+            ],
+            2
+        )).toBeNull();
+
+        expect( proveRedundantDownstreamUnset(
+            [
+                { $unset: 'secret' },
+                { $unionWith: 'other_coll' },
+                { $unset: 'secret' }
+            ],
+            2
+        )).toBeNull();
+
+        expect( proveRedundantDownstreamUnset(
+            [
+                { $unset: 'secret' },
+                { $densify: { field: 'ts', range: { step: 1, bounds: 'full' } } },
+                { $unset: 'secret' }
+            ],
+            2
+        )).toBeNull();
+
+        expect( proveRedundantDownstreamUnset(
+            [
+                { $unset: 'secret' },
+                { $customUnknown: {} },
+                { $unset: 'secret' }
+            ],
+            2
+        )).toBeNull();
+
+        expect( proveRedundantDownstreamUnset(
+            [
+                { $unset: 'secret' },
+                { $limit: 'bad' },
+                { $unset: 'secret' }
+            ],
+            2
+        )).toBeNull();
+
+        expect( proveRedundantDownstreamUnset(
+            [
+                { $unset: 'secret' },
+                { $lookup: { from: 'c', as: 'items', pipeline: [ { $unknownStage: 1 } ] } },
+                { $unset: 'secret' }
+            ],
+            2
+        )).toBeNull();
     });
 });

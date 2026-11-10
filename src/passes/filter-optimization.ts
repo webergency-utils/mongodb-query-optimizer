@@ -1,13 +1,13 @@
 import { PipelinePass } from './types.js';
 import { optimizeFilterWithContext } from '../filter-optimizer.js';
 import { GuaranteeContext } from '../guarantees.js';
-import { isEmptyObject } from '../utils.js';
-import { isMatchStage } from './helpers.js';
+import { isEmptyObject, isPlainObject } from '../utils.js';
+import { getStageSpec, isMatchStage } from './helpers.js';
 
 export class FilterOptimizationPass implements PipelinePass
 {
     readonly name       = 'filter-optimization';
-    readonly stageTypes = [ '$match' ] as const;
+    readonly stageTypes = [ '$match', '$graphLookup' ] as const;
 
     execute( pipeline: any[], context: GuaranteeContext ): any[]
     {
@@ -32,6 +32,36 @@ export class FilterOptimizationPass implements PipelinePass
                     result ??= pipeline.slice( 0, i );
                     result.push({ $match: optimized });
                     continue;
+                }
+            }
+            else
+            {
+                const graphLookup = getStageSpec( stage, '$graphLookup' );
+
+                if( graphLookup !== null && isPlainObject( graphLookup.restrictSearchWithMatch ))
+                {
+                    const optimized = optimizeFilterWithContext( graphLookup.restrictSearchWithMatch, context );
+
+                    if( isEmptyObject( optimized ))
+                    {
+                        const { restrictSearchWithMatch: _removed, ...restSpec } = graphLookup;
+                        result ??= pipeline.slice( 0, i );
+                        result.push({ $graphLookup: restSpec });
+                        continue;
+                    }
+
+                    if( optimized !== graphLookup.restrictSearchWithMatch )
+                    {
+                        result ??= pipeline.slice( 0, i );
+                        result.push({
+                            $graphLookup:
+                            {
+                                ...graphLookup,
+                                restrictSearchWithMatch : optimized
+                            }
+                        });
+                        continue;
+                    }
                 }
             }
 

@@ -1,4 +1,5 @@
 import { DEFAULT_GUARANTEE_CONTEXT, GuaranteeContext } from '../guarantees.js';
+import { isSingleKeyStage } from './helpers.js';
 import { PipelinePass } from './types.js';
 import
 {
@@ -20,35 +21,42 @@ export class FacetPrefixHoistingPass implements PipelinePass
         for( let i = 0; i < pipeline.length; i++ )
         {
             let stage = pipeline[ i ];
-            const suffix = pipeline.slice( i + 1 );
 
-            const prunedFacet = proveFacetDeadBranchPruning( stage, suffix, context );
-            if( prunedFacet )
+            if( isSingleKeyStage( stage, '$facet' ))
             {
-                stage = prunedFacet;
-            }
+                const prunedFacet = proveFacetDeadBranchPruning( stage, pipeline.slice( i + 1 ), context );
 
-            const hoistProof = proveFacetPrefixHoisting( stage, context );
-            if( hoistProof )
-            {
-                result.push( ...hoistProof.hoistedStages );
-                result.push( hoistProof.simplifiedFacet );
-                continue;
-            }
-
-            const unionProof = proveUnionWithPushdown( stage, suffix, context );
-            if( unionProof )
-            {
-                if( unionProof.hoistedMatch )
+                if( prunedFacet )
                 {
-                    result.push( unionProof.hoistedMatch );
-                    result.push( unionProof.updatedUnionStage );
-                    i++;
-                    continue;
+                    stage = prunedFacet;
                 }
 
-                result.push( unionProof.updatedUnionStage );
-                continue;
+                const hoistProof = proveFacetPrefixHoisting( stage, context );
+
+                if( hoistProof )
+                {
+                    result.push( ...hoistProof.hoistedStages );
+                    result.push( hoistProof.simplifiedFacet );
+                    continue;
+                }
+            }
+            else if( isSingleKeyStage( stage, '$unionWith' ))
+            {
+                const unionProof = proveUnionWithPushdown( stage, pipeline.slice( i + 1 ), context );
+
+                if( unionProof )
+                {
+                    if( unionProof.hoistedMatch )
+                    {
+                        result.push( unionProof.hoistedMatch );
+                        result.push( unionProof.updatedUnionStage );
+                        i++;
+                        continue;
+                    }
+
+                    result.push( unionProof.updatedUnionStage );
+                    continue;
+                }
             }
 
             result.push( stage );
